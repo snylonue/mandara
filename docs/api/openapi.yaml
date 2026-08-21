@@ -1,0 +1,1088 @@
+openapi: 3.1.0
+info:
+  title: Bookshelf API
+  version: 0.1.0
+  description: |
+    Bookshelf is a self-hosted light-novel reading server.
+
+    This document is the single source of truth for the HTTP API contract:
+    the backend implements it and the frontend generates its types from it
+    (see `frontend/package.json`, script `api-types`).
+
+    Model overview: `books` are pure metadata entries; `book_files` are the
+    actual books (uploads or virtual plugin books). Several files can share
+    one metadata entry. Chapters, reading sessions and shares attach to
+    files. Every file is either `private` (owner + admins only) or `public`
+    (all logged-in users).
+
+    Auth is optional: with `BOOKSHELF_AUTH_ENABLED=false` the server runs as
+    a single local admin and all endpoints behave as if authenticated.
+servers:
+  - url: http://127.0.0.1:8080
+    description: Local development server (default)
+tags:
+  - name: auth
+    description: User registration and login
+  - name: health
+    description: Service status
+  - name: books
+    description: Book metadata
+  - name: files
+    description: Book files (uploads & plugin books), chapters, reading
+  - name: sessions
+    description: Reading sessions (per-user, per-file)
+  - name: shares
+    description: Public share links (anonymous read / progress follow)
+  - name: plugins
+    description: wasm plugin sources
+
+paths:
+  /api/health:
+    get:
+      tags: [health]
+      summary: Service health and capabilities
+      operationId: getHealth
+      responses:
+        "200":
+          description: Server is up
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+
+  /api/auth/register:
+    post:
+      tags: [auth]
+      summary: Register a new user
+      operationId: register
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Credentials"
+      responses:
+        "200":
+          description: Registered, token issued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          description: Registration is disabled
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /api/auth/login:
+    post:
+      tags: [auth]
+      summary: Log in, receive a JWT
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Credentials"
+      responses:
+        "200":
+          description: Logged in, token issued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/auth/me:
+    get:
+      tags: [auth]
+      summary: Current user
+      operationId: me
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: The authenticated user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/plugins:
+    get:
+      tags: [plugins]
+      summary: List loaded wasm plugin sources
+      operationId: listPlugins
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Loaded plugin ids
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PluginInfo"
+
+  /api/plugins/sync:
+    post:
+      tags: [plugins]
+      summary: Re-sync all plugin catalogs into the library (admin only)
+      operationId: syncPlugins
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Number of books (re-)synced
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [synced]
+                properties:
+                  synced:
+                    type: integer
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/books:
+    get:
+      tags: [books]
+      summary: List visible books with their visible files
+      operationId: listBooks
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: q
+          in: query
+          description: Substring match on book title
+          required: false
+          schema:
+            type: string
+        - name: source
+          in: query
+          description: Filter by file source ('local' or a plugin id)
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Metadata entries that own at least one visible file
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/BookListEntry"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      tags: [books]
+      summary: Upload a book — creates a metadata entry plus its first file
+      operationId: uploadBook
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Epub or txt file
+                visibility:
+                  type: string
+                  enum: [private, public]
+                  default: private
+                  description: Choose whether this upload is published
+                label:
+                  type: string
+                  description: Short human label for this edition (e.g. "proofread")
+      responses:
+        "201":
+          description: Book and its first file created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BookDetail"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/books/{id}:
+    get:
+      tags: [books]
+      summary: Book metadata plus files visible to the caller
+      operationId: getBook
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/BookId"
+      responses:
+        "200":
+          description: Book detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BookDetail"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [books]
+      summary: Edit metadata (creator or admin)
+      operationId: patchBook
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/BookId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PatchBook"
+      responses:
+        "200":
+          description: Updated metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BookMeta"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [books]
+      summary: Delete metadata and all its files (creator or admin)
+      operationId: deleteBook
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/BookId"
+      responses:
+        "204":
+          description: Deleted
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/books/{id}/files:
+    post:
+      tags: [books]
+      summary: Attach another file (format/edition) to existing metadata
+      operationId: attachFile
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/BookId"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                visibility:
+                  type: string
+                  enum: [private, public]
+                  description: |
+                    Defaults to the most visible existing file of the book
+                    (private if the book has no visible files yet)
+                label:
+                  type: string
+      responses:
+        "201":
+          description: Attached file
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FileMeta"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/files/{id}:
+    get:
+      tags: [files]
+      summary: File detail with chapter titles and its book metadata
+      operationId: getFile
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/FileId"
+      responses:
+        "200":
+          description: File detail (plugin chapter titles materialized lazily)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FileDetail"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [files]
+      summary: Toggle visibility or rename the edition label (owner or admin)
+      operationId: patchFile
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/FileId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PatchFile"
+      responses:
+        "200":
+          description: Updated file
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FileMeta"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [files]
+      summary: Delete a file (owner or admin)
+      operationId: deleteFile
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/FileId"
+      responses:
+        "204":
+          description: Deleted
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/files/{id}/chapters/{idx}:
+    get:
+      tags: [files]
+      summary: Fetch one chapter's content
+      operationId: getChapter
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/FileId"
+        - name: idx
+          in: path
+          required: true
+          description: Zero-based chapter index
+          schema:
+            type: integer
+            minimum: 0
+      responses:
+        "200":
+          description: Chapter content
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Chapter"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/files/{id}/sessions:
+    get:
+      tags: [sessions]
+      summary: Current user's reading sessions for a file
+      operationId: listSessions
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/FileId"
+      responses:
+        "200":
+          description: Sessions of the caller for this file
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionsResponse"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      tags: [sessions]
+      summary: Create a session (reuses an existing one with the same label)
+      operationId: createSession
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/FileId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSession"
+      responses:
+        "201":
+          description: Created (or the existing session with that label)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadingSession"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/sessions/{id}:
+    put:
+      tags: [sessions]
+      summary: Update session progress (all fields optional; clamped)
+      operationId: updateSession
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Session id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdatePosition"
+      responses:
+        "200":
+          description: Updated session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadingSession"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [sessions]
+      summary: Delete a session (owner or admin)
+      operationId: deleteSession
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Deleted
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/files/{id}/shares:
+    post:
+      tags: [shares]
+      summary: Create a share link for a file or one of its sessions
+      operationId: createShare
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/FileId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateShare"
+      responses:
+        "201":
+          description: Share link created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShareResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/shares/{token}:
+    get:
+      tags: [shares]
+      summary: Public share info (no auth; session progress snapshot)
+      operationId: getShare
+      parameters:
+        - $ref: "#/components/parameters/ShareToken"
+      responses:
+        "200":
+          description: Share snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShareView"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [shares]
+      summary: Delete a share (creator or admin)
+      operationId: deleteShare
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ShareToken"
+      responses:
+        "204":
+          description: Deleted
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/shares/{token}/book:
+    get:
+      tags: [shares]
+      summary: "Anonymous read: book, file and chapter titles"
+      operationId: shareBook
+      parameters:
+        - $ref: "#/components/parameters/ShareToken"
+      responses:
+        "200":
+          description: Book + file + chapter titles
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShareBookResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/shares/{token}/chapters/{idx}:
+    get:
+      tags: [shares]
+      summary: "Anonymous read: one chapter"
+      operationId: shareChapter
+      parameters:
+        - $ref: "#/components/parameters/ShareToken"
+        - name: idx
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 0
+      responses:
+        "200":
+          description: Chapter content
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Chapter"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+components:
+  parameters:
+    BookId:
+      name: id
+      in: path
+      required: true
+      description: Book (metadata) id
+      schema:
+        type: string
+    FileId:
+      name: id
+      in: path
+      required: true
+      description: Book file id
+      schema:
+        type: string
+    ShareToken:
+      name: token
+      in: path
+      required: true
+      description: Share token
+      schema:
+        type: string
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  responses:
+    Error:
+      description: Error response
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Unauthorized:
+      description: Missing or invalid token
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Forbidden:
+      description: Not allowed to perform this action
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: Resource does not exist (or share expired)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Conflict:
+      description: Resource already exists
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+
+    Health:
+      type: object
+      required: [status, version, auth_enabled, allow_register]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        version:
+          type: string
+        auth_enabled:
+          type: boolean
+          description: false = single-user local mode
+        allow_register:
+          type: boolean
+
+    Role:
+      type: string
+      enum: [admin, user]
+
+    User:
+      type: object
+      required: [id, username, role, created_at]
+      properties:
+        id:
+          type: string
+        username:
+          type: string
+        role:
+          $ref: "#/components/schemas/Role"
+        created_at:
+          type: string
+
+    Credentials:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 32
+        password:
+          type: string
+          minLength: 8
+
+    AuthResponse:
+      type: object
+      required: [token, user]
+      properties:
+        token:
+          type: string
+          description: 'JWT (send as `Authorization: Bearer <token>`)'
+        user:
+          $ref: "#/components/schemas/User"
+
+    Visibility:
+      type: string
+      enum: [private, public]
+
+    BookMeta:
+      type: object
+      required: [id, title, authors, description, cover_url, created_by, created_at]
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        authors:
+          type: array
+          items:
+            type: string
+        description:
+          type: [string, "null"]
+        cover_url:
+          type: [string, "null"]
+        created_by:
+          description: Id of the user who created this metadata entry
+          type: [string, "null"]
+        created_at:
+          type: string
+
+    FileMeta:
+      type: object
+      required:
+        - id
+        - book_id
+        - source
+        - external_id
+        - format
+        - label
+        - visibility
+        - owner_id
+        - chapter_count
+        - created_at
+      properties:
+        id:
+          type: string
+        book_id:
+          type: string
+        source:
+          description: "'local' for uploads, otherwise the plugin id"
+          type: string
+        external_id:
+          description: Id within the source (same as `id` for local files)
+          type: string
+        format:
+          type: string
+          enum: [epub, txt, plugin]
+        label:
+          description: Short human label for this edition
+          type: string
+        visibility:
+          $ref: "#/components/schemas/Visibility"
+        owner_id:
+          type: [string, "null"]
+        chapter_count:
+          type: integer
+        created_at:
+          type: string
+
+    ChapterMeta:
+      type: object
+      required: [idx, title]
+      properties:
+        idx:
+          type: integer
+        title:
+          type: string
+
+    Chapter:
+      type: object
+      required: [idx, title, content]
+      properties:
+        idx:
+          type: integer
+        title:
+          type: string
+        content:
+          type: string
+          description: Plain text of the chapter
+
+    Position:
+      type: object
+      required: [chapter_idx, offset, fraction]
+      properties:
+        chapter_idx:
+          type: integer
+          minimum: 0
+        offset:
+          type: integer
+          minimum: 0
+          description: Character offset within the chapter (non-web readers)
+        fraction:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Scroll fraction within the chapter (web reader)
+
+    BookDetail:
+      type: object
+      required: [book, files]
+      properties:
+        book:
+          $ref: "#/components/schemas/BookMeta"
+        files:
+          type: array
+          items:
+            $ref: "#/components/schemas/FileMeta"
+
+    BookListEntry:
+      type: object
+      required: [book, files]
+      properties:
+        book:
+          $ref: "#/components/schemas/BookMeta"
+        files:
+          description: Files of this book visible to the caller
+          type: array
+          items:
+            $ref: "#/components/schemas/FileMeta"
+
+    FileDetail:
+      type: object
+      required: [file, book, chapters]
+      properties:
+        file:
+          $ref: "#/components/schemas/FileMeta"
+        book:
+          $ref: "#/components/schemas/BookMeta"
+        chapters:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChapterMeta"
+
+    PatchBook:
+      type: object
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+
+    PatchFile:
+      type: object
+      properties:
+        visibility:
+          $ref: "#/components/schemas/Visibility"
+        label:
+          type: string
+
+    ReadingSession:
+      type: object
+      required: [id, user_id, file_id, label, position, updated_at]
+      properties:
+        id:
+          type: string
+        user_id:
+          type: string
+        file_id:
+          type: string
+        label:
+          type: string
+        position:
+          $ref: "#/components/schemas/Position"
+        updated_at:
+          type: string
+
+    SessionsResponse:
+      type: object
+      required: [file_id, book_title, sessions]
+      properties:
+        file_id:
+          type: string
+        book_title:
+          type: string
+        sessions:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReadingSession"
+
+    CreateSession:
+      type: object
+      properties:
+        label:
+          type: string
+          maxLength: 64
+          description: Defaults to "default"
+
+    UpdatePosition:
+      type: object
+      properties:
+        chapter_idx:
+          type: integer
+          minimum: 0
+        offset:
+          type: integer
+          minimum: 0
+        fraction:
+          type: number
+          minimum: 0
+          maximum: 1
+
+    ShareKind:
+      type: string
+      enum: [book, session]
+
+    CreateShare:
+      type: object
+      required: [kind]
+      properties:
+        kind:
+          $ref: "#/components/schemas/ShareKind"
+        session_id:
+          type: string
+          description: Required when kind is "session"
+        expires_days:
+          type: integer
+          minimum: 1
+
+    ShareResponse:
+      type: object
+      required:
+        - token
+        - url
+        - kind
+        - mode
+        - file_id
+        - session_id
+        - expires_at
+        - created_at
+      properties:
+        token:
+          type: string
+        url:
+          description: Frontend path of the share page
+          type: string
+        kind:
+          $ref: "#/components/schemas/ShareKind"
+        mode:
+          type: string
+          enum: [read, progress]
+        file_id:
+          type: string
+        session_id:
+          type: [string, "null"]
+        expires_at:
+          type: [string, "null"]
+        created_at:
+          type: string
+
+    ShareBookView:
+      type: object
+      required: [id, title, authors, description]
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        authors:
+          type: array
+          items:
+            type: string
+        description:
+          type: [string, "null"]
+
+    ShareFileView:
+      type: object
+      required: [id, format, label, chapter_count]
+      properties:
+        id:
+          type: string
+        format:
+          type: string
+        label:
+          type: string
+        chapter_count:
+          type: integer
+
+    ShareSessionView:
+      type: object
+      required: [id, label, owner_username, position, percent, updated_at]
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+        owner_username:
+          type: string
+        position:
+          $ref: "#/components/schemas/Position"
+        percent:
+          type: integer
+          description: Progress within the current chapter, 0..100
+        updated_at:
+          type: string
+
+    ShareView:
+      type: object
+      required: [kind, mode, book, file, session, created_at, expires_at]
+      properties:
+        kind:
+          $ref: "#/components/schemas/ShareKind"
+        mode:
+          type: string
+          enum: [read, progress]
+        book:
+          $ref: "#/components/schemas/ShareBookView"
+        file:
+          $ref: "#/components/schemas/ShareFileView"
+        session:
+          oneOf:
+            - $ref: "#/components/schemas/ShareSessionView"
+            - type: "null"
+          description: Present when kind is "session"
+        created_at:
+          type: string
+        expires_at:
+          type: [string, "null"]
+
+    ShareBookResponse:
+      type: object
+      required: [book, file, chapters]
+      properties:
+        book:
+          $ref: "#/components/schemas/ShareBookView"
+        file:
+          $ref: "#/components/schemas/ShareFileView"
+        chapters:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChapterMeta"
+
+    PluginInfo:
+      type: object
+      required: [id]
+      properties:
+        id:
+          type: string

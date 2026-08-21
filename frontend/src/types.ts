@@ -1,146 +1,33 @@
-// API types (mirror of the rust models).
+// API types — derived from the API contract in
+// `../docs/api/openapi.yaml` via openapi-typescript (see `npm run api-types`
+// which regenerates `./schema.d.ts`).
+//
+// Do not hand-mirror backend types here; only re-export convenient aliases
+// so pages can use short names.
 
-export interface Health {
-  status: string;
-  version: string;
-  auth_enabled: boolean;
-  allow_register: boolean;
-}
+import type { components } from "./api/schema";
 
-export type Role = "admin" | "user";
-export interface User {
-  id: string;
-  username: string;
-  role: Role;
-  created_at: string;
-}
+type Schemas = components["schemas"];
 
-export interface AuthResp {
-  token: string;
-  user: User;
-}
-
-export type Visibility = "private" | "public";
-
-/** Pure book metadata; several files can share one entry. */
-export interface BookMeta {
-  id: string;
-  title: string;
-  authors: string[];
-  description: string | null;
-  cover_url: string | null;
-  created_by: string | null;
-  created_at: string;
-}
-
-/** One actual book file (upload or virtual plugin book). */
-export interface FileMeta {
-  id: string;
-  book_id: string;
-  source: string;
-  external_id: string;
-  format: "epub" | "txt" | "plugin";
-  label: string;
-  visibility: Visibility;
-  owner_id: string | null;
-  chapter_count: number;
-  created_at: string;
-}
-
-export interface BookDetail {
-  book: BookMeta;
-  files: FileMeta[];
-}
-
-export interface BookListEntry {
-  book: BookMeta;
-  files: FileMeta[];
-}
-
-export interface FileDetail {
-  file: FileMeta;
-  book: BookMeta;
-  chapters: ChapterMeta[];
-}
-
-export interface ChapterMeta {
-  idx: number;
-  title: string;
-}
-
-export interface Chapter {
-  idx: number;
-  title: string;
-  content: string;
-}
-
-export interface Position {
-  chapter_idx: number;
-  offset: number;
-  fraction: number;
-}
-
-export interface ReadingSession {
-  id: string;
-  user_id: string;
-  file_id: string;
-  label: string;
-  position: Position;
-  updated_at: string;
-}
-
-export interface SessionsResponse {
-  file_id: string;
-  book_title: string;
-  sessions: ReadingSession[];
-}
-
-export interface ShareInfo {
-  token: string;
-  url: string;
-  kind: "book" | "session";
-  mode: "read" | "progress";
-  file_id: string;
-  session_id: string | null;
-  expires_at: string | null;
-  created_at: string;
-}
-
-export interface ShareBookView {
-  id: string;
-  title: string;
-  authors: string[];
-  description: string | null;
-}
-
-export interface ShareFileView {
-  id: string;
-  format: string;
-  label: string;
-  chapter_count: number;
-}
-
-export interface ShareSessionView {
-  id: string;
-  label: string;
-  owner_username: string;
-  position: Position;
-  percent: number;
-  updated_at: string;
-}
-
-export interface ShareView {
-  kind: "book" | "session";
-  mode: "read" | "progress";
-  book: ShareBookView;
-  file: ShareFileView;
-  session: ShareSessionView | null;
-  created_at: string;
-  expires_at: string | null;
-}
-
-export interface ShareBookResponse {
-  book: ShareBookView;
-  file: ShareFileView;
-  chapters: ChapterMeta[];
-}
+export type Health = Schemas["Health"];
+export type Role = Schemas["Role"];
+export type User = Schemas["User"];
+export type AuthResp = Schemas["AuthResponse"];
+export type Visibility = Schemas["Visibility"];
+export type BookMeta = Schemas["BookMeta"];
+export type FileMeta = Schemas["FileMeta"];
+export type BookDetail = Schemas["BookDetail"];
+export type BookListEntry = Schemas["BookListEntry"];
+export type FileDetail = Schemas["FileDetail"];
+export type ChapterMeta = Schemas["ChapterMeta"];
+export type Chapter = Schemas["Chapter"];
+export type Position = Schemas["Position"];
+export type ReadingSession = Schemas["ReadingSession"];
+export type SessionsResponse = Schemas["SessionsResponse"];
+export type ShareKind = Schemas["ShareKind"];
+export type ShareInfo = Schemas["ShareResponse"];
+export type ShareBookView = Schemas["ShareBookView"];
+export type ShareFileView = Schemas["ShareFileView"];
+export type ShareSessionView = Schemas["ShareSessionView"];
+export type ShareView = Schemas["ShareView"];
+export type ShareBookResponse = Schemas["ShareBookResponse"];
