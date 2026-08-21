@@ -1,7 +1,7 @@
 //! Authentication: optional JWT-based auth with role checks.
 //!
 //! When `auth_enabled` is false every request acts as the local admin user
-//! ("可选权限控制": the whole permission layer can be switched off).
+//! (the whole permission layer can be switched off: single-user mode).
 
 use argon2::password_hash::rand_core::OsRng;
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};

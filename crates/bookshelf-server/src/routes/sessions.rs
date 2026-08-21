@@ -1,4 +1,4 @@
-//! Reading session endpoints: one user, multiple sessions per book
+//! Reading session endpoints: one user, multiple sessions per file
 //! (e.g. one per device), each with independent progress.
 
 use axum::extract::{Path, State};
@@ -11,53 +11,47 @@ use bookshelf_core::model::{Position, ReadingSession};
 
 use crate::error::ApiError;
 use crate::rows::SessionRow;
-use crate::routes::{current_user, load_visible_book, St};
+use crate::routes::{current_user, load_visible_file, St};
 
 #[derive(Serialize)]
 pub struct SessionsResponse {
-    pub book_id: String,
+    pub file_id: String,
     pub book_title: String,
     pub sessions: Vec<ReadingSession>,
 }
 
-async fn visible_book(st: &St, headers: &HeaderMap, book_id: &str) -> Result<(), ApiError> {
-    let user = current_user(st, headers).await?;
-    load_visible_book(st, &user, book_id).await?;
-    Ok(())
-}
-
-// GET /api/books/:id/sessions -----------------------------------------------
+// GET /api/files/{id}/sessions ------------------------------------------------
 
 pub async fn list_sessions(
     State(st): State<St>,
     headers: HeaderMap,
-    Path(book_id): Path<String>,
+    Path(file_id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
     let user = current_user(&st, &headers).await?;
-    visible_book(&st, &headers, &book_id).await?;
+    let file = load_visible_file(&st, &user, &file_id).await?;
 
     let rows: Vec<SessionRow> = sqlx::query_as(
-        "SELECT id, user_id, book_id, label, chapter_idx, offset, fraction, updated_at \
-         FROM sessions WHERE user_id = ? AND book_id = ? ORDER BY updated_at DESC",
+        "SELECT id, user_id, file_id, label, chapter_idx, offset, fraction, updated_at \
+         FROM sessions WHERE user_id = ? AND file_id = ? ORDER BY updated_at DESC",
     )
     .bind(&user.id)
-    .bind(&book_id)
+    .bind(&file_id)
     .fetch_all(&st.db)
     .await?;
     let book_title = st
         .library
-        .get_book(&book_id)
+        .get_book(&file.book_id)
         .await?
         .map(|b| b.title)
         .unwrap_or_default();
     Ok(Json(SessionsResponse {
-        book_id,
+        file_id,
         book_title,
         sessions: rows.into_iter().map(|r| r.into_model()).collect(),
     }))
 }
 
-// POST /api/books/:id/sessions -----------------------------------------------
+// POST /api/files/{id}/sessions -------------------------------------------------
 
 #[derive(Deserialize)]
 pub struct CreateSession {
@@ -67,16 +61,16 @@ pub struct CreateSession {
 pub async fn create_session(
     State(st): State<St>,
     headers: HeaderMap,
-    Path(book_id): Path<String>,
+    Path(file_id): Path<String>,
     Json(req): Json<CreateSession>,
 ) -> Result<impl IntoResponse, ApiError> {
     let user = current_user(&st, &headers).await?;
-    visible_book(&st, &headers, &book_id).await?;
+    load_visible_file(&st, &user, &file_id).await?;
 
     let label = req
         .label
         .filter(|l| !l.trim().is_empty())
-        .unwrap_or_else(|| "默认".into());
+        .unwrap_or_else(|| "default".into());
     let label = label.trim();
     if label.chars().count() > 64 {
         return Err(ApiError::bad_request("label too long (max 64 chars)"));
@@ -84,29 +78,29 @@ pub async fn create_session(
 
     let id = uuid::Uuid::new_v4().simple().to_string();
     sqlx::query(
-        "INSERT INTO sessions (id, user_id, book_id, label) VALUES (?, ?, ?, ?) \
-         ON CONFLICT (user_id, book_id, label) DO NOTHING",
+        "INSERT INTO sessions (id, user_id, file_id, label) VALUES (?, ?, ?, ?) \
+         ON CONFLICT (user_id, file_id, label) DO NOTHING",
     )
     .bind(&id)
     .bind(&user.id)
-    .bind(&book_id)
+    .bind(&file_id)
     .bind(label)
     .execute(&st.db)
     .await?;
 
     let row: SessionRow = sqlx::query_as(
-        "SELECT id, user_id, book_id, label, chapter_idx, offset, fraction, updated_at \
-         FROM sessions WHERE user_id = ? AND book_id = ? AND label = ?",
+        "SELECT id, user_id, file_id, label, chapter_idx, offset, fraction, updated_at \
+         FROM sessions WHERE user_id = ? AND file_id = ? AND label = ?",
     )
     .bind(&user.id)
-    .bind(&book_id)
+    .bind(&file_id)
     .bind(label)
     .fetch_one(&st.db)
     .await?;
     Ok((StatusCode::CREATED, Json(row.into_model())))
 }
 
-// PUT /api/sessions/:id -------------------------------------------------------
+// PUT /api/sessions/{id} --------------------------------------------------------
 
 #[derive(Deserialize)]
 pub struct UpdatePosition {
@@ -124,7 +118,7 @@ pub async fn update_session(
     let user = current_user(&st, &headers).await?;
 
     let row: Option<SessionRow> = sqlx::query_as(
-        "SELECT id, user_id, book_id, label, chapter_idx, offset, fraction, updated_at \
+        "SELECT id, user_id, file_id, label, chapter_idx, offset, fraction, updated_at \
          FROM sessions WHERE id = ?",
     )
     .bind(&session_id)
@@ -139,9 +133,9 @@ pub async fn update_session(
 
     let chapter_count = st
         .library
-        .get_book(&row.book_id)
+        .get_file(&row.file_id)
         .await?
-        .map(|b| b.chapter_count)
+        .map(|f| f.chapter_count)
         .unwrap_or(0);
     let position = Position {
         chapter_idx: req.chapter_idx.unwrap_or(row.chapter_idx.max(0) as u32),
@@ -162,7 +156,7 @@ pub async fn update_session(
     .await?;
 
     let updated: SessionRow = sqlx::query_as(
-        "SELECT id, user_id, book_id, label, chapter_idx, offset, fraction, updated_at \
+        "SELECT id, user_id, file_id, label, chapter_idx, offset, fraction, updated_at \
          FROM sessions WHERE id = ?",
     )
     .bind(&session_id)
@@ -171,7 +165,7 @@ pub async fn update_session(
     Ok(Json(updated.into_model()))
 }
 
-// DELETE /api/sessions/:id ----------------------------------------------------
+// DELETE /api/sessions/{id} ----------------------------------------------------
 
 pub async fn delete_session(
     State(st): State<St>,

@@ -2,12 +2,13 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { api } from "../api";
 import { Reader } from "../components/Reader";
-import type { BookDetail, Chapter, Position, ReadingSession, SessionsResponse } from "../types";
+import type { Chapter, FileDetail, Position, ReadingSession, SessionsResponse } from "../types";
 
+/// Reader page for one file (one format/edition of a book).
 export function ReaderPage() {
   const { id = "" } = useParams();
   const [params, setParams] = useSearchParams();
-  const [detail, setDetail] = useState<BookDetail | null>(null);
+  const [detail, setDetail] = useState<FileDetail | null>(null);
   const [sessions, setSessions] = useState<ReadingSession[]>([]);
   const [active, setActive] = useState<ReadingSession | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -18,12 +19,11 @@ export function ReaderPage() {
   const load = useCallback(async () => {
     try {
       const [d, s] = await Promise.all([
-        api<BookDetail>(`/books/${id}`),
-        api<SessionsResponse>(`/books/${id}/sessions`),
+        api<FileDetail>(`/files/${id}`),
+        api<SessionsResponse>(`/files/${id}/sessions`),
       ]);
       setDetail(d);
       setSessions(s.sessions);
-      // pick the requested session, or the most recent one
       const wanted = s.sessions.find((x) => x.id === sessionId) ?? s.sessions[0] ?? null;
       setActive(wanted);
     } catch (err) {
@@ -39,16 +39,14 @@ export function ReaderPage() {
     if (chapterIdx !== null) {
       return { chapter_idx: Number(chapterIdx) || 0, offset: 0, fraction: 0 };
     }
-    return (
-      active?.position ?? { chapter_idx: 0, offset: 0, fraction: 0 }
-    );
+    return active?.position ?? { chapter_idx: 0, offset: 0, fraction: 0 };
   }, [active, chapterIdx]);
 
   async function createSession() {
     const label = window.prompt("新会话名称（如：平板）", "平板");
     if (!label) return;
     try {
-      const created = await api<ReadingSession>(`/books/${id}/sessions`, {
+      const created = await api<ReadingSession>(`/files/${id}/sessions`, {
         method: "POST",
         body: JSON.stringify({ label }),
       });
@@ -77,44 +75,49 @@ export function ReaderPage() {
   if (error) return <div className="error">{error}</div>;
   if (!detail) return <div className="page-loading">加载中…</div>;
 
+  const { file, book, chapters } = detail;
+
   return (
     <div>
-      {active ? (
-        <div className="reader-session-bar">
-          <select
-            value={active.id}
-            onChange={(e) => switchSession(e.target.value)}
-            aria-label="会话"
-          >
-            {sessions.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.label}
-              </option>
-            ))}
-          </select>
-          <button className="link-btn" onClick={() => void createSession()}>
-            ＋ 新会话
-          </button>
-        </div>
-      ) : (
-        <div className="reader-session-bar">
+      <div className="reader-session-bar">
+        {active ? (
+          <>
+            <select
+              value={active.id}
+              onChange={(e) => switchSession(e.target.value)}
+              aria-label="会话"
+            >
+              {sessions.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.label}
+                </option>
+              ))}
+            </select>
+            <button className="link-btn" onClick={() => void createSession()}>
+              ＋ 新会话
+            </button>
+          </>
+        ) : (
           <button className="link-btn" onClick={() => void createSession()}>
             ＋ 创建会话开始阅读
           </button>
-        </div>
-      )}
+        )}
+        <span className="hint">
+          {book.title} · {file.label || file.format}
+        </span>
+      </div>
       <Reader
-        title={detail.book.title}
-        chapters={detail.chapters}
+        title={book.title}
+        chapters={chapters}
         loadChapter={async (idx) => {
-          const c = await api<Chapter>(`/books/${id}/chapters/${idx}`);
+          const c = await api<Chapter>(`/files/${id}/chapters/${idx}`);
           return c;
         }}
         initialPosition={initialPosition}
         onProgress={save}
       />
       <p className="hint center">
-        <Link to={`/book/${id}`}>返回书籍详情</Link>
+        <Link to={`/book/${book.id}`}>返回书籍详情</Link>
       </p>
     </div>
   );

@@ -104,7 +104,10 @@ fn is_heading(line: &str) -> bool {
     if line.is_empty() {
         return false;
     }
-    // 第X章 / 第X节 / 第X卷 ...  ("第" is UTF-8, so slice carefully)
+    // Chapter-heading patterns for CJK light novels: an ordinal marker
+    // followed by digits/CJK numerals and a unit suffix (chapter/section/
+    // volume), as well as western "Chapter N" / "VOL.N" forms.
+    // NOTE: the ordinal marker is 3 UTF-8 bytes, so slicing is char-safe.
     if line.starts_with('第') && line.len() > 3 {
         let rest = &line[3..];
         let han = [
@@ -190,7 +193,7 @@ mod tests {
 
     #[test]
     fn decodes_gb18030() {
-        // "你好，世界" encoded in GB18030
+        // GB18030 bytes for "你好，世界"
         let bytes = [
             0xc4, 0xe3, 0xba, 0xc3, 0xa3, 0xac, 0xca, 0xc0, 0xbd, 0xe7,
         ];

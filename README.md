@@ -1,158 +1,186 @@
-# Bookshelf · 轻小说阅读网站
+# Bookshelf · Light-novel reading website
 
-自托管的轻小说阅读网站：Rust 后端 + Web 前端，支持 **epub / txt**，多用户，
-书籍与元数据统一存储，可选的权限控制，以及通过 **wasm 插件** 提供自定义的
-书籍/元数据来源。
+Self-hosted light-novel reading website: **Rust backend + web frontend**.
+Supports **epub / txt**, multiple users, unified storage of books and metadata,
+per-file public/private visibility, multi-session reading progress, sharing,
+and a **wasm plugin system** for user-provided book and metadata sources.
 
-## 功能特性
+## Features
 
-- 📖 支持 epub（HTML→纯文本转换）与 txt（UTF-8 / UTF-16 / GB18030 编码探测，
-  中文/英文章节标题切分）上传与阅读
-- 👥 多用户：注册 / 登录（JWT + Argon2），`admin` / `user` 角色
-- 🔒 可选权限控制：`BOOKSHELF_AUTH_ENABLED=false` 即单用户本地模式，
-  一切操作以本地 admin 身份进行；书籍 `private`（仅所有者+管理员）/ `public` 可见性
-- 🗄️ 统一存储：所有书籍、元数据、章节内容都在同一个 SQLite 数据库中
-  （`data/bookshelf.db`），备份 = 拷一个文件
-- 🧩 wasm 插件系统：`data/plugins/*.wasm` 在启动时加载为 WebAssembly 组件
-  （wasmtime + component model），插件实现 `bookshelf:plugin` world 即可提供
-  自己的书目/元数据来源；章节在首次阅读时按需物化进中央库
-- 📑 多会话进度：同一本书可有多个阅读会话（手机/平板/电脑各一个），
-  各自独立记录进度（章节 + 章节内滚动比例）
-- 🔗 分享：书籍分享链接（无需登录即可阅读）；会话进度分享链接
-  （跟随某次阅读的进度，支持多设备同步/朋友互相追进度）
+- 📖 epub (HTML → plain text) and txt (UTF-8 / UTF-16 / GB18030 detection,
+  CJK/western chapter-heading split) upload and reading
+- 👥 Multi-user with JWT + Argon2 auth; `admin` / `user` roles
+- 🔒 **Permission model**: every uploaded file is either `private` (visible
+  only to its uploader and admins) or `public` (visible to every logged-in
+  user) — the uploader chooses at upload time and can toggle it later.
+  The whole auth layer can additionally be switched off
+  (`BOOKSHELF_AUTH_ENABLED=false` → single-user local mode).
+- 📚 **One metadata entry ↔ many files**: a book record (title, authors,
+  description) can hold several files — different formats, editions or
+  translations. Chapters, sessions and shares attach to files, since
+  different files may split chapters differently.
+- 🗄️ Unified storage: all metadata, files and chapter content live in a
+  single SQLite database (`data/bookshelf.db`); backup = copy one file.
+- 🧩 wasm plugin system: `data/plugins/*.wasm` are loaded at startup as
+  WebAssembly components (wasmtime + component model). Plugins implement the
+  `bookshelf:plugin` world to offer their own catalogs; chapters are
+  materialized into the central store on first read.
+- 📑 Multi-session progress: several reading sessions per file (phone /
+  tablet / computer...), each with independent progress
+  (chapter + scroll fraction).
+- 🔗 Sharing: file share links (anonymous read without login) and session
+  share links (follow another session's live progress).
 
-## 技术栈
+## Tech stack
 
-| 层 | 技术 |
+| Layer | Tech |
 |---|---|
-| 后端 | Rust (edition 2021)，axum 0.8，sqlx 0.9 (SQLite)，jsonwebtoken，argon2 |
-| 插件宿主 | wasmtime 48 (component model)，WIT 接口定义在 `crates/bookshelf-plugin/wit/` |
-| 前端 | Vite 8 + React 19 + TypeScript (npm 管理依赖) |
-| 环境 | Nix (flake-parts + rust-overlay)，临时工具一律 `nix run` |
+| Backend | Rust 2021, axum 0.8, sqlx 0.9 (SQLite, runtime queries only), jsonwebtoken, argon2 |
+| Plugin host | wasmtime 48 (component model), WIT in `crates/bookshelf-plugin/wit/` |
+| Frontend | Vite 8 + React 19 + TypeScript (npm), plain CSS, react-router 7 |
+| Environment | Nix (flake-parts + rust-overlay); one-off tools via `nix run` |
+| Language | UI strings and book examples are Chinese; code comments and docs are English |
 
-## 目录结构
+## Repository layout
 
 ```
-├── flake.nix                    # nix 开发环境（rust 工具链+wasm 目标、node、wasm-tools）
+├── flake.nix                    # dev env: rust + wasm targets, node, wasm-tools
 ├── Cargo.toml                   # cargo workspace
 ├── crates/
-│   ├── bookshelf-core/          # 领域模型 + BookSource trait（插件接缝）
-│   ├── bookshelf-formats/       # epub / txt 解析
-│   ├── bookshelf-plugin/        # wasmtime 组件宿主 + WIT 接口
-│   └── bookshelf-server/        # axum 服务：路由、认证、库、会话、分享、migrations/
+│   ├── bookshelf-core/          # domain models + BookSource trait (plugin seam)
+│   ├── bookshelf-formats/       # epub / txt parsing
+│   ├── bookshelf-plugin/        # wasmtime component host + WIT interface
+│   └── bookshelf-server/        # axum app: routes, auth, library, migrations/
 ├── plugins/
-│   └── hello-plugin/            # 示例插件（构建为 wasm 组件）
-├── frontend/                    # React 前端（npm）
-├── docs/plugins.md              # 插件开发指南
-└── justfile                     # 常用命令
+│   └── hello-plugin/            # example plugin (wasm component)
+├── frontend/                    # React app (npm)
+├── docs/plugins.md              # plugin authoring guide
+└── justfile                     # common commands
 ```
 
-## 快速开始
+## Quick start
 
 ```sh
-# 1. 进入开发环境（rust 1.98 + node 24 + wasm-tools，首次会下载工具链）
+# 1. Enter the dev environment (rust + node + wasm-tools; first run downloads
+#    the toolchain)
 nix develop
 
-# 2. （可选）构建并安装示例 wasm 插件
-just plugin-build        # 生成 plugins-built/hello.wasm
+# 2. (optional) build and deploy the example wasm plugin
+just plugin-build                 # produces plugins-built/hello.wasm
 cp plugins-built/hello.wasm data/plugins/
 
-# 3. 启动后端（默认 http://127.0.0.1:8080，数据在 data/）
+# 3. start the backend (http://127.0.0.1:8080, data in data/)
 just dev
 
-# 4. 另开终端启动前端（http://localhost:5173，/api 代理到后端）
+# 4. in another terminal, start the frontend (http://localhost:5173,
+#    /api proxied to the backend)
 just dev-web
 ```
 
-生产/单二进制部署：构建前端产物后由后端直接托管：
+Single-binary deployment: build the frontend and let the backend serve it.
 
 ```sh
-cd frontend && npm install && npm run build   # 生成 frontend/dist
-cargo run -p bookshelf-server                 # 自动托管 frontend/dist (SPA)
+cd frontend && npm install && npm run build   # produces frontend/dist
+cargo run -p bookshelf-server                 # serves frontend/dist (SPA) at /
 ```
 
-> 提示：本机 `~/.npm` 缓存若被 root 占用导致 `npm install` 报 EACCES，
-> 可临时用 `npm_config_cache=/tmp/npm-cache` 绕过。
+> If `npm install` fails with EACCES because `~/.npm` contains root-owned
+> files, use `npm_config_cache=/tmp/npm-cache`.
 
-## 配置（环境变量 / CLI 参数）
+## Configuration (env vars / CLI flags)
 
-| 变量 | 默认值 | 说明 |
+| Variable | Default | Meaning |
 |---|---|---|
-| `BOOKSHELF_ADDR` | `127.0.0.1:8080` | 监听地址 |
-| `BOOKSHELF_DB` | `data/bookshelf.db` | SQLite 数据库（统一存储） |
-| `BOOKSHELF_DATA_DIR` | db 所在目录 | 运行数据目录 |
-| `BOOKSHELF_PLUGINS_DIR` | `data/plugins` | 扫描 `*.wasm` 插件 |
-| `BOOKSHELF_JWT_SECRET` | `dev-only-change-me` | JWT 密钥（生产必须改） |
-| `BOOKSHELF_AUTH_ENABLED` | `true` | 设为 `false` 关闭认证/权限（单用户模式） |
-| `BOOKSHELF_ALLOW_REGISTER` | `true` | 允许注册新用户 |
-| `BOOKSHELF_MAX_UPLOAD_MB` | `64` | 上传大小上限 |
-| `BOOKSHELF_FRONTEND_DIR` | `frontend` | 前端目录（其 `dist/` 存在时托管于 `/`） |
+| `BOOKSHELF_ADDR` | `127.0.0.1:8080` | listen address |
+| `BOOKSHELF_DB` | `data/bookshelf.db` | SQLite database (unified storage) |
+| `BOOKSHELF_DATA_DIR` | db's directory | runtime data directory |
+| `BOOKSHELF_PLUGINS_DIR` | `data/plugins` | directory scanned for `*.wasm` plugins |
+| `BOOKSHELF_JWT_SECRET` | `dev-only-change-me` | JWT secret (change in production) |
+| `BOOKSHELF_AUTH_ENABLED` | `true` | `false` disables auth/permissions (single-user mode) |
+| `BOOKSHELF_ALLOW_REGISTER` | `true` | allow new user registration |
+| `BOOKSHELF_MAX_UPLOAD_MB` | `64` | max upload size |
+| `BOOKSHELF_FRONTEND_DIR` | `frontend` | frontend dir (its `dist/` is served at `/` if present) |
 
-复制 `.env.example` 为 `.env` 可覆盖后四项以外的默认值。
+Copy `.env.example` to `.env` to override defaults.
 
-## 数据模型与进度/分享语义
-
-```
-users    ─┬─< books   (owner_id, visibility)
-          │
-          ├─< sessions (user_id, book_id, label, chapter_idx, offset, fraction)
-          │
-          └─< shares   (token, kind=book|session, mode=read|progress,
-                        book_id, session_id, expires_at)
-chapters (book_id, idx, title, content)   # 统一内容存储
-```
-
-- **位置 (Position)** = 章节索引 + 章节内字符偏移 + 章节内滚动比例 (0..1)。
-  进度接口接受三者，自动按书本章节数裁剪（`Position::clamped`）。
-- **会话 (Session)**：同一用户对同一本书可建多个命名会话（唯一约束
-  `(user_id, book_id, label)`，重名自动复用）。
-- **分享**：`book` 分享给未登录访客只读权限；`session` 分享展示该会话的
-  实时进度（方位百分比 + 章节 + 更新时间），拿链接的人可以跟着读同一进度。
-
-## API 概览
+## Data model & progress/share semantics
 
 ```
-POST /api/auth/register|login            → {token, user}
+users  ─┬─< books      (metadata: title, authors, ...)
+        │
+        └─< book_files (one file per format/edition; visibility per file)
+               │
+               ├─< chapters  (file_id, idx, title, content)
+               ├─< sessions  (user_id, file_id, label, position)
+               └─< shares    (token, kind=book|session, file_id, session_id)
+```
+
+- **Position** = chapter index + char offset within the chapter + scroll
+  fraction (0..1). The API accepts all three and clamps them to the file's
+  chapter count.
+- **Sessions**: multiple named sessions per (user, file); unique constraint
+  `(user_id, file_id, label)` — reusing a label resumes that session.
+- **Shares**: `book` kind → anonymous read-only link to a file; `session`
+  kind → follow a session's live progress (percent + chapter + updated_at).
+- **Permissions**: file `private` → owner + admins only; `public` → all
+  logged-in users. Ownerless files (plugin catalogs) are public and
+  shareable by anyone, but only admins can manage them. Session/share
+  deletion follows the usual owner-or-admin rule.
+
+## API overview
+
+```
+POST /api/auth/register|login            -> {token, user}
 GET  /api/auth/me
-GET  /api/health                         → {auth_enabled, allow_register, ...}
+GET  /api/health                         -> {auth_enabled, allow_register, ...}
 
-GET  /api/books?q=&source=               → 可见书目列表
-POST /api/books                          ← multipart file (epub/txt)
-GET  /api/books/{id}                     → {book, chapters:[{idx,title}]}
-PATCH/DELETE /api/books/{id}             （所有者/管理员）
-GET  /api/books/{id}/chapters/{idx}      → 章节内容（插件章节按需物化）
+GET  /api/books?q=&source=               -> [{book, files:[...visible files]}]
+POST /api/books                          <- multipart: file + visibility + label
+                                           (new metadata + first file)
+GET  /api/books/{id}                     -> {book, files}
+PATCH/DELETE /api/books/{id}             (metadata creator/admin)
+POST /api/books/{id}/files               <- multipart: attach another file
+                                           (different format/edition)
 
-GET/POST /api/books/{id}/sessions        → 我的会话列表 / 新建会话 {label}
-PUT/DELETE /api/sessions/{id}            → 更新进度 {chapter_idx,offset,fraction} / 删除
+GET  /api/files/{id}                     -> {file, book, chapters}
+PATCH /api/files/{id}                    -> {visibility?, label?} (owner/admin)
+DELETE /api/files/{id}                   (owner/admin)
+GET  /api/files/{id}/chapters/{idx}      -> chapter content (plugins lazily
+                                           materialize on first read)
+GET/POST /api/files/{id}/sessions        -> my sessions / create {label}
+PUT/DELETE /api/sessions/{id}            -> update position / delete
 
-POST /api/books/{id}/shares              → {kind:"book"|"session", session_id?, expires_days?}
-GET  /api/shares/{token}                 → 分享信息（会话快照）
-GET  /api/shares/{token}/book            → 匿名读：书目+章节目录
-GET  /api/shares/{token}/chapters/{idx}  → 匿名读：章节
-DELETE /api/shares/{token}               （创建者/管理员）
+POST /api/files/{id}/shares              -> {kind:"book"|"session", session_id?,
+                                           expires_days?}
+GET  /api/shares/{token}                 -> share info (session snapshot)
+GET  /api/shares/{token}/book            -> anonymous read: book + file +
+                                           chapter titles
+GET  /api/shares/{token}/chapters/{idx}  -> anonymous read: chapter
+DELETE /api/shares/{token}               (creator/admin)
 
-GET  /api/plugins                        → 已加载插件
-POST /api/plugins/sync                   （管理员）重新同步插件书目
+GET  /api/plugins                        -> loaded plugins
+POST /api/plugins/sync                   (admin) re-sync plugin catalogs
 ```
 
-## wasm 插件
+## wasm plugins
 
-编写一个实现 `bookshelf:plugin` world 的组件，放入 `data/plugins/` 即被加载。
-完整指南见 **[docs/plugins.md](docs/plugins.md)**；仓库内置示例 `plugins/hello-plugin`：
+Write a component implementing the `bookshelf:plugin` world and drop it into
+`data/plugins/`. Full guide: **[docs/plugins.md](docs/plugins.md)**;
+in-repo example: `plugins/hello-plugin`.
 
 ```sh
 just plugin-build          # cargo build --target wasm32-unknown-unknown
                            # + wasm-tools component new
 ```
 
-## 开发命令
+## Development commands
 
 ```sh
-just dev          # 启动后端
-just dev-web      # 启动前端 dev server
+just dev          # start the backend
+just dev-web      # start the frontend dev server
 just check        # cargo check + clippy
 just test         # cargo test --workspace
-just plugin-build # 构建示例插件组件
+just plugin-build # build the example plugin component
 ```
 
 ## License

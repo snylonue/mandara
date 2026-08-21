@@ -14,4 +14,4 @@
 # env / editor
 .env
 *.swp
-.DS_Store
+/.direnv

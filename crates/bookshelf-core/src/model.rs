@@ -1,8 +1,9 @@
-//! Domain models: users, books, chapters, reading sessions, shares.
+//! Domain models: users, book metadata, files, chapters, reading sessions,
+//! shares.
 
 use serde::{Deserialize, Serialize};
 
-/// User role. Administrators can manage every book and every user.
+/// User role. Administrators can manage every book and every file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
@@ -33,8 +34,8 @@ impl std::fmt::Display for Role {
     }
 }
 
-/// Visibility of a book. `Private` books are only visible to their owner
-/// (and admins); `Public` books are visible to every logged-in user.
+/// Visibility of a file. `Private` files are only visible to their owner
+/// (and admins); `Public` files are visible to every logged-in user.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Visibility {
@@ -73,18 +74,33 @@ pub struct User {
     pub created_at: String,
 }
 
-/// Metadata of a book. Chapters are stored separately.
+/// Pure book metadata. One entry can be linked to many
+/// [`FileMeta`]s (formats/editions).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BookMeta {
     pub id: String,
-    /// Source of the book: `"local"` for uploaded files, or a plugin id.
-    pub source: String,
-    /// Id of the book inside its source (for local books, same as `id`).
-    pub external_id: String,
     pub title: String,
     pub authors: Vec<String>,
     pub description: Option<String>,
     pub cover_url: Option<String>,
+    pub created_by: Option<String>,
+    pub created_at: String,
+}
+
+/// One actual book file (a local upload or a virtual plugin book).
+/// Chapters, sessions and shares attach to files.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileMeta {
+    pub id: String,
+    pub book_id: String,
+    /// `"local"` for uploads, otherwise the plugin id that provides it.
+    pub source: String,
+    /// Id of the book inside its source (for local files, same as `id`).
+    pub external_id: String,
+    /// `"epub"` | `"txt"` for uploads, `"plugin"` for plugin books.
+    pub format: String,
+    /// Short human label for this edition.
+    pub label: String,
     pub visibility: Visibility,
     pub owner_id: Option<String>,
     pub chapter_count: u32,
@@ -104,7 +120,7 @@ pub struct Chapter {
     pub content: String,
 }
 
-/// A reading position inside a book.
+/// A reading position inside a file.
 ///
 /// `chapter_idx` selects the chapter, `offset` is a character offset inside
 /// the chapter (used by non-web readers), and `fraction` is a 0..1 scroll
@@ -128,14 +144,12 @@ impl Default for Position {
 }
 
 impl Position {
-    /// Overall progress within the book, as a percentage of the current
-    /// chapter fraction. (A full-book percentage would additionally need the
-    /// total chapter count — see `percent_of`.)
+    /// Progress within the current chapter, as a percentage.
     pub fn percent(&self) -> u8 {
         (self.fraction.clamp(0.0, 1.0) * 100.0).round() as u8
     }
 
-    /// Clamp the position so it is valid for a book with `chapter_count`
+    /// Clamp the position so it is valid for a file with `chapter_count`
     /// chapters.
     pub fn clamped(mut self, chapter_count: u32) -> Self {
         self.chapter_idx = if chapter_count > 0 {
@@ -149,15 +163,15 @@ impl Position {
     }
 }
 
-/// A reading session: one device context reading one book.
+/// A reading session: one device context reading one file.
 ///
-/// A user can have several sessions per book (e.g. phone + laptop), each with
-/// its own progress.
+/// A user can have several sessions per file (e.g. phone + laptop), each
+/// with its own progress.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReadingSession {
     pub id: String,
     pub user_id: String,
-    pub book_id: String,
+    pub file_id: String,
     pub label: String,
     pub position: Position,
     pub updated_at: String,
@@ -166,7 +180,7 @@ pub struct ReadingSession {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ShareKind {
-    /// Share of a book: anyone with the link can read it.
+    /// Share of a file: anyone with the link can read it.
     Book,
     /// Share of a session: anyone with the link can follow that session's
     /// progress (e.g. to keep in sync with a friend or another device).
@@ -179,7 +193,7 @@ pub struct Share {
     pub kind: ShareKind,
     /// `"read"` (read-only) or `"progress"` (session progress view).
     pub mode: String,
-    pub book_id: String,
+    pub file_id: String,
     pub session_id: Option<String>,
     pub created_by: Option<String>,
     pub expires_at: Option<String>,

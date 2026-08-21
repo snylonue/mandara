@@ -20,7 +20,11 @@ metadata sources.
 1. Light-novel reading website; Rust backend + web frontend.
 2. Support **epub** and **txt** text formats.
 3. Multi-user backend with **unified storage** for books and metadata.
-4. **Optional permission control** (can be switched off for single-user use).
+4. **Permissions per uploaded book**: the uploader chooses to publish or
+   hide each uploaded book (per-file `public`/`private` visibility). A single
+   metadata entry can be linked to **multiple book files** (formats,
+   editions, translations). The whole auth layer can additionally be switched
+   off for single-user use (`BOOKSHELF_AUTH_ENABLED=false`).
 5. **wasm plugin system** for user-defined book and metadata sources.
 6. Frontend: reading, **progress management**, and **sharing**.
 7. Progress management must support **multiple sessions** (e.g. several
@@ -30,8 +34,10 @@ metadata sources.
    - Project dependencies are declared in `flake.nix`.
    - Language dependencies use their native package managers
      (cargo for Rust, npm for JS, uv for Python — none used yet).
-9. Write progress updates to this file after each work session
-   ("每次的进度都要同步过去") — keep the [Progress Log](#progress-log) current.
+9. Write progress updates to this file after each work session — keep the
+   [Progress Log](#progress-log) current.
+10. Docs and code comments are written in English; UI strings and book
+    example content stay Chinese (zh-CN is the product language).
 
 ## Tech Stack & Decisions
 
@@ -39,11 +45,11 @@ metadata sources.
 |---|---|---|
 | Backend | Rust 2021, cargo workspace | 4 crates, see layout below |
 | Web framework | axum 0.8 | `{param}` path syntax, multipart upload |
-| DB | SQLite via sqlx 0.9 | runtime queries only (`sqlx::query*`, no `query!` macros) so no `DATABASE_URL` is needed at compile time (nix-friendly). Migrations in `crates/bookshelf-server/migrations/` |
+| DB | SQLite via sqlx 0.9 | runtime queries only (`sqlx::query*`, no `query!` macros) so no `DATABASE_URL` is needed at compile time (nix-friendly). Migrations in `crates/bookshelf-server/migrations/`. Two-level model: `books` = pure metadata, `book_files` = actual files (uploads or virtual plugin books); chapters/sessions/shares attach to files |
 | Auth | JWT (jsonwebtoken 11, `rust_crypto` backend) + Argon2 | roles `admin`/`user`; optional via `BOOKSHELF_AUTH_ENABLED` |
 | Plugin host | wasmtime 48 (component model) | WIT world `bookshelf:plugin/bookshelf-plugin` in `crates/bookshelf-plugin/wit/`; plugins loaded from `data/plugins/*.wasm`; chapters materialized into the central DB on first read |
 | Plugin guest | wit-bindgen 0.60 (`generate!` + `export!`), `wasm32-unknown-unknown` | module is lifted with `wasm-tools component new` (no adapter needed, world imports no wasi) |
-| Formats | `epub` (epub-rs) + `html2text`/`scraper`; custom txt parser | txt: UTF-8/UTF-16/GB18030 detection + chapter-heading split (第X章 / Chapter N / VOL.N / 序章 etc.) |
+| Formats | `epub` (epub-rs) + `html2text`/`scraper`; custom txt parser | txt: UTF-8/UTF-16/GB18030 detection + chapter-heading split (CJK ordinal-marker headings, Chapter N, VOL.N, prologues, ...) |
 | Frontend | Vite 8 + React 19 + TypeScript 5.9, npm | plain CSS, react-router 7; dev proxy `/api` → 127.0.0.1:8080 |
 | Env | Nix flake (flake-parts + rust-overlay) | devShell: rust stable + wasm32 targets, nodejs, wasm-tools, sqlite, just, pi |
 
@@ -78,13 +84,23 @@ scripts/build-plugin-hello.sh      # build example plugin → plugins-built/
       (gitignored).
 - [x] Workspace + 4 crates compile with zero warnings; `cargo test --workspace`
       green (6 format-parsing unit tests).
-- [x] Unified storage: `books`/`chapters`/`sessions`/`shares`/`users` tables;
-      plugin catalogs upserted into `books` on startup (source = plugin id),
-      chapters materialized lazily into `chapters` on first read.
+- [x] Unified storage: `books` (metadata) + `book_files` (uploads / virtual
+      plugin files) + `chapters`/`sessions`/`shares`/`users`; plugin catalogs
+      upserted on startup (metadata reused across syncs), chapters
+      materialized lazily into `chapters` on first read.
 - [x] Auth: register/login/me (JWT + Argon2), admin/user roles, `local` admin
-      user seeded when auth is disabled; books `private`/`public` visibility.
-- [x] Books API: list/search, multipart upload of epub/txt, detail + chapter
-      titles, chapter content, patch/delete (owner/admin).
+      user seeded when auth is disabled.
+- [x] Permissions: every uploaded file is private by default; uploader picks
+      `public`/`private` per file at upload time and can toggle it later
+      (owner/admin). Public files are visible/shared by all logged-in users;
+      ownerless plugin files are public, manageable by admins only.
+- [x] One metadata entry ↔ many files: upload creates metadata + first file;
+      `POST /api/books/{id}/files` attaches more editions to existing
+      metadata; metadata edit/delete by its creator or admin.
+- [x] Books/Files API: list/search (books + visible files), multipart upload
+      (new book or attach to existing), file detail + chapter titles,
+      chapter content with lazy plugin materialization, visibility toggle,
+      patch/delete (owner/admin).
 - [x] Sessions API: list/create/update/delete; per-(user, book, label) unique;
       position = `{chapter_idx, offset, fraction}` clamped to chapter count.
 - [x] Shares API: book shares (anonymous read of catalog + chapters),
@@ -119,7 +135,8 @@ scripts/build-plugin-hello.sh      # build example plugin → plugins-built/
 
 | Date | Entry |
 |---|---|
-| 2026-08-21 | Initial project setup: requirements, tech choices, workspace, backend (core/formats/plugin/server), example wasm plugin, React frontend, migrations, docs; all compile/test/e2e verified; repo committed. |
+| 2026-08-21 | Initial project setup: requirements, tech choices, workspace, backend (core/formats/plugin/server), example wasm plugin, React frontend, migrations, docs; all compile/test/e2e verified. |
+| 2026-08-21 | Rework #2 per owner feedback: (a) git history cleaned (`.direnv` removed, now gitignored); (b) all docs/comments converted to English (UI strings stay zh-CN); (c) permission model reworked: per-file public/private chosen by uploader, metadata (`books`) decoupled from files (`book_files`) so one metadata entry holds multiple files; chapters/sessions/shares now attach to files; API moved to `/api/files/*`, `POST /api/books/{id}/files` for extra editions; frontend updated (file-based library cards, visibility toggle, attach-upload, reader per file). E2E re-verified including visibility semantics (403 on hidden files for other users). |
 
 ## Conventions
 

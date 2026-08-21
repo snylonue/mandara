@@ -22,28 +22,50 @@ export interface AuthResp {
 
 export type Visibility = "private" | "public";
 
+/** Pure book metadata; several files can share one entry. */
 export interface BookMeta {
   id: string;
-  source: string;
-  external_id: string;
   title: string;
   authors: string[];
   description: string | null;
   cover_url: string | null;
+  created_by: string | null;
+  created_at: string;
+}
+
+/** One actual book file (upload or virtual plugin book). */
+export interface FileMeta {
+  id: string;
+  book_id: string;
+  source: string;
+  external_id: string;
+  format: "epub" | "txt" | "plugin";
+  label: string;
   visibility: Visibility;
   owner_id: string | null;
   chapter_count: number;
   created_at: string;
 }
 
+export interface BookDetail {
+  book: BookMeta;
+  files: FileMeta[];
+}
+
+export interface BookListEntry {
+  book: BookMeta;
+  files: FileMeta[];
+}
+
+export interface FileDetail {
+  file: FileMeta;
+  book: BookMeta;
+  chapters: ChapterMeta[];
+}
+
 export interface ChapterMeta {
   idx: number;
   title: string;
-}
-
-export interface BookDetail {
-  book: BookMeta;
-  chapters: ChapterMeta[];
 }
 
 export interface Chapter {
@@ -61,14 +83,14 @@ export interface Position {
 export interface ReadingSession {
   id: string;
   user_id: string;
-  book_id: string;
+  file_id: string;
   label: string;
   position: Position;
   updated_at: string;
 }
 
 export interface SessionsResponse {
-  book_id: string;
+  file_id: string;
   book_title: string;
   sessions: ReadingSession[];
 }
@@ -78,7 +100,7 @@ export interface ShareInfo {
   url: string;
   kind: "book" | "session";
   mode: "read" | "progress";
-  book_id: string;
+  file_id: string;
   session_id: string | null;
   expires_at: string | null;
   created_at: string;
@@ -89,6 +111,12 @@ export interface ShareBookView {
   title: string;
   authors: string[];
   description: string | null;
+}
+
+export interface ShareFileView {
+  id: string;
+  format: string;
+  label: string;
   chapter_count: number;
 }
 
@@ -105,6 +133,7 @@ export interface ShareView {
   kind: "book" | "session";
   mode: "read" | "progress";
   book: ShareBookView;
+  file: ShareFileView;
   session: ShareSessionView | null;
   created_at: string;
   expires_at: string | null;
@@ -112,5 +141,6 @@ export interface ShareView {
 
 export interface ShareBookResponse {
   book: ShareBookView;
+  file: ShareFileView;
   chapters: ChapterMeta[];
 }

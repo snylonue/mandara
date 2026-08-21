@@ -4,8 +4,8 @@ use anyhow::anyhow;
 use sqlx::FromRow;
 
 use bookshelf_core::model::{
-    BookMeta, Chapter, ChapterMeta, Position, ReadingSession, Role, Share, ShareKind, User,
-    Visibility,
+    BookMeta, Chapter, ChapterMeta, FileMeta, Position, ReadingSession, Role, Share, ShareKind,
+    User, Visibility,
 };
 
 use crate::error::ApiError;
@@ -33,15 +33,11 @@ impl UserRow {
 #[derive(Debug, FromRow)]
 pub struct BookRow {
     pub id: String,
-    pub source: String,
-    pub external_id: String,
     pub title: String,
     pub authors: String,
     pub description: Option<String>,
     pub cover_url: Option<String>,
-    pub visibility: String,
-    pub owner_id: Option<String>,
-    pub chapter_count: i64,
+    pub created_by: Option<String>,
     pub created_at: String,
 }
 
@@ -49,12 +45,39 @@ impl BookRow {
     pub fn into_model(self) -> Result<BookMeta, ApiError> {
         Ok(BookMeta {
             id: self.id,
-            source: self.source,
-            external_id: self.external_id,
             title: self.title,
             authors: serde_json::from_str(&self.authors).unwrap_or_default(),
             description: self.description,
             cover_url: self.cover_url,
+            created_by: self.created_by,
+            created_at: self.created_at,
+        })
+    }
+}
+
+#[derive(Debug, FromRow)]
+pub struct FileRow {
+    pub id: String,
+    pub book_id: String,
+    pub source: String,
+    pub external_id: String,
+    pub format: String,
+    pub label: String,
+    pub visibility: String,
+    pub owner_id: Option<String>,
+    pub chapter_count: i64,
+    pub created_at: String,
+}
+
+impl FileRow {
+    pub fn into_model(self) -> Result<FileMeta, ApiError> {
+        Ok(FileMeta {
+            id: self.id,
+            book_id: self.book_id,
+            source: self.source,
+            external_id: self.external_id,
+            format: self.format,
+            label: self.label,
             visibility: Visibility::parse(&self.visibility).unwrap_or(Visibility::Private),
             owner_id: self.owner_id,
             chapter_count: self.chapter_count.max(0) as u32,
@@ -99,7 +122,7 @@ impl ChapterTitleRow {
 pub struct SessionRow {
     pub id: String,
     pub user_id: String,
-    pub book_id: String,
+    pub file_id: String,
     pub label: String,
     pub chapter_idx: i64,
     pub offset: i64,
@@ -112,7 +135,7 @@ impl SessionRow {
         ReadingSession {
             id: self.id,
             user_id: self.user_id,
-            book_id: self.book_id,
+            file_id: self.file_id,
             label: self.label,
             position: Position {
                 chapter_idx: self.chapter_idx.max(0) as u32,
@@ -129,7 +152,7 @@ pub struct ShareRow {
     pub token: String,
     pub kind: String,
     pub mode: String,
-    pub book_id: String,
+    pub file_id: String,
     pub session_id: Option<String>,
     pub created_by: Option<String>,
     pub expires_at: Option<String>,
@@ -148,7 +171,7 @@ impl ShareRow {
                 }
             },
             mode: self.mode,
-            book_id: self.book_id,
+            file_id: self.file_id,
             session_id: self.session_id,
             created_by: self.created_by,
             expires_at: self.expires_at,

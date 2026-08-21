@@ -1,85 +1,113 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useState, type ChangeEvent } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
-import type { BookDetail, ReadingSession, SessionsResponse, ShareInfo } from "../types";
+import {
+  type BookDetail,
+  type FileMeta,
+  type ReadingSession,
+  type SessionsResponse,
+  type ShareInfo,
+  type Visibility,
+} from "../types";
 
 const fmtTime = (s: string) => new Date(s).toLocaleString("zh-CN", { hour12: false });
+const fmtPercent = (s: ReadingSession) => `${Math.round(s.position.fraction * 100)}%`;
 
-export function BookDetailPage() {
-  const { id = "" } = useParams();
-  const [detail, setDetail] = useState<BookDetail | null>(null);
+/// One file row: actions per file (read, visibility toggle, share, delete)
+/// plus its sessions.
+function FileSection({
+  file,
+  onChanged,
+  onShare,
+  setError,
+}: {
+  file: FileMeta;
+  onChanged: () => Promise<void>;
+  onShare: (fileId: string, kind: "book" | "session", sessionId?: string) => Promise<void>;
+  setError: (msg: string | null) => void;
+}) {
   const [sessions, setSessions] = useState<ReadingSession[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [label, setLabel] = useState("");
-  const [share, setShare] = useState<ShareInfo | null>(null);
 
-  const load = useCallback(async () => {
+  const loadSessions = useCallback(async () => {
     try {
-      const d = await api<BookDetail>(`/books/${id}`);
-      setDetail(d);
-      const s = await api<SessionsResponse>(`/books/${id}/sessions`);
+      const s = await api<SessionsResponse>(`/files/${file.id}/sessions`);
       setSessions(s.sessions);
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "加载失败");
+    } catch {
+      setSessions([]);
     }
-  }, [id]);
+  }, [file.id]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    void loadSessions();
+  }, [loadSessions]);
 
-  async function createSession(e: FormEvent) {
-    e.preventDefault();
+  async function toggleVisibility() {
+    const next: Visibility = file.visibility === "public" ? "private" : "public";
     try {
-      await api<ReadingSession>(`/books/${id}/sessions`, {
-        method: "POST",
-        body: JSON.stringify({ label }),
+      await api<FileMeta>(`/files/${file.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ visibility: next }),
       });
-      setLabel("");
-      await load();
+      await onChanged();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "创建失败");
+      setError(err instanceof Error ? err.message : "操作失败");
     }
   }
 
-  async function deleteSession(sessionId: string) {
-    await api(`/sessions/${sessionId}`, { method: "DELETE" });
-    await load();
-  }
-
-  async function makeShare(kind: "book" | "session", sessionId?: string) {
+  async function deleteFile() {
+    if (!window.confirm(`删除文件「${file.label || file.format}」？该文件的所有章节与会话将被删除。`)) return;
     try {
-      const info = await api<ShareInfo>(`/books/${id}/shares`, {
-        method: "POST",
-        body: JSON.stringify({ kind, session_id: sessionId }),
-      });
-      setShare(info);
+      await api(`/files/${file.id}`, { method: "DELETE" });
+      await onChanged();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "创建分享失败");
+      setError(err instanceof Error ? err.message : "删除失败");
     }
   }
 
-  if (error) return <div className="error">{error}</div>;
-  if (!detail) return <div className="page-loading">加载中…</div>;
-  const { book, chapters } = detail;
+  const readable = file.chapter_count > 0;
 
   return (
-    <div className="book-detail">
-      <Link to="/" className="link-btn">
-        ← 书架
-      </Link>
-      <h1>{book.title}</h1>
-      <p className="hint">
-        {book.authors.join(" / ") || "佚名"} · {book.chapter_count} 章 · 来源:{book.source}
-      </p>
-      {book.description && <p className="description">{book.description}</p>}
+    <div className="file-card">
+      <div className="file-head">
+        <div>
+          <Link to={`/read/${file.id}`} className="strong">
+            {file.label || file.format}
+          </Link>
+          <span className="tag">{file.format}</span>
+          {file.source !== "local" && <span className="tag">plugin</span>}
+          <span className={`tag ${file.visibility === "public" ? "tag-public" : ""}`}>
+            {file.visibility === "public" ? "公开" : "隐藏"}
+          </span>
+        </div>
+        <div className="row-actions">
+          {readable && (
+            <Link className="link-btn" to={`/read/${file.id}`}>
+              阅读
+            </Link>
+          )}
+          {file.source === "local" && (
+            <>
+              <button className="link-btn" onClick={() => void toggleVisibility()}>
+                {file.visibility === "public" ? "设为隐藏" : "设为公开"}
+              </button>
+              <button
+                className="link-btn"
+                onClick={() => void onShare(file.id, "book")}
+              >
+                分享
+              </button>
+              <button className="link-btn danger" onClick={() => void deleteFile()}>
+                删除
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+      <div className="file-meta hint">
+        {file.chapter_count} 章 · 上传于 {fmtTime(file.created_at)}
+      </div>
 
-      <section className="card">
-        <h2>阅读会话</h2>
-        <p className="hint">
-          每个会话独立记录进度（如手机、平板、电脑各一个），可分别续读与分享。
-        </p>
+      {sessions.length > 0 && (
         <table className="sessions">
           <thead>
             <tr>
@@ -91,84 +119,175 @@ export function BookDetailPage() {
           </thead>
           <tbody>
             {sessions.map((s) => {
-              const chapter = chapters.find((c) => c.idx === s.position.chapter_idx);
               return (
                 <tr key={s.id}>
                   <td>
-                    <Link to={`/read/${id}?session=${s.id}`} className="strong">
+                    <Link to={`/read/${file.id}?session=${s.id}`} className="strong">
                       {s.label}
                     </Link>
                   </td>
-                  <td>
-                    {chapter?.title ?? s.position.chapter_idx + 1} ·{" "}
-                    {Math.round(s.position.fraction * 100)}%
-                  </td>
+                  <td>第 {s.position.chapter_idx + 1} 章 · {fmtPercent(s)}</td>
                   <td className="hint">{fmtTime(s.updated_at)}</td>
                   <td className="row-actions">
-                    <button className="link-btn" onClick={() => makeShare("session", s.id)}>
+                    <button
+                      className="link-btn"
+                      onClick={() => void onShare(file.id, "session", s.id)}
+                    >
                       分享进度
-                    </button>
-                    <button className="link-btn danger" onClick={() => void deleteSession(s.id)}>
-                      删除
                     </button>
                   </td>
                 </tr>
               );
             })}
-            {!sessions.length && (
-              <tr>
-                <td colSpan={4} className="hint">
-                  还没有会话
-                </td>
-              </tr>
-            )}
           </tbody>
         </table>
-        <form className="inline-form" onSubmit={createSession}>
-          <input
-            placeholder="新会话名称，如：手机"
-            value={label}
-            onChange={(e) => setLabel(e.target.value)}
+      )}
+    </div>
+  );
+}
+
+export function BookDetailPage() {
+  const { id = "" } = useParams();
+  const [detail, setDetail] = useState<BookDetail | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [share, setShare] = useState<ShareInfo | null>(null);
+  const [attachLabel, setAttachLabel] = useState("");
+  const [attachVisibility, setAttachVisibility] = useState<Visibility>("public");
+  const [attaching, setAttaching] = useState(false);
+  const attachRef = { current: null as HTMLInputElement | null };
+
+  const load = useCallback(async () => {
+    try {
+      const d = await api<BookDetail>(`/books/${id}`);
+      setDetail(d);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "加载失败");
+    }
+  }, [id]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function attach(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setAttaching(true);
+    setError(null);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      form.append("visibility", attachVisibility);
+      if (attachLabel.trim()) form.append("label", attachLabel.trim());
+      await api<FileMeta>(`/books/${id}/files`, { method: "POST", body: form });
+      setAttachLabel("");
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "上传失败");
+    } finally {
+      setAttaching(false);
+      if (attachRef.current) attachRef.current.value = "";
+    }
+  }
+
+  /** Create a share for a specific file (book link) or its session. */
+  async function makeShare(fileId: string, kind: "book" | "session", sessionId?: string) {
+    try {
+      const info = await api<ShareInfo>(`/files/${fileId}/shares`, {
+        method: "POST",
+        body: JSON.stringify({ kind, session_id: sessionId }),
+      });
+      setShare(info);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "创建分享失败");
+    }
+  }
+
+  if (error) return <div className="error">{error}</div>;
+  if (!detail) return <div className="page-loading">加载中…</div>;
+  const { book, files } = detail;
+
+  return (
+    <div className="book-detail">
+      <Link to="/" className="link-btn">
+        ← 书架
+      </Link>
+      <h1>{book.title}</h1>
+      <p className="hint">
+        {book.authors.join(" / ") || "佚名"} · {files.length} 个文件版本
+      </p>
+      {book.description && <p className="description">{book.description}</p>}
+
+      <section className="card">
+        <h2>文件版本（{files.length}）</h2>
+        <p className="hint">
+          同一本书可有多个文件（不同格式/版本），各文件独立设置公开/隐藏，阅读进度以文件为单位。
+        </p>
+        {files.map((f) => (
+          <FileSection
+            key={f.id}
+            file={f}
+            onChanged={load}
+            onShare={makeShare}
+            setError={setError}
           />
-          <button className="primary" type="submit">
-            新建会话
+        ))}
+      </section>
+
+      <section className="card">
+        <h2>添加文件到本书</h2>
+        <div className="inline-form">
+          <input
+            placeholder="备注（如：epub 精校版）"
+            value={attachLabel}
+            onChange={(e) => setAttachLabel(e.target.value)}
+          />
+          <select
+            value={attachVisibility}
+            onChange={(e) => setAttachVisibility(e.target.value as Visibility)}
+          >
+            <option value="private">隐藏</option>
+            <option value="public">公开</option>
+          </select>
+          <button className="primary" disabled={attaching} onClick={() => attachRef.current?.click()}>
+            {attaching ? "上传中…" : "上传文件 (epub/txt)"}
           </button>
-        </form>
+          <input
+            ref={(el) => {
+              attachRef.current = el;
+            }}
+            type="file"
+            accept=".epub,.txt,.text"
+            hidden
+            onChange={attach}
+          />
+        </div>
       </section>
 
       <section className="card">
         <h2>分享</h2>
         <div className="row">
-          <button className="primary" onClick={() => void makeShare("book")}>
-            生成本书分享链接（可匿名阅读）
+          <button
+            className="primary"
+            onClick={() => files[0] && void makeShare(files[0].id, "book")}
+          >
+            生成本书分享链接（匿名可读）
           </button>
-          <span className="hint">插件公共书可直接被任意用户生成分享。</span>
+          <span className="hint">公开文件可直接被任意用户分享；私有文件仅所有者/管理员可分享。</span>
         </div>
         {share && (
           <div className="share-box">
-            <span className="tag">{share.kind === "book" ? "书" : "进度"}分享</span>
+            <span className="tag">{share.kind === "book" ? "书籍" : "进度"}分享</span>
             <code>{share.url}</code>
             <button
               className="link-btn"
-              onClick={() => {
-                void navigator.clipboard?.writeText(`${location.origin}${share.url}`);
-              }}
+              onClick={() => void navigator.clipboard?.writeText(`${location.origin}${share.url}`)}
             >
               复制
             </button>
           </div>
         )}
-      </section>
-
-      <section className="card">
-        <h2>目录（{chapters.length} 章）</h2>
-        <ol className="toc">
-          {chapters.map((c) => (
-            <li key={c.idx}>
-              <Link to={`/read/${id}?chapter=${c.idx}`}>{c.title}</Link>
-            </li>
-          ))}
-        </ol>
       </section>
     </div>
   );
