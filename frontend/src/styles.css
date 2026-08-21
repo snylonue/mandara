@@ -371,6 +371,136 @@ select:focus {
   margin: 0;
 }
 
+/* Sanitized EPUB XHTML (see backend epub parser). */
+.epub-content {
+  font-family: "Noto Serif SC", "Songti SC", "SimSun", serif;
+  font-size: 17px;
+  line-height: 2.1;
+  letter-spacing: 0.02em;
+  color: var(--text);
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
+}
+
+.epub-content p,
+.epub-content div {
+  margin: 0 0 0.9em;
+  text-align: justify;
+}
+
+.epub-content h1,
+.epub-content h2,
+.epub-content h3,
+.epub-content h4,
+.epub-content h5,
+.epub-content h6 {
+  font-weight: 700;
+  line-height: 1.6;
+  margin: 1.6em 0 0.8em;
+}
+
+.epub-content h1 {
+  font-size: 1.5em;
+  text-align: center;
+}
+
+.epub-content h2 {
+  font-size: 1.3em;
+}
+
+.epub-content h3 {
+  font-size: 1.15em;
+}
+
+.epub-content h4,
+.epub-content h5,
+.epub-content h6 {
+  font-size: 1.05em;
+}
+
+.epub-content img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 1em auto;
+}
+
+.epub-content a {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.epub-content blockquote {
+  margin: 1em 0;
+  padding: 0.2em 1.2em;
+  border-left: 3px solid var(--border);
+  color: var(--muted);
+}
+
+.epub-content pre {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.8em 1em;
+  overflow-x: auto;
+  font-size: 0.92em;
+  line-height: 1.6;
+}
+
+.epub-content code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.epub-content ul,
+.epub-content ol {
+  margin: 0.5em 0 0.9em;
+  padding-left: 2em;
+}
+
+.epub-content table {
+  border-collapse: collapse;
+  margin: 1em auto;
+  max-width: 100%;
+}
+
+.epub-content th,
+.epub-content td {
+  border: 1px solid var(--border);
+  padding: 0.4em 0.8em;
+}
+
+.epub-content th {
+  background: var(--panel);
+}
+
+.epub-content ruby {
+  ruby-align: center;
+}
+
+.epub-content rt {
+  font-size: 0.6em;
+  color: var(--muted);
+}
+
+.epub-content hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 1.6em auto;
+  width: 60%;
+}
+
+.epub-content .hint,
+.epub-content figure {
+  margin: 1em auto;
+  text-align: center;
+}
+
+.epub-content figcaption {
+  font-size: 0.85em;
+  color: var(--muted);
+  margin-top: 0.3em;
+}
+
 .reader-bottom {
   display: flex;
   justify-content: space-between;

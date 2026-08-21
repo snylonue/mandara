@@ -15,7 +15,7 @@ use sqlx::SqlitePool;
 use tracing::info;
 
 use bookshelf_core::error::Result as CoreResult;
-use bookshelf_core::model::{BookMeta, Chapter, ChapterMeta, FileMeta, User, Visibility};
+use bookshelf_core::model::{BookMeta, Chapter, ChapterFormat, ChapterMeta, FileMeta, User, Visibility};
 use bookshelf_core::source::BookSource;
 
 use crate::error::ApiError;
@@ -181,11 +181,13 @@ impl Library {
 
         for (idx, chapter) in parsed.chapters.iter().enumerate() {
             sqlx::query(
-                "INSERT INTO chapters (file_id, idx, title, content) VALUES (?, ?, ?, ?)",
+                "INSERT INTO chapters (file_id, idx, title, format, content) \
+                 VALUES (?, ?, ?, ?, ?)",
             )
             .bind(&file_id)
             .bind(idx as i64)
             .bind(&chapter.title)
+            .bind(chapter.format.as_str())
             .bind(&chapter.content)
             .execute(&mut *tx)
             .await?;
@@ -238,11 +240,13 @@ impl Library {
 
         for (idx, chapter) in parsed.chapters.iter().enumerate() {
             sqlx::query(
-                "INSERT INTO chapters (file_id, idx, title, content) VALUES (?, ?, ?, ?)",
+                "INSERT INTO chapters (file_id, idx, title, format, content) \
+                 VALUES (?, ?, ?, ?, ?)",
             )
             .bind(&file_id)
             .bind(idx as i64)
             .bind(&chapter.title)
+            .bind(chapter.format.as_str())
             .bind(&chapter.content)
             .execute(&mut *tx)
             .await?;
@@ -426,7 +430,7 @@ impl Library {
             return Ok(None);
         }
         let row: Option<ChapterRow> = sqlx::query_as(
-            "SELECT idx, title, content FROM chapters WHERE file_id = ? AND idx = ?",
+            "SELECT idx, title, format, content FROM chapters WHERE file_id = ? AND idx = ?",
         )
         .bind(&file.id)
         .bind(idx as i64)
@@ -461,7 +465,7 @@ impl Library {
             return Ok(None);
         };
         sqlx::query(
-            "INSERT INTO chapters (file_id, idx, title, content) VALUES (?, ?, ?, ?) \
+            "INSERT INTO chapters (file_id, idx, title, format, content) VALUES (?, ?, ?, 'text', ?) \
              ON CONFLICT (file_id, idx) DO UPDATE SET title = excluded.title, content = excluded.content",
         )
         .bind(file_id)
@@ -473,6 +477,7 @@ impl Library {
         Ok(Some(Chapter {
             idx,
             title: chapter.title,
+            format: ChapterFormat::Text,
             content: chapter.content,
         }))
     }
@@ -497,8 +502,8 @@ impl Library {
                 let mut tx = self.db.begin().await?;
                 for (idx, title) in titles.into_iter().enumerate() {
                     sqlx::query(
-                        "INSERT OR IGNORE INTO chapters (file_id, idx, title, content) \
-                         VALUES (?, ?, ?, '')",
+                        "INSERT OR IGNORE INTO chapters (file_id, idx, title, format, content) \
+                         VALUES (?, ?, ?, 'text', '')",
                     )
                     .bind(&file.id)
                     .bind(idx as i64)

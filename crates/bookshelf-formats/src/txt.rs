@@ -4,6 +4,7 @@
 //! for Chinese light novels downloaded as txt).
 
 use bookshelf_core::error::{Error, Result};
+use bookshelf_core::model::ChapterFormat;
 
 use crate::{ParsedBook, ParsedChapter};
 
@@ -63,6 +64,7 @@ fn split_chapters(text: &str, filename: &str) -> (String, Vec<ParsedChapter>) {
             if heading_seen {
                 chapters.push(ParsedChapter {
                     title: std::mem::take(&mut cur_title),
+                    format: ChapterFormat::Text,
                     content: std::mem::take(&mut cur),
                 });
             }
@@ -76,6 +78,7 @@ fn split_chapters(text: &str, filename: &str) -> (String, Vec<ParsedChapter>) {
     if heading_seen {
         chapters.push(ParsedChapter {
             title: std::mem::take(&mut cur_title),
+            format: ChapterFormat::Text,
             content: std::mem::take(&mut cur),
         });
     }
@@ -89,6 +92,7 @@ fn split_chapters(text: &str, filename: &str) -> (String, Vec<ParsedChapter>) {
     if chapters.is_empty() {
         chapters.push(ParsedChapter {
             title: title.clone(),
+            format: ChapterFormat::Text,
             content: text.to_string(),
         });
     }

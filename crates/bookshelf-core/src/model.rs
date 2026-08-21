@@ -113,10 +113,40 @@ pub struct ChapterMeta {
     pub title: String,
 }
 
+/// Content format of a chapter. `epub` chapters carry sanitized HTML
+/// (EPUB XHTML, structure preserved); `txt` and plugin chapters are plain
+/// text. The web reader renders accordingly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ChapterFormat {
+    Html,
+    Text,
+}
+
+impl ChapterFormat {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ChapterFormat::Html => "html",
+            ChapterFormat::Text => "text",
+        }
+    }
+
+    /// Parse a stored format string, falling back to plain text for
+    /// unknown/legacy values.
+    pub fn parse(s: &str) -> ChapterFormat {
+        match s {
+            "html" => ChapterFormat::Html,
+            _ => ChapterFormat::Text,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Chapter {
     pub idx: u32,
     pub title: String,
+    /// `"html"` (sanitized EPUB XHTML) or `"text"` (plain text).
+    pub format: ChapterFormat,
     pub content: String,
 }
 

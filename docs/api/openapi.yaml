@@ -819,15 +819,22 @@ components:
 
     Chapter:
       type: object
-      required: [idx, title, content]
+      required: [idx, title, format, content]
       properties:
         idx:
           type: integer
         title:
           type: string
+        format:
+          type: string
+          enum: [html, text]
+          description: >-
+            `html`: sanitized HTML fragment (epub chapters, structure
+            preserved, images inlined as data URIs). `text`: plain text
+            (txt uploads, plugin chapters).
         content:
           type: string
-          description: Plain text of the chapter
+          description: Chapter content per `format`.
 
     Position:
       type: object

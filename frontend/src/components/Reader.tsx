@@ -128,7 +128,16 @@ export function Reader({
       </div>
       <article className="reader-content">
         {loading && <p className="hint">{t("common.loading")}</p>}
-        {chapter && <p className="chapter-text">{chapter.content}</p>}
+        {chapter &&
+          (chapter.format === "html" ? (
+            // Sanitized by the server (epub XHTML whitelist).
+            <div
+              className="epub-content"
+              dangerouslySetInnerHTML={{ __html: chapter.content }}
+            />
+          ) : (
+            <p className="chapter-text">{chapter.content}</p>
+          ))}
       </article>
       <div className="reader-bottom">
         <button onClick={() => goto(idx - 1)} disabled={idx <= 0 || readOnly}>

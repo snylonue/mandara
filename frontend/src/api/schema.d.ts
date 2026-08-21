@@ -368,7 +368,12 @@ export interface components {
         Chapter: {
             idx: number;
             title: string;
-            /** @description Plain text of the chapter */
+            /**
+             * @description `html`: sanitized HTML fragment (epub chapters, structure preserved, images inlined as data URIs). `text`: plain text (txt uploads, plugin chapters).
+             * @enum {string}
+             */
+            format: "html" | "text";
+            /** @description Chapter content per `format`. */
             content: string;
         };
         Position: {

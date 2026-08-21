@@ -9,6 +9,7 @@ pub mod txt;
 use std::path::Path;
 
 use bookshelf_core::error::{Error, Result};
+use bookshelf_core::model::ChapterFormat;
 
 /// A parsed book in normalized form.
 #[derive(Debug, Clone)]
@@ -20,10 +21,14 @@ pub struct ParsedBook {
     pub chapters: Vec<ParsedChapter>,
 }
 
-/// One chapter of a parsed book. `content` is plain text.
+/// One chapter of a parsed book.
+///
+/// `content` is either sanitized HTML (`format == Html`, epub source) or
+/// plain text (`format == Text`, txt source).
 #[derive(Debug, Clone)]
 pub struct ParsedChapter {
     pub title: String,
+    pub format: ChapterFormat,
     pub content: String,
 }
 
@@ -59,5 +64,6 @@ mod tests {
         assert_eq!(book.title, "book");
         assert_eq!(book.chapters.len(), 1);
         assert_eq!(book.chapters[0].content, "hello world");
+        assert_eq!(book.chapters[0].format, ChapterFormat::Text);
     }
 }
