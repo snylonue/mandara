@@ -1,0 +1,54 @@
+package bookshelf:plugin@0.1.0;
+
+/// Shared types between bookshelf and plugins.
+interface types {
+    /// A book offered by a plugin source.
+    record book-entry {
+        /// Stable id of the book within this plugin.
+        id: string,
+        title: string,
+        authors: list<string>,
+        description: option<string>,
+        cover-url: option<string>,
+    }
+
+    /// A single chapter of a book. `content` is plain text.
+    record chapter {
+        title: string,
+        content: string,
+    }
+}
+
+/// Functions provided by the host (the bookshelf server).
+interface store {
+    /// Append a line to the server log, tagged with the plugin name.
+    log: func(message: string);
+}
+
+/// World implemented by bookshelf plugins.
+///
+/// A plugin is a component that offers a catalog of books. The server
+/// periodically lists books, stores their metadata in the central library,
+/// and materializes chapters into the library on first read.
+world bookshelf-plugin {
+    import types;
+    import store;
+
+    // Types used by this world's exports come from the imported `types`
+    // interface; WIT requires an explicit `use` to bring them into the
+    // world scope.
+    use types.{book-entry, chapter};
+
+    /// Human-readable name of this plugin.
+    export name: func() -> string;
+
+    /// List all books offered by this plugin.
+    export list-books: func() -> list<book-entry>;
+
+    /// Chapter titles of `book-id`, in reading order. Indices returned here
+    /// are the same indices passed to `get-chapter`.
+    export chapter-titles: func(book-id: string) -> list<string>;
+
+    /// Fetch one chapter of `book-id` by index. `none` means not found.
+    export get-chapter: func(book-id: string, index: u32) -> option<chapter>;
+}

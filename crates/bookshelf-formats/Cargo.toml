@@ -1,0 +1,13 @@
+[package]
+name = "bookshelf-formats"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bookshelf-core = { path = "../bookshelf-core" }
+encoding_rs = { workspace = true }
+epub = { workspace = true }
+html2text = { workspace = true }
+scraper = { workspace = true }
+uuid = { workspace = true }

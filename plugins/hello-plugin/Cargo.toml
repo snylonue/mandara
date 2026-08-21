@@ -1,0 +1,18 @@
+[package]
+name = "hello-plugin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "example bookshelf plugin: a static catalog provided by a wasm component"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.60"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true

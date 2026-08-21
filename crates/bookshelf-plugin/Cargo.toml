@@ -1,0 +1,13 @@
+[package]
+name = "bookshelf-plugin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "wasm plugin host: runs user-provided book sources as WebAssembly components"
+
+[dependencies]
+bookshelf-core = { path = "../bookshelf-core" }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }
+wasmtime = { workspace = true }

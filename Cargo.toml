@@ -1,0 +1,47 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/bookshelf-core",
+    "crates/bookshelf-formats",
+    "crates/bookshelf-plugin",
+    "crates/bookshelf-server",
+    "plugins/hello-plugin",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/example/bookshelf"
+
+# the wasm plugin (cdylib) is built size-optimized.
+[profile.release.package.hello-plugin]
+opt-level = "s"
+
+[workspace.dependencies]
+anyhow = "1.0"
+thiserror = "2.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.0", features = ["rt-multi-thread", "macros", "fs", "io-util", "signal"] }
+axum = { version = "0.8", features = ["multipart"] }
+tower-http = { version = "0.7", features = ["cors", "trace", "fs", "limit"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+async-trait = "0.1"
+# note: sqlx queries in this project use the runtime (`sqlx::query*`) API,
+# so no DATABASE_URL is needed at compile time.
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros", "derive"] }
+jsonwebtoken = { version = "11", features = ["rust_crypto"] }
+argon2 = "0.5"
+clap = { version = "4", features = ["derive", "env"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+dotenvy = "0.15"
+regex = "1"
+encoding_rs = "0.8"
+epub = "2.1"
+html2text = "0.17"
+scraper = "0.27"
+wasmtime = "48"
+mime = "0.3"
