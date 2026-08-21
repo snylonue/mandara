@@ -48,6 +48,10 @@ metadata sources.
 13. Frontend UI is **i18n-ready**: all UI strings live in
     `frontend/src/i18n/locales/zh-CN.json` (i18next). Only zh-CN is shipped
     for now; adding a locale = adding a JSON file.
+14. **Run `cargo fmt --all` before every commit** — the tree must stay
+    rustfmt-clean (`cargo fmt --check` passes). Formatting changes from
+    `cargo fmt` land in their own `chore:` commit, never mixed into feature
+    commits.
 
 ## Tech Stack & Decisions
 
@@ -164,6 +168,7 @@ scripts/build-plugin-hello.sh      # build example plugin → plugins-built/
 | 2026-08-21 | feat(toc): hierarchical table of contents end-to-end. Parser keeps the nav/NCX tree (EPUB3 nav nested `ol>li`, EPUB2 NCX nested navPoints rebuilt despite html5ever's HTML-mode `<content/>` hoisting via nearest-navPoint-ancestor logic); image-only pages (插图 plates) are no longer chapters; `book_files.toc` JSON column (migration 0003) stores the tree (`idx` references chapters, `null` = group); `FileDetail.toc` + `ShareBookResponse.toc` in the API contract (flat synthesis fallback for plugin books/legacy uploads); reader replaces the flat `<select>` with a collapsible tree TOC panel (recursive `TocTree`, groups expandable, current chapter highlighted), wired in ReaderPage + SharePage. Verified e2e with a generated nested-TOC EPUB (卷→话 tree, illustration page dropped). |
 | 2026-08-21 | feat(epub): parse per the EPUB standard. Reading order = OPF spine (auxiliary `linear="no"` items and front matter without TOC entries/headings no longer become chapters); chapter titles come from the EPUB3 nav doc or EPUB2 NCX (fallback: first heading, then numbered); chapter content is stored as sanitized XHTML (whitelist-built via html5ever/scraper, images inlined as data URIs, scripts/styles/on* attributes stripped, cross-doc links dropped) instead of html2text plain text; `chapters.format` column (`html`/`text`, migration 0002) + `Chapter.format` in the API contract; frontend renders HTML chapters via `dangerouslySetInnerHTML` + dedicated `.epub-content` styles (ruby/table/image/blockquote, …) and keeps pre-wrap text rendering for txt/plugin chapters; `html2text` dependency removed. Verified e2e with a real Chinese EPUB (27 spine docs → 24 chapters; title page / blank / book-TOC pages dropped; TOC titles correct) and txt/plugin chapters still `text`. |
 | 2026-08-21 | feat(metadata): upload-time metadata management. `POST /api/books` is now one endpoint for all three modes: attach (`book_id` → existing metadata, dedup), auto (plugins asked to identify via new WIT `identify-upload(filename, sha256)` — first match becomes the metadata, keeping parsed fallback) and manual (`title`/`authors` JSON/`description`/`cover_url` overrides; a plugin catalog picker `GET /api/plugins/{id}/catalog` lets users source metadata from a plugin and stay linked to it). Plugin books are created via a shared `ensure_plugin_book` (metadata + virtual public file); a user claiming an upload as a plugin book becomes the metadata's creator (`COALESCE`), so it is manageable/refreshable. Metadata and file deletion are now distinct: `DELETE /api/books/{id}` returns 409 + file ids while files remain (no silent cascade; files deleted individually via `DELETE /api/files/{id}`). `POST /api/books/{id}/refresh` re-pulls metadata + chapter-title placeholders from the plugin source(s) (creator/admin; never overwrites materialized chapter content). Frontend: upload dialog with the three modes + plugin picker, per-book refresh + delete-metadata (with delete-all-files-then-metadata flow on 409). OpenAPI updated (upload form fields, 409 schema, refresh + catalog endpoints, `PluginCatalogEntry`); verified e2e: attach→plugin book dedup, hello-named upload auto-identified, manual fields, plugin-ref override + refresh restores plugin title, catalog book_id, 400 on no-plugin refresh, 409→file delete→metadata delete. |
+| 2026-08-21 | requirement 14 recorded: run `cargo fmt --all` before every commit (tree must stay rustfmt-clean; formatting lands in its own `chore:` commit). Workspace made rustfmt-clean as a baseline (`chore: rustfmt-clean the workspace`, formatting only). |
 
 ## Conventions
 
@@ -177,7 +182,8 @@ scripts/build-plugin-hello.sh      # build example plugin → plugins-built/
   into the `ApiError::*` variants in `crates/bookshelf-server/src/error.rs`.
 - **Auth disabled mode**: `seed_local_user` inserts the `local` admin row so
   FKs on sessions/shares keep working — don't remove.
-- **Checks before commit**: `just check` (cargo check + clippy -D warnings),
+- **Checks before commit**: `just fmt` (cargo fmt --all), then `just check`
+  (cargo check + clippy -D warnings),
   `just test`, `cd frontend && npm run typecheck` (use
   `npm_config_cache=/tmp/npm-cache` if `~/.npm` has root-owned files),
   then **update this file's Progress Log**.
