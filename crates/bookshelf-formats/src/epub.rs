@@ -515,9 +515,11 @@ fn path_key(p: &Path) -> String {
 /// - a branch whose document became a chapter keeps its title and gets the
 ///   chapter's index; fragment entries pointing into the same document as
 ///   an ancestor are dropped (our reader navigates per chapter);
-/// - group branches (no target) are kept when they have surviving children;
-/// - branches whose document was filtered out (front matter, image-only
-///   pages, …) are spliced away, their children lifting up one level.
+/// - branches without a chapter of their own (no target at all, or their
+///   document was not kept — auxiliary `linear="no"` part pages, pages
+///   absent from the spine, image-only leaves) stay as pure structure
+///   groups (`idx = null`) when their children survive; only empty junk
+///   (cover pages, blank sheets, …) disappears entirely.
 fn remap_branches(
     branches: &[TocBranch],
     spine_pos: &HashMap<String, usize>,
@@ -532,22 +534,15 @@ fn remap_branches(
         });
         match this_idx {
             None => {
-                if b.path.is_none() {
-                    // A true group entry (no target of its own): keep it
-                    // as a structure node when it still has children.
-                    let children = remap_branches(&b.children, spine_pos, kept, parent_idx);
-                    if !children.is_empty() {
-                        out.push(TocNode {
-                            title: b.title.clone(),
-                            idx: None,
-                            children,
-                        });
-                    }
-                } else {
-                    // Its document was filtered out (front matter,
-                    // image-only pages, …): splice the entry away, its
-                    // children lift up one level.
-                    out.extend(remap_branches(&b.children, spine_pos, kept, parent_idx));
+                // The branch has no chapter of its own: keep it as a
+                // structure node when it still has children.
+                let children = remap_branches(&b.children, spine_pos, kept, parent_idx);
+                if !children.is_empty() {
+                    out.push(TocNode {
+                        title: b.title.clone(),
+                        idx: None,
+                        children,
+                    });
                 }
             }
             Some(i) => {
@@ -1165,6 +1160,68 @@ mod tests {
         assert_eq!(vol2.children[0].children[0].idx, Some(6));
         assert_eq!(vol1.title, "第一卷");
         assert_eq!(vol1.children[1].title, "第二话");
+    }
+
+    #[test]
+    fn part_pages_become_group_nodes() {
+        // Part divider pages are auxiliary (linear="no") or entirely
+        // absent from the spine; the nav entries that point at them must
+        // survive as structure groups (this is the shape of books whose
+        // parts have no own chapter, e.g. the 汪晖 epub that triggered
+        // the fix). Image-only/front-matter leaves without children still
+        // disappear.
+        let bytes = build_epub(&Fixture {
+            version: "3.0",
+            spine: vec![
+                ("part1.xhtml".into(), false), // 第一编 divider, auxiliary
+                ("e1.xhtml".into(), true),
+                ("e2.xhtml".into(), true),
+                ("part2.xhtml".into(), false), // 第二编 divider, auxiliary
+                ("e3.xhtml".into(), true),
+                ("pic.xhtml".into(), true), // image-only leaf: dropped
+            ],
+            toc: vec![
+                e("序言", "e1.xhtml", vec![]),
+                e(
+                    "第一编 去政治化的政治",
+                    "part1.xhtml",
+                    vec![
+                        e("去政治化的政治", "e1.xhtml", vec![]),
+                        e("当代中国的思想状况", "e2.xhtml", vec![]),
+                    ],
+                ),
+                e(
+                    "第二编",
+                    "part2.xhtml",
+                    vec![e("韦伯与中国的现代性", "e3.xhtml", vec![])],
+                ),
+                e("插图", "pic.xhtml", vec![]),
+            ],
+        });
+        let book = parse(&bytes).unwrap();
+        // Divider pages and the image plate never become chapters.
+        assert_eq!(book.chapters.len(), 3);
+        // Parts survive as groups with the right nesting; the stray 插图
+        // leaf is gone.
+        assert_eq!(book.toc.len(), 3);
+        assert_eq!(book.toc[0].title, "序言");
+        assert_eq!(book.toc[0].idx, Some(0));
+        let part1 = &book.toc[1];
+        assert_eq!(part1.title, "第一编 去政治化的政治");
+        assert_eq!(part1.idx, None);
+        assert_eq!(
+            part1
+                .children
+                .iter()
+                .map(|c| (c.title.as_str(), c.idx))
+                .collect::<Vec<_>>(),
+            vec![("去政治化的政治", Some(0)), ("当代中国的思想状况", Some(1))]
+        );
+        let part2 = &book.toc[2];
+        assert_eq!(part2.title, "第二编");
+        assert_eq!(part2.idx, None);
+        assert_eq!(part2.children[0].title, "韦伯与中国的现代性");
+        assert_eq!(part2.children[0].idx, Some(2));
     }
 
     #[test]
