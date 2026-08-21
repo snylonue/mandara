@@ -12,6 +12,8 @@ export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
+    /** Raw error body (e.g. `{error, files}` from a 409). */
+    public details?: unknown,
   ) {
     super(message);
   }
@@ -25,9 +27,11 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(`/api${path}`, { ...init, headers });
   if (!res.ok) {
     let msg = res.statusText;
+    let details: unknown;
     try {
       const j = await res.json();
       if (j?.error) msg = j.error;
+      details = j;
     } catch {
       /* non-json body */
     }
@@ -35,7 +39,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
       setToken(null);
       if (location.pathname !== "/login") location.href = "/login";
     }
-    throw new ApiError(res.status, msg);
+    throw new ApiError(res.status, msg, details);
   }
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;

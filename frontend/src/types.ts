@@ -32,3 +32,5 @@ export type ShareFileView = Schemas["ShareFileView"];
 export type ShareSessionView = Schemas["ShareSessionView"];
 export type ShareView = Schemas["ShareView"];
 export type ShareBookResponse = Schemas["ShareBookResponse"];
+export type PluginInfo = Schemas["PluginInfo"];
+export type PluginCatalogEntry = Schemas["PluginCatalogEntry"];

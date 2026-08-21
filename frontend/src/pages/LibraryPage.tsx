@@ -1,9 +1,15 @@
-import { useCallback, useEffect, useRef, useState, type ChangeEvent } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { useAuth } from "../auth";
-import type { BookDetail, BookListEntry, Visibility } from "../types";
+import type {
+  BookDetail,
+  BookListEntry,
+  PluginCatalogEntry,
+  PluginInfo,
+  Visibility,
+} from "../types";
 
 function BookCard({ entry }: { entry: BookListEntry }) {
   const { t } = useTranslation();
@@ -26,15 +32,20 @@ function BookCard({ entry }: { entry: BookListEntry }) {
   );
 }
 
+type UploadMode = "auto" | "attach" | "manual";
+
+const splitAuthors = (raw: string) =>
+  raw
+    .split(/[,，]/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+
 export function LibraryPage() {
   const { user } = useAuth();
   const { t } = useTranslation();
   const [entries, setEntries] = useState<BookListEntry[]>([]);
   const [q, setQ] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [uploading, setUploading] = useState(false);
-  const [visibility, setVisibility] = useState<Visibility>("private");
-  const fileRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async (query: string) => {
     try {
@@ -50,26 +61,6 @@ export function LibraryPage() {
     void load(q);
   }, [load, q]);
 
-  async function upload(e: ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setUploading(true);
-    setError(null);
-    try {
-      const form = new FormData();
-      form.append("file", file);
-      form.append("visibility", visibility);
-      await api<BookDetail>("/books", { method: "POST", body: form });
-      setQ("");
-      await load("");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t("library.uploadFailed"));
-    } finally {
-      setUploading(false);
-      if (fileRef.current) fileRef.current.value = "";
-    }
-  }
-
   return (
     <div>
       <div className="toolbar">
@@ -79,24 +70,7 @@ export function LibraryPage() {
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
-        <select
-          value={visibility}
-          onChange={(e) => setVisibility(e.target.value as Visibility)}
-          aria-label={t("library.visibilityLabel")}
-        >
-          <option value="private">{t("library.visibilityPrivate")}</option>
-          <option value="public">{t("library.visibilityPublic")}</option>
-        </select>
-        <button className="primary" onClick={() => fileRef.current?.click()} disabled={uploading}>
-          {uploading ? t("library.uploading") : t("library.upload")}
-        </button>
-        <input
-          ref={fileRef}
-          type="file"
-          accept=".epub,.txt,.text"
-          hidden
-          onChange={upload}
-        />
+        <UploadDialog onUploaded={() => { setQ(""); void load(""); }} />
       </div>
       {error && <div className="error">{error}</div>}
       {user?.role === "admin" && <p className="hint">{t("library.adminHint")}</p>}
@@ -107,6 +81,293 @@ export function LibraryPage() {
         ))}
       </div>
       {!entries.length && !error && <p className="hint">{t("library.empty")}</p>}
+    </div>
+  );
+}
+
+/**
+ * Upload dialog with three metadata modes:
+ * - auto:    parse metadata from the file; plugins may identify it first,
+ * - attach:  attach the file to an existing metadata entry,
+ * - manual:  hand-written fields, optionally prefilled from a plugin
+ *            catalog (the upload then stays linked to that plugin source
+ *            and its metadata can be refreshed from it later).
+ */
+function UploadDialog({ onUploaded }: { onUploaded: () => void }) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const [mode, setMode] = useState<UploadMode>("auto");
+  const [uploading, setUploading] = useState(false);
+  const [visibility, setVisibility] = useState<Visibility>("private");
+  const [label, setLabel] = useState("");
+  const [fileName, setFileName] = useState<string | null>(null);
+  const [dialogError, setDialogError] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  // attach mode: books available to the caller
+  const [bookOptions, setBookOptions] = useState<BookListEntry[]>([]);
+  const [attachBookId, setAttachBookId] = useState("");
+
+  // manual mode fields
+  const [title, setTitle] = useState("");
+  const [authors, setAuthors] = useState("");
+  const [description, setDescription] = useState("");
+
+  // manual mode: metadata from a plugin source
+  const [plugins, setPlugins] = useState<PluginInfo[]>([]);
+  const [pluginSel, setPluginSel] = useState("");
+  const [catalog, setCatalog] = useState<PluginCatalogEntry[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogFailed, setCatalogFailed] = useState(false);
+  const [pluginRef, setPluginRef] = useState<{ source: string; id: string } | null>(null);
+
+  const reset = () => {
+    setMode("auto");
+    setVisibility("private");
+    setLabel("");
+    setFileName(null);
+    setDialogError(null);
+    setAttachBookId("");
+    setTitle("");
+    setAuthors("");
+    setDescription("");
+    setPluginSel("");
+    setCatalog([]);
+    setPluginRef(null);
+  };
+
+  async function openDialog() {
+    setOpen(true);
+    setDialogError(null);
+    // Snapshot the books the caller may attach to.
+    try {
+      const list = await api<BookListEntry[]>("/books");
+      setBookOptions(list);
+    } catch {
+      setBookOptions([]);
+    }
+    // Snapshot the plugin sources, to offer "metadata from plugin".
+    if (!plugins.length) {
+      try {
+        setPlugins(await api<PluginInfo[]>("/plugins"));
+      } catch {
+        setPlugins([]);
+      }
+    }
+  }
+
+  async function pickPlugin(id: string) {
+    setPluginSel(id);
+    setCatalog([]);
+    setCatalogFailed(false);
+    setPluginRef(null);
+    if (!id) return;
+    setCatalogLoading(true);
+    try {
+      setCatalog(await api<PluginCatalogEntry[]>(`/plugins/${id}/catalog`));
+    } catch {
+      setCatalogFailed(true);
+    } finally {
+      setCatalogLoading(false);
+    }
+  }
+
+  function usePluginBook(entry: PluginCatalogEntry) {
+    setPluginRef({ source: entry.plugin, id: entry.id });
+    setTitle(entry.title);
+    setAuthors(entry.authors.join("，"));
+    setDescription(entry.description ?? "");
+  }
+
+  async function submit() {
+    const file = fileRef.current?.files?.[0];
+    if (!file) {
+      setDialogError(t("library.pickFile"));
+      return;
+    }
+    if (mode === "attach" && !attachBookId) {
+      setDialogError(t("library.pickBook"));
+      return;
+    }
+    if (mode === "manual" && !title.trim() && !pluginRef) {
+      setDialogError(t("library.manualNeedsTitle"));
+      return;
+    }
+    setUploading(true);
+    setDialogError(null);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      form.append("visibility", visibility);
+      if (label.trim()) form.append("label", label.trim());
+      if (mode === "attach") {
+        form.append("book_id", attachBookId);
+      } else if (mode === "manual") {
+        if (title.trim()) form.append("title", title.trim());
+        if (authors.trim()) form.append("authors", JSON.stringify(splitAuthors(authors)));
+        if (description.trim()) form.append("description", description.trim());
+        if (pluginRef) {
+          form.append("plugin_source", pluginRef.source);
+          form.append("plugin_book_id", pluginRef.id);
+        }
+      }
+      await api<BookDetail>("/books", { method: "POST", body: form });
+      reset();
+      setOpen(false);
+      onUploaded();
+    } catch (err) {
+      setDialogError(err instanceof Error ? err.message : t("library.uploadFailed"));
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = "";
+      setFileName(null);
+    }
+  }
+
+  return (
+    <div className="upload-dialog">
+      <button className="primary" onClick={() => void openDialog()}>
+        {t("library.upload")}
+      </button>
+      {open && (
+        <div className="card">
+          <div className="row">
+            <label className="radio">
+              <input
+                type="radio"
+                checked={mode === "auto"}
+                onChange={() => setMode("auto")}
+              />
+              {t("library.modeAuto")}
+            </label>
+            <label className="radio">
+              <input
+                type="radio"
+                checked={mode === "attach"}
+                onChange={() => setMode("attach")}
+              />
+              {t("library.modeAttach")}
+            </label>
+            <label className="radio">
+              <input
+                type="radio"
+                checked={mode === "manual"}
+                onChange={() => setMode("manual")}
+              />
+              {t("library.modeManual")}
+            </label>
+          </div>
+
+          {mode === "auto" && <p className="hint">{t("library.modeAutoHint")}</p>}
+
+          {mode === "attach" && (
+            <div className="field">
+              <p className="hint">{t("library.modeAttachHint")}</p>
+              <select value={attachBookId} onChange={(e) => setAttachBookId(e.target.value)}>
+                <option value="">{t("library.chooseBook")}</option>
+                {bookOptions.map(({ book }) => (
+                  <option key={book.id} value={book.id}>
+                    {book.title}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {mode === "manual" && (
+            <div className="field">
+              <p className="hint">{t("library.modeManualHint")}</p>
+              <input
+                placeholder={t("library.bookPlaceholder")}
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+              />
+              <input
+                placeholder={t("library.authorsPlaceholder")}
+                value={authors}
+                onChange={(e) => setAuthors(e.target.value)}
+              />
+              <textarea
+                placeholder={t("library.descriptionPlaceholder")}
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+              />
+              <div className="row">
+                <select value={pluginSel} onChange={(e) => void pickPlugin(e.target.value)}>
+                  <option value="">{t("library.choosePlugin")}</option>
+                  {plugins.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.id}
+                    </option>
+                  ))}
+                </select>
+                {pluginSel && (
+                  <select
+                    value={pluginRef?.id ?? ""}
+                    disabled={catalogLoading}
+                    onChange={(e) => {
+                      const entry = catalog.find((c) => c.id === e.target.value);
+                      if (entry) usePluginBook(entry);
+                    }}
+                  >
+                    <option value="">{t("library.choosePluginBook")}</option>
+                    {catalog.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.title}
+                        {c.book_id ? ` (${t("library.inLibrary")})` : ""}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+              {catalogFailed && <p className="error">{t("library.catalogFailed")}</p>}
+              {pluginRef && (
+                <p className="hint">
+                  {t("library.pluginSource", { plugin: pluginRef.source, id: pluginRef.id })}{" "}
+                  <button className="link-btn" onClick={() => setPluginRef(null)}>
+                    {t("library.clearPlugin")}
+                  </button>
+                </p>
+              )}
+            </div>
+          )}
+
+          <div className="field">
+            <div className="row">
+              <select
+                value={visibility}
+                onChange={(e) => setVisibility(e.target.value as Visibility)}
+                aria-label={t("library.visibilityLabel")}
+              >
+                <option value="private">{t("library.visibilityPrivate")}</option>
+                <option value="public">{t("library.visibilityPublic")}</option>
+              </select>
+              <input
+                placeholder={t("library.labelPlaceholder")}
+                value={label}
+                onChange={(e) => setLabel(e.target.value)}
+              />
+              <button className="primary" onClick={() => void submit()} disabled={uploading}>
+                {uploading ? t("library.uploading") : t("library.upload")}
+              </button>
+              <button className="link-btn" onClick={() => { reset(); setOpen(false); }}>
+                {t("library.cancel")}
+              </button>
+            </div>
+            <label className="file-picker">
+              <span>{fileName ?? t("library.pickFile")}</span>
+              <input
+                ref={fileRef}
+                type="file"
+                accept=".epub,.txt,.text"
+                hidden
+                onChange={(e) => setFileName(e.target.files?.[0]?.name ?? null)}
+              />
+            </label>
+          </div>
+          {dialogError && <div className="error">{dialogError}</div>}
+        </div>
+      )}
     </div>
   );
 }

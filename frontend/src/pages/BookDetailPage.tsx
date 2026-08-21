@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState, type ChangeEvent } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { api } from "../api";
+import { ApiError, api } from "../api";
+import { useAuth } from "../auth";
 import {
   type BookDetail,
+  type BookMeta,
   type FileMeta,
   type ReadingSession,
   type SessionsResponse,
@@ -155,13 +157,18 @@ function FileSection({
 
 export function BookDetailPage() {
   const { id = "" } = useParams();
+  const navigate = useNavigate();
   const { t } = useTranslation();
+  const { user } = useAuth();
   const [detail, setDetail] = useState<BookDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [share, setShare] = useState<ShareInfo | null>(null);
   const [attachLabel, setAttachLabel] = useState("");
   const [attachVisibility, setAttachVisibility] = useState<Visibility>("public");
   const [attaching, setAttaching] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [fileCount409, setFileCount409] = useState<number | null>(null);
   const attachRef = { current: null as HTMLInputElement | null };
 
   const load = useCallback(async () => {
@@ -212,9 +219,59 @@ export function BookDetailPage() {
     }
   }
 
+  /** Re-pull metadata from the plugin source(s) backing this book. */
+  async function refreshFromSource() {
+    setError(null);
+    setNotice(null);
+    try {
+      await api<BookMeta>(`/books/${id}/refresh`, { method: "POST" });
+      setNotice(t("book.refreshed"));
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("book.opFailed"));
+    }
+  }
+
+  /**
+   * Delete the metadata entry only. Metadata deletion never cascades into
+   * files: while files remain the server answers 409, and the caller may
+   * then delete the files explicitly first (`withFiles`).
+   */
+  async function deleteMetadata(withFiles: boolean) {
+    const book = detail?.book;
+    if (!book) return;
+    if (!window.confirm(t("book.confirmDeleteMetadata", { title: book.title }))) return;
+    setDeleting(true);
+    setError(null);
+    setFileCount409(null);
+    try {
+      if (withFiles && detail) {
+        // Delete the files one by one (they are independent resources).
+        for (const f of detail.files) {
+          await api(`/files/${f.id}`, { method: "DELETE" });
+        }
+        await load();
+      }
+      await api(`/books/${id}`, { method: "DELETE" });
+      navigate("/");
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        const files = (err.details as { files?: string[] } | undefined)?.files ?? [];
+        setFileCount409(files.length || null);
+        setError(err.message);
+      } else {
+        setError(err instanceof Error ? err.message : t("book.opFailed"));
+      }
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   if (error) return <div className="error">{error}</div>;
   if (!detail) return <div className="page-loading">{t("common.loading")}</div>;
   const { book, files } = detail;
+  const canManage = user !== null && (user.role === "admin" || book.created_by === user.id);
+  const pluginBacked = files.some((f) => f.source !== "local");
 
   return (
     <div className="book-detail">
@@ -229,6 +286,38 @@ export function BookDetailPage() {
         })}
       </p>
       {book.description && <p className="description">{book.description}</p>}
+
+      {canManage && (
+        <div className="row">
+          {pluginBacked && (
+            <button className="link-btn" onClick={() => void refreshFromSource()}>
+              {t("book.refreshFromSource")}
+            </button>
+          )}
+          <button
+            className="link-btn danger"
+            disabled={deleting}
+            onClick={() => void deleteMetadata(false)}
+          >
+            {t("book.deleteMetadata")}
+          </button>
+        </div>
+      )}
+      {notice && <p className="hint">{notice}</p>}
+      {fileCount409 !== null && (
+        <div className="card">
+          <p className="hint">
+            {t("book.metadataHasFiles", { count: fileCount409 })}
+          </p>
+          <button
+            className="danger"
+            disabled={deleting}
+            onClick={() => void deleteMetadata(true)}
+          >
+            {t("book.deleteMetadataAndFiles")}
+          </button>
+        </div>
+      )}
 
       <section className="card">
         <h2>{t("book.filesTitle", { count: files.length })}</h2>
