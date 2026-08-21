@@ -153,6 +153,8 @@ scripts/build-plugin-hello.sh      # build example plugin → plugins-built/
 | 2026-08-21 | Initial project setup: requirements, tech choices, workspace, backend (core/formats/plugin/server), example wasm plugin, React frontend, migrations, docs; all compile/test/e2e verified. |
 | 2026-08-21 | Rework #2 per owner feedback: (a) git history cleaned (`.direnv` removed, now gitignored); (b) all docs/comments converted to English (UI strings stay zh-CN); (c) permission model reworked: per-file public/private chosen by uploader, metadata (`books`) decoupled from files (`book_files`) so one metadata entry holds multiple files; chapters/sessions/shares now attach to files; API moved to `/api/files/*`, `POST /api/books/{id}/files` for extra editions; frontend updated (file-based library cards, visibility toggle, attach-upload, reader per file). E2E re-verified including visibility semantics (403 on hidden files for other users). |
 | 2026-08-21 | New working agreements recorded (req. 11–13) in AGENTS.md: one feature = one commit; API contract via `docs/api/openapi.yaml` (frontend types generated with openapi-typescript); frontend i18n via i18next (zh-CN only for now). |
+| 2026-08-21 | feat(api): OpenAPI 3.1 contract (`docs/api/openapi.yaml`, 22 endpoints, full schemas/security) as single source of truth; frontend generates `src/api/schema.d.ts` via `npm run api-types`; `src/types.ts` is now a thin alias layer over generated types. |
+| 2026-08-21 | feat(web): i18n via i18next + react-i18next; all UI strings extracted to `src/i18n/locales/zh-CN.json` (84 keys, no hardcoded strings remain, verified no missing keys); adding a locale = one JSON file. |
 
 ## Conventions
 
