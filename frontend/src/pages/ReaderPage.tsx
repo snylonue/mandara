@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { Reader } from "../components/Reader";
 import type { Chapter, FileDetail, Position, ReadingSession, SessionsResponse } from "../types";
@@ -7,6 +8,7 @@ import type { Chapter, FileDetail, Position, ReadingSession, SessionsResponse } 
 /// Reader page for one file (one format/edition of a book).
 export function ReaderPage() {
   const { id = "" } = useParams();
+  const { t } = useTranslation();
   const [params, setParams] = useSearchParams();
   const [detail, setDetail] = useState<FileDetail | null>(null);
   const [sessions, setSessions] = useState<ReadingSession[]>([]);
@@ -27,7 +29,7 @@ export function ReaderPage() {
       const wanted = s.sessions.find((x) => x.id === sessionId) ?? s.sessions[0] ?? null;
       setActive(wanted);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "加载失败");
+      setError(err instanceof Error ? err.message : t("common.failed"));
     }
   }, [id, sessionId]);
 
@@ -43,7 +45,7 @@ export function ReaderPage() {
   }, [active, chapterIdx]);
 
   async function createSession() {
-    const label = window.prompt("新会话名称（如：平板）", "平板");
+    const label = window.prompt(t("reader.newSessionPrompt"), t("reader.defaultSessionLabel"));
     if (!label) return;
     try {
       const created = await api<ReadingSession>(`/files/${id}/sessions`, {
@@ -53,7 +55,7 @@ export function ReaderPage() {
       setSessions((prev) => [...prev, created]);
       setParams({ session: created.id });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "创建失败");
+      setError(err instanceof Error ? err.message : t("reader.createFailed"));
     }
   }
 
@@ -73,7 +75,7 @@ export function ReaderPage() {
   );
 
   if (error) return <div className="error">{error}</div>;
-  if (!detail) return <div className="page-loading">加载中…</div>;
+  if (!detail) return <div className="page-loading">{t("common.loading")}</div>;
 
   const { file, book, chapters } = detail;
 
@@ -85,7 +87,7 @@ export function ReaderPage() {
             <select
               value={active.id}
               onChange={(e) => switchSession(e.target.value)}
-              aria-label="会话"
+              aria-label={t("reader.sessionLabel")}
             >
               {sessions.map((s) => (
                 <option key={s.id} value={s.id}>
@@ -94,12 +96,12 @@ export function ReaderPage() {
               ))}
             </select>
             <button className="link-btn" onClick={() => void createSession()}>
-              ＋ 新会话
+              {t("reader.newSession")}
             </button>
           </>
         ) : (
           <button className="link-btn" onClick={() => void createSession()}>
-            ＋ 创建会话开始阅读
+            {t("reader.createSession")}
           </button>
         )}
         <span className="hint">
@@ -117,7 +119,7 @@ export function ReaderPage() {
         onProgress={save}
       />
       <p className="hint center">
-        <Link to={`/book/${book.id}`}>返回书籍详情</Link>
+        <Link to={`/book/${book.id}`}>{t("common.backToDetail")}</Link>
       </p>
     </div>
   );

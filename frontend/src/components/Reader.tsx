@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { Chapter, ChapterMeta, Position } from "../types";
 
 interface ReaderProps {
@@ -22,6 +23,7 @@ export function Reader({
   onProgress,
   readOnly,
 }: ReaderProps) {
+  const { t } = useTranslation();
   const [idx, setIdx] = useState(() =>
     Math.min(initialPosition?.chapter_idx ?? 0, Math.max(chapters.length - 1, 0)),
   );
@@ -103,12 +105,12 @@ export function Reader({
         </div>
         <div className="reader-controls">
           <button onClick={() => goto(idx - 1)} disabled={idx <= 0}>
-            ← 上一章
+            {t("reader.prev")}
           </button>
           <select
             value={idx}
             onChange={(e) => goto(Number(e.target.value))}
-            aria-label="章节"
+            aria-label={t("reader.chapterSelect")}
           >
             {chapters.map((c) => (
               <option key={c.idx} value={c.idx}>
@@ -117,7 +119,7 @@ export function Reader({
             ))}
           </select>
           <button onClick={() => goto(idx + 1)} disabled={idx >= chapters.length - 1}>
-            下一章 →
+            {t("reader.next")}
           </button>
         </div>
       </div>
@@ -125,18 +127,22 @@ export function Reader({
         <div className="progress-fill" style={{ width: `${progress}%` }} />
       </div>
       <article className="reader-content">
-        {loading && <p className="hint">加载中…</p>}
+        {loading && <p className="hint">{t("common.loading")}</p>}
         {chapter && <p className="chapter-text">{chapter.content}</p>}
       </article>
       <div className="reader-bottom">
         <button onClick={() => goto(idx - 1)} disabled={idx <= 0 || readOnly}>
-          ← 上一章
+          {t("reader.prev")}
         </button>
         <span className="hint">
-          {idx + 1} / {chapters.length} 章 · {Math.round(progress)}%
+          {t("reader.chapterOf", {
+            current: idx + 1,
+            total: chapters.length,
+            percent: Math.round(progress),
+          })}
         </span>
         <button onClick={() => goto(idx + 1)} disabled={idx >= chapters.length - 1 || readOnly}>
-          下一章 →
+          {t("reader.next")}
         </button>
       </div>
     </div>

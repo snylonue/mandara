@@ -1,16 +1,18 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from "react";
 import { Link } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { useAuth } from "../auth";
 import type { BookDetail, BookListEntry, Visibility } from "../types";
 
 function BookCard({ entry }: { entry: BookListEntry }) {
+  const { t } = useTranslation();
   const { book, files } = entry;
-  const authors = book.authors.length ? book.authors.join(" / ") : "佚名";
+  const authors = book.authors.length ? book.authors.join(" / ") : t("common.anonymous");
   return (
     <Link className="book-card" to={`/book/${book.id}`}>
       <div className="book-title">{book.title}</div>
-      <div className="book-meta">{authors} · {files.reduce((n, f) => n + f.chapter_count, 0)} 章</div>
+      <div className="book-meta">{authors} · {files.reduce((n, f) => n + f.chapter_count, 0)} {t("common.chapters")}</div>
       <div className="book-tags">
         {files.map((f) => (
           <span key={f.id} className="tag">
@@ -26,6 +28,7 @@ function BookCard({ entry }: { entry: BookListEntry }) {
 
 export function LibraryPage() {
   const { user } = useAuth();
+  const { t } = useTranslation();
   const [entries, setEntries] = useState<BookListEntry[]>([]);
   const [q, setQ] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -39,7 +42,7 @@ export function LibraryPage() {
       setEntries(list);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "failed to load");
+      setError(err instanceof Error ? err.message : t("common.failed"));
     }
   }, []);
 
@@ -60,7 +63,7 @@ export function LibraryPage() {
       setQ("");
       await load("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "upload failed");
+      setError(err instanceof Error ? err.message : t("library.uploadFailed"));
     } finally {
       setUploading(false);
       if (fileRef.current) fileRef.current.value = "";
@@ -72,20 +75,20 @@ export function LibraryPage() {
       <div className="toolbar">
         <input
           className="search"
-          placeholder="搜索书名…"
+          placeholder={t("library.searchPlaceholder")}
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
         <select
           value={visibility}
           onChange={(e) => setVisibility(e.target.value as Visibility)}
-          aria-label="可见性"
+          aria-label={t("library.visibilityLabel")}
         >
-          <option value="private">隐藏（仅自己可见）</option>
-          <option value="public">公开（所有登录用户可见）</option>
+          <option value="private">{t("library.visibilityPrivate")}</option>
+          <option value="public">{t("library.visibilityPublic")}</option>
         </select>
         <button className="primary" onClick={() => fileRef.current?.click()} disabled={uploading}>
-          {uploading ? "上传中…" : "上传书籍 (epub/txt)"}
+          {uploading ? t("library.uploading") : t("library.upload")}
         </button>
         <input
           ref={fileRef}
@@ -96,17 +99,14 @@ export function LibraryPage() {
         />
       </div>
       {error && <div className="error">{error}</div>}
-      {user?.role === "admin" && <p className="hint">管理员视图：可见全部书籍（包含隐私文件）。</p>}
-      <p className="hint">
-        一个条目可关联多个文件（不同格式/版本）：先在此上传新书，
-        再到书籍详情页添加更多文件。
-      </p>
+      {user?.role === "admin" && <p className="hint">{t("library.adminHint")}</p>}
+      <p className="hint">{t("library.metadataHint")}</p>
       <div className="book-grid">
         {entries.map((entry) => (
           <BookCard key={entry.book.id} entry={entry} />
         ))}
       </div>
-      {!entries.length && !error && <p className="hint">书架空空如也，上传一本 epub/txt 试试。</p>}
+      {!entries.length && !error && <p className="hint">{t("library.empty")}</p>}
     </div>
   );
 }

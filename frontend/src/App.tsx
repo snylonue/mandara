@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { Link, Navigate, Route, Routes } from "react-router-dom";
 import { useAuth } from "./auth";
 import { BookDetailPage } from "./pages/BookDetailPage";
@@ -9,36 +10,38 @@ import { SharePage } from "./pages/SharePage";
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { health, user } = useAuth();
-  if (!health) return <div className="page-loading">加载中…</div>;
+  const { t } = useTranslation();
+  if (!health) return <div className="page-loading">{t("common.loading")}</div>;
   if (health.auth_enabled && !user) return <Navigate to="/login" replace />;
   return <>{children}</>;
 }
 
 export default function App() {
   const { user, health, logout } = useAuth();
+  const { t } = useTranslation();
 
   return (
     <div className="app">
       <header className="nav">
         <Link to="/" className="brand">
-          📚 Bookshelf
+          {t("nav.brand")}
         </Link>
         <div className="nav-right">
           {health && !health.auth_enabled && (
             <span className="badge" title="BOOKSHELF_AUTH_ENABLED=false">
-              本地模式
+              {t("nav.localMode")}
             </span>
           )}
           {user ? (
             <>
               <span className="username">{user.username}</span>
               <button className="link-btn" onClick={logout}>
-                退出
+                {t("nav.logout")}
               </button>
             </>
           ) : (
             <Link className="link-btn" to="/login">
-              登录
+              {t("nav.login")}
             </Link>
           )}
         </div>

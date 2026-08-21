@@ -11,8 +11,10 @@
     "api-types": "openapi-typescript ../docs/api/openapi.yaml -o src/api/schema.d.ts"
   },
   "dependencies": {
+    "i18next": "^26.4.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
+    "react-i18next": "^17.0.12",
     "react-router-dom": "^7.18.0"
   },
   "devDependencies": {

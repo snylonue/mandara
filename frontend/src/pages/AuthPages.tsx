@@ -1,15 +1,13 @@
 import { useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { useAuth } from "../auth";
 import type { AuthResp } from "../types";
 
-function AuthForm({
-  mode,
-}: {
-  mode: "login" | "register";
-}) {
+function AuthForm({ mode }: { mode: "login" | "register" }) {
   const { health, login } = useAuth();
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -28,7 +26,7 @@ function AuthForm({
       login(resp.token, resp.user);
       navigate("/", { replace: true });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "请求失败");
+      setError(err instanceof Error ? err.message : t("library.requestFailed"));
     } finally {
       setBusy(false);
     }
@@ -37,18 +35,20 @@ function AuthForm({
   if (health && !health.auth_enabled) {
     return (
       <div className="card">
-        <p>服务器以本地模式运行（未启用登录）。</p>
-        <Link to="/">返回书架</Link>
+        <p>{t("auth.localModeDesc")}</p>
+        <Link to="/">{t("auth.backToShelf")}</Link>
       </div>
     );
   }
 
+  const isLogin = mode === "login";
+
   return (
     <div className="auth-wrap">
       <form className="card auth-card" onSubmit={submit}>
-        <h1>{mode === "login" ? "登录" : "注册"}</h1>
+        <h1>{isLogin ? t("auth.loginTitle") : t("auth.registerTitle")}</h1>
         <label>
-          用户名
+          {t("auth.username")}
           <input
             value={username}
             onChange={(e) => setUsername(e.target.value)}
@@ -58,45 +58,41 @@ function AuthForm({
           />
         </label>
         <label>
-          密码
+          {t("auth.password")}
           <input
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            autoComplete={mode === "login" ? "current-password" : "new-password"}
+            autoComplete={isLogin ? "current-password" : "new-password"}
             required
             minLength={8}
           />
         </label>
         {error && <div className="error">{error}</div>}
         <button className="primary" disabled={busy}>
-          {mode === "login" ? "登录" : "注册"}
+          {isLogin ? t("auth.submitLogin") : t("auth.submitRegister")}
         </button>
         <p className="hint">
-          {mode === "login" ? (
+          {isLogin ? (
             <>
-              还没有账号？<Link to="/register">去注册</Link>
+              {t("auth.noAccount")} <Link to="/register">{t("auth.toRegister")}</Link>
             </>
           ) : (
             <>
-              已有账号？<Link to="/login">去登录</Link>
+              {t("auth.haveAccount")} <Link to="/login">{t("auth.toLogin")}</Link>
             </>
           )}
         </p>
       </form>
-      <p className="hint center">支持 epub / txt 格式的轻小说阅读站</p>
+      <p className="hint center">{t("auth.tagline")}</p>
     </div>
   );
 }
 
 export function LoginPage() {
-  const { health } = useAuth();
-  if (health?.auth_enabled === false) return <AuthForm mode="login" />;
   return <AuthForm mode="login" />;
 }
 
 export function RegisterPage() {
-  const { health } = useAuth();
-  if (health?.auth_enabled === false) return <AuthForm mode="register" />;
   return <AuthForm mode="register" />;
 }
