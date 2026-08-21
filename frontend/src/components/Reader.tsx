@@ -165,7 +165,8 @@ export function Reader({
 
 /// Recursive renderer for the hierarchical TOC.
 /// Group nodes (`idx == null`) are collapsible; leaf nodes jump to their
-/// chapter. Top-level groups start expanded.
+/// chapter. All groups start expanded so the full hierarchy is visible
+/// (click a group to collapse it).
 function TocTree({
   nodes,
   current,
@@ -204,7 +205,7 @@ function TocTree({
         }
         return (
           <li key={key} className={depth > 0 ? "toc-nested" : undefined}>
-            <details open={depth === 0}>
+            <details open>
               <summary>
                 {n.idx !== null ? (
                   <button

@@ -327,7 +327,23 @@ fn collect_nav_branches(root: scraper::ElementRef<'_>, base: &Path) -> Vec<TocBr
         .flat_map(|ol| ol.child_elements())
         .filter(|e| e.value().name() == "li")
     {
-        let (title, path) = match li.select(&a_sel).next() {
+        // The entry's own link is the first `a[href]` before the nested
+        // list: a direct-child `a`, or one inside a non-`ol` wrapper.
+        // (Searching all descendants would grab the first *child* entry's
+        // link for href-less group `<li>`s.)
+        let own_link = li
+            .child_elements()
+            .take_while(|e| e.value().name() != "ol")
+            .find_map(|e| {
+                if e.value().name() == "a" {
+                    Some(e)
+                } else {
+                    // `select` excludes the element itself; a link inside
+                    // a non-list wrapper is still this entry's own link.
+                    e.select(&a_sel).next()
+                }
+            });
+        let (title, path) = match own_link {
             Some(a) => {
                 let t: String = a.text().collect::<String>().trim().to_string();
                 let href = a.value().attr("href").unwrap_or("");
@@ -338,8 +354,22 @@ fn collect_nav_branches(root: scraper::ElementRef<'_>, base: &Path) -> Vec<TocBr
                 }
             }
             None => {
-                let t: String = li.text().collect::<String>().trim().to_string();
-                (t, None)
+                // No link: a group entry. Take the li's own text but
+                // exclude the nested list, so the group title is not the
+                // concatenation of all its descendant entries.
+                let mut txt = String::new();
+                for child in li.children() {
+                    match child.value() {
+                        Node::Text(x) => txt.push_str(&x.text),
+                        Node::Element(e) if e.name() != "ol" => {
+                            if let Some(c) = ElementRef::wrap(child) {
+                                txt.push_str(&c.text().collect::<String>());
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                (txt.trim().to_string(), None)
             }
         };
         if title.is_empty() && path.is_none() {
@@ -397,11 +427,22 @@ fn collect_ncx_branches(parent: &scraper::ElementRef<'_>, base: &Path) -> Vec<To
             .next()
             .map(|t| t.text().collect::<String>().trim().to_string())
             .unwrap_or_default();
+        // The entry's own `<content>` is the first one before any nested
+        // `navPoint`: html5ever (HTML mode) hoists nested navPoints into
+        // the previous `<content/>`, so a descendant search would make
+        // group navPoints steal their first child's target.
         let href = np
-            .select(&content_sel)
-            .next()
-            .and_then(|c| c.value().attr("src"))
-            .map(|s| s.to_string());
+            .child_elements()
+            .take_while(|e| e.value().name() != "navpoint")
+            .find_map(|e| {
+                if e.value().name() == "content" {
+                    e.value().attr("src").map(|s| s.to_string())
+                } else {
+                    e.select(&content_sel)
+                        .next()
+                        .and_then(|c| c.value().attr("src").map(|s| s.to_string()))
+                }
+            });
         let path = href.filter(|h| !h.starts_with('#')).map(|h| base.join(h));
         let children = collect_ncx_branches(&np, base);
         ordered.push((
@@ -491,8 +532,23 @@ fn remap_branches(
         });
         match this_idx {
             None => {
-                // Group entry (or its doc was dropped): keep children.
-                out.extend(remap_branches(&b.children, spine_pos, kept, parent_idx));
+                if b.path.is_none() {
+                    // A true group entry (no target of its own): keep it
+                    // as a structure node when it still has children.
+                    let children = remap_branches(&b.children, spine_pos, kept, parent_idx);
+                    if !children.is_empty() {
+                        out.push(TocNode {
+                            title: b.title.clone(),
+                            idx: None,
+                            children,
+                        });
+                    }
+                } else {
+                    // Its document was filtered out (front matter,
+                    // image-only pages, …): splice the entry away, its
+                    // children lift up one level.
+                    out.extend(remap_branches(&b.children, spine_pos, kept, parent_idx));
+                }
             }
             Some(i) => {
                 if parent_idx == Some(i) {
@@ -697,11 +753,28 @@ mod tests {
         0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
     ];
 
+    /// A TOC entry fixture: `label`, the spine file it links to
+    /// ("" = pure group without a link), and its nested entries
+    /// (arbitrary depth).
+    struct TocFixture {
+        label: String,
+        file: String,
+        children: Vec<TocFixture>,
+    }
+
+    /// Shorthand for building [`TocFixture`] trees.
+    fn e(label: &str, file: &str, children: Vec<TocFixture>) -> TocFixture {
+        TocFixture {
+            label: label.into(),
+            file: file.into(),
+            children,
+        }
+    }
+
     struct Fixture {
         version: &'static str,
         spine: Vec<(String, bool)>, // (file name, linear)
-        /// (label, file name, children) — children are nested TOC entries.
-        toc: Vec<(String, String, Vec<(String, String)>)>,
+        toc: Vec<TocFixture>,
     }
 
     /// Minimal but spec-shaped EPUB: container.xml + OPF + (NCX or nav) +
@@ -781,19 +854,23 @@ mod tests {
             );
 
             if fx.version == "3.0" {
-                let mut nav_items = String::new();
-                for (label, file, children) in &fx.toc {
-                    nav_items.push_str(&format!(r#"<li><a href="{file}">{label}</a>"#));
-                    if !children.is_empty() {
-                        nav_items.push_str("<ol>");
-                        for (clabel, cfile) in children {
-                            nav_items
-                                .push_str(&format!(r#"<li><a href="{cfile}">{clabel}</a></li>"#));
-                        }
-                        nav_items.push_str("</ol>");
-                    }
-                    nav_items.push_str("</li>");
+                fn nav_li(entry: &TocFixture) -> String {
+                    let head = if entry.file.is_empty() {
+                        format!("<span>{}</span>", entry.label)
+                    } else {
+                        format!(r#"<a href="{}">{}</a>"#, entry.file, entry.label)
+                    };
+                    let inner = if entry.children.is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            "<ol>{}</ol>",
+                            entry.children.iter().map(nav_li).collect::<String>()
+                        )
+                    };
+                    format!("<li>{head}{inner}</li>")
                 }
+                let nav_items = fx.toc.iter().map(nav_li).collect::<String>();
                 add(
                     &mut w,
                     "OEBPS/nav.xhtml",
@@ -806,21 +883,26 @@ mod tests {
                     ),
                 );
             } else {
-                let mut nav_points = String::new();
-                let mut order = 0usize;
-                for (label, file, children) in &fx.toc {
-                    nav_points.push_str(&format!(
-                        r#"<navPoint id="np{order}" playOrder="{order}"><navLabel><text>{label}</text></navLabel><content src="{file}"/>"#
-                    ));
-                    order += 1;
-                    for (clabel, cfile) in children {
-                        nav_points.push_str(&format!(
-                            r#"<navPoint id="np{order}" playOrder="{order}"><navLabel><text>{clabel}</text></navLabel><content src="{cfile}"/></navPoint>"#
+                fn ncx_points(entries: &[TocFixture], order: &mut usize) -> String {
+                    let mut out = String::new();
+                    for entry in entries {
+                        let id = *order;
+                        *order += 1;
+                        let content = if entry.file.is_empty() {
+                            String::new()
+                        } else {
+                            format!(r#"<content src="{}"/>"#, entry.file)
+                        };
+                        out.push_str(&format!(
+                            r#"<navPoint id="np{id}" playOrder="{id}"><navLabel><text>{}</text></navLabel>{content}{}</navPoint>"#,
+                            entry.label,
+                            ncx_points(&entry.children, order)
                         ));
-                        order += 1;
                     }
-                    nav_points.push_str("</navPoint>");
+                    out
                 }
+                let mut order = 0usize;
+                let nav_points = ncx_points(&fx.toc, &mut order);
                 add(
                     &mut w,
                     "OEBPS/toc.ncx",
@@ -878,11 +960,11 @@ mod tests {
                 ("ch2b.xhtml".into(), true),
             ],
             toc: vec![
-                ("第一章 起点".into(), "ch1.xhtml".into(), vec![]),
-                (
-                    "第二章 风起".into(),
-                    "ch2.xhtml".into(),
-                    vec![("第二章之二".into(), "ch2b.xhtml".into())],
+                e("第一章 起点", "ch1.xhtml", vec![]),
+                e(
+                    "第二章 风起",
+                    "ch2.xhtml",
+                    vec![e("第二章之二", "ch2b.xhtml", vec![])],
                 ),
             ],
         });
@@ -956,13 +1038,9 @@ mod tests {
                 ("ch2b.xhtml".into(), true),
             ],
             toc: vec![
-                ("插图".into(), "pic.xhtml".into(), vec![]),
-                ("序章".into(), "ch1.xhtml".into(), vec![]),
-                (
-                    "第二卷".into(),
-                    "ch2.xhtml".into(),
-                    vec![("终章".into(), "ch2b.xhtml".into())],
-                ),
+                e("插图", "pic.xhtml", vec![]),
+                e("序章", "ch1.xhtml", vec![]),
+                e("第二卷", "ch2.xhtml", vec![e("终章", "ch2b.xhtml", vec![])]),
             ],
         });
         let book = parse(&bytes).unwrap();
@@ -982,6 +1060,111 @@ mod tests {
         assert_eq!(book.toc[1].children[0].idx, Some(2));
         assert!(book.chapters[0].content.contains("<h1>正文标题 1</h1>"));
         assert!(book.chapters[0].content.contains("data:image/png;base64,"));
+    }
+
+    /// Deep fixture: 卷 spans (href-less groups) at every level above the
+    /// chapters — the typical Chinese light-novel TOC shape.
+    fn deep_fixture(version: &'static str) -> Fixture {
+        Fixture {
+            version,
+            spine: vec![
+                ("h1.xhtml".into(), true),
+                ("c1.xhtml".into(), true),
+                ("c2.xhtml".into(), true),
+                ("h2.xhtml".into(), true),
+                ("c3.xhtml".into(), true),
+                ("h3.xhtml".into(), true),
+                ("c4.xhtml".into(), true),
+            ],
+            toc: vec![
+                e(
+                    "第一卷",
+                    "",
+                    vec![
+                        e(
+                            "第一话",
+                            "h1.xhtml",
+                            vec![
+                                e("第一章", "c1.xhtml", vec![]),
+                                e("第二章", "c2.xhtml", vec![]),
+                            ],
+                        ),
+                        e("第二话", "h2.xhtml", vec![e("第三章", "c3.xhtml", vec![])]),
+                    ],
+                ),
+                e(
+                    "第二卷",
+                    "",
+                    vec![e(
+                        "第一话",
+                        "h3.xhtml",
+                        vec![e("第四章", "c4.xhtml", vec![])],
+                    )],
+                ),
+            ],
+        }
+    }
+
+    #[test]
+    fn parses_three_level_nav_toc_epub3() {
+        let book = parse(&build_epub(&deep_fixture("3.0"))).unwrap();
+        assert_eq!(book.chapters.len(), 7);
+        // 卷 → 话 → 章: every level survives, href-less groups included.
+        assert_eq!(book.toc.len(), 2);
+        let vol1 = &book.toc[0];
+        assert_eq!(vol1.title, "第一卷");
+        assert_eq!(vol1.idx, None);
+        assert_eq!(vol1.children.len(), 2);
+        let hua1 = &vol1.children[0];
+        assert_eq!(hua1.title, "第一话");
+        assert_eq!(hua1.idx, Some(0));
+        assert_eq!(
+            hua1.children
+                .iter()
+                .map(|c| c.title.as_str())
+                .collect::<Vec<_>>(),
+            vec!["第一章", "第二章"]
+        );
+        assert_eq!(hua1.children[0].idx, Some(1));
+        assert_eq!(hua1.children[1].idx, Some(2));
+        let hua2 = &vol1.children[1];
+        assert_eq!(hua2.title, "第二话");
+        assert_eq!(hua2.children[0].idx, Some(4)); // 第三章
+        let vol2 = &book.toc[1];
+        assert_eq!(vol2.title, "第二卷");
+        assert_eq!(vol2.idx, None);
+        assert_eq!(vol2.children[0].title, "第一话");
+        assert_eq!(vol2.children[0].children[0].idx, Some(6)); // 第四章
+                                                               // Group titles must not concatenate their children's titles.
+        assert_eq!(vol1.title, "第一卷");
+        assert_eq!(vol1.children[1].title, "第二话");
+    }
+
+    #[test]
+    fn parses_three_level_ncx_toc_epub2() {
+        let book = parse(&build_epub(&deep_fixture("2.0"))).unwrap();
+        assert_eq!(book.chapters.len(), 7);
+        assert_eq!(book.toc.len(), 2);
+        let vol1 = &book.toc[0];
+        assert_eq!(vol1.title, "第一卷");
+        assert_eq!(vol1.idx, None);
+        assert_eq!(vol1.children.len(), 2);
+        assert_eq!(vol1.children[0].title, "第一话");
+        assert_eq!(vol1.children[0].idx, Some(0));
+        assert_eq!(
+            vol1.children[0]
+                .children
+                .iter()
+                .map(|c| (c.title.as_str(), c.idx))
+                .collect::<Vec<_>>(),
+            vec![("第一章", Some(1)), ("第二章", Some(2))]
+        );
+        assert_eq!(vol1.children[1].children[0].idx, Some(4));
+        let vol2 = &book.toc[1];
+        assert_eq!(vol2.title, "第二卷");
+        assert_eq!(vol2.children[0].children[0].idx, Some(6));
+        assert_eq!(vol1.title, "第一卷");
+        assert_eq!(vol1.children[1].title, "第二话");
     }
 
     #[test]
