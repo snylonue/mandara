@@ -4,8 +4,8 @@ mod auth;
 mod config;
 mod db;
 mod error;
-mod rows;
 mod routes;
+mod rows;
 mod service;
 mod state;
 
@@ -26,7 +26,8 @@ async fn main() -> anyhow::Result<()> {
 
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,bookshelf=debug")),
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new("info,bookshelf=debug")),
         )
         .init();
 
@@ -41,7 +42,8 @@ async fn main() -> anyhow::Result<()> {
     let data_dir = cfg.data_dir();
     tokio::fs::create_dir_all(&data_dir).await?;
     if !cfg.plugins_dir.exists() {
-        tokio::fs::create_dir_all(&cfg.plugins_dir).await
+        tokio::fs::create_dir_all(&cfg.plugins_dir)
+            .await
             .with_context(|| format!("create plugins dir {}", cfg.plugins_dir.display()))?;
     }
 

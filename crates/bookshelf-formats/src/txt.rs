@@ -10,7 +10,18 @@ use crate::{ParsedBook, ParsedChapter};
 
 const HEADING_SUFFIXES: [char; 7] = ['章', '节', '回', '卷', '部', '篇', '集'];
 const EXACT_HEADINGS: [&str; 12] = [
-    "序章", "序言", "楔子", "前言", "尾声", "终章", "后记", "番外", "间章", "幕间", "人物介绍", "出场人物",
+    "序章",
+    "序言",
+    "楔子",
+    "前言",
+    "尾声",
+    "终章",
+    "后记",
+    "番外",
+    "间章",
+    "幕间",
+    "人物介绍",
+    "出场人物",
 ];
 
 /// Parse txt bytes into a normalized book.
@@ -125,7 +136,8 @@ fn is_heading(line: &str) -> bool {
     if line.starts_with('第') && line.len() > 3 {
         let rest = &line[3..];
         let han = [
-            '零', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十', '百', '千', '万', '两',
+            '零', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十', '百', '千', '万',
+            '两',
         ];
         let mut idx = 0;
         for ch in rest.chars() {
@@ -208,9 +220,7 @@ mod tests {
     #[test]
     fn decodes_gb18030() {
         // GB18030 bytes for "你好，世界"
-        let bytes = [
-            0xc4, 0xe3, 0xba, 0xc3, 0xa3, 0xac, 0xca, 0xc0, 0xbd, 0xe7,
-        ];
+        let bytes = [0xc4, 0xe3, 0xba, 0xc3, 0xa3, 0xac, 0xca, 0xc0, 0xbd, 0xe7];
         let decoded = decode(&bytes).unwrap();
         assert_eq!(decoded, "你好，世界");
     }

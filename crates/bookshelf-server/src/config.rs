@@ -29,7 +29,11 @@ pub struct Config {
     pub plugins_dir: PathBuf,
 
     /// JWT signing secret. Set a long random value in production.
-    #[arg(long, env = "BOOKSHELF_JWT_SECRET", default_value = "dev-only-change-me")]
+    #[arg(
+        long,
+        env = "BOOKSHELF_JWT_SECRET",
+        default_value = "dev-only-change-me"
+    )]
     pub jwt_secret: String,
 
     /// Enable authentication and permissions. When disabled the server runs

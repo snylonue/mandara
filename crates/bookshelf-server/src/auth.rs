@@ -74,7 +74,11 @@ impl AuthService {
     pub fn verify_password(&self, password: &str, hash: &str) -> bool {
         PasswordHash::new(hash)
             .ok()
-            .map(|parsed| Argon2::default().verify_password(password.as_bytes(), &parsed).is_ok())
+            .map(|parsed| {
+                Argon2::default()
+                    .verify_password(password.as_bytes(), &parsed)
+                    .is_ok()
+            })
             .unwrap_or(false)
     }
 
@@ -116,8 +120,7 @@ impl AuthService {
                 .bind(&data.claims.sub)
                 .fetch_optional(pool)
                 .await?;
-        row.map(UserRow::into_model)
-            .ok_or(ApiError::Unauthorized)?
+        row.map(UserRow::into_model).ok_or(ApiError::Unauthorized)?
     }
 
     pub fn require_admin(user: &User) -> Result<(), ApiError> {

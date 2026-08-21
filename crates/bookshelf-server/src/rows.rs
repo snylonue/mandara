@@ -4,8 +4,8 @@ use anyhow::anyhow;
 use sqlx::FromRow;
 
 use bookshelf_core::model::{
-    BookMeta, Chapter, ChapterFormat, ChapterMeta, FileMeta, Position, ReadingSession, Role,
-    Share, ShareKind, User, Visibility,
+    BookMeta, Chapter, ChapterFormat, ChapterMeta, FileMeta, Position, ReadingSession, Role, Share,
+    ShareKind, User, Visibility,
 };
 
 use crate::error::ApiError;

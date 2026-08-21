@@ -36,17 +36,21 @@ pub async fn register(
     }
     let username = validate_username(&req.username)?;
     if req.password.chars().count() < 8 {
-        return Err(ApiError::bad_request("password must be at least 8 characters"));
+        return Err(ApiError::bad_request(
+            "password must be at least 8 characters",
+        ));
     }
     let id = uuid::Uuid::new_v4().simple().to_string();
     let hash = st.auth.hash_password(&req.password)?;
 
-    let result = sqlx::query("INSERT INTO users (id, username, password_hash, role) VALUES (?, ?, ?, 'user')")
-        .bind(&id)
-        .bind(&username)
-        .bind(&hash)
-        .execute(&st.db)
-        .await;
+    let result = sqlx::query(
+        "INSERT INTO users (id, username, password_hash, role) VALUES (?, ?, ?, 'user')",
+    )
+    .bind(&id)
+    .bind(&username)
+    .bind(&hash)
+    .execute(&st.db)
+    .await;
     if let Err(sqlx::Error::Database(e)) = &result {
         if e.is_unique_violation() {
             return Err(ApiError::Conflict("username already taken".into()));
@@ -94,10 +98,7 @@ pub async fn login(
     Ok(Json(AuthResponse { token, user }))
 }
 
-pub async fn me(
-    State(st): State<St>,
-    headers: HeaderMap,
-) -> Result<impl IntoResponse, ApiError> {
+pub async fn me(State(st): State<St>, headers: HeaderMap) -> Result<impl IntoResponse, ApiError> {
     let user = current_user(&st, &headers).await?;
     Ok(Json(user))
 }

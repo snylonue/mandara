@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 use bookshelf_core::model::{ChapterMeta, Position, Share, ShareKind, TocNode, User, Visibility};
 
 use crate::error::ApiError;
-use crate::rows::ShareRow;
 use crate::routes::{can_manage_file, current_user, load_visible_file, St};
+use crate::rows::ShareRow;
 
 fn now() -> String {
     Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
@@ -87,8 +87,7 @@ pub async fn create_share(
     let file = load_visible_file(&st, &user, &file_id).await?;
     // Private files are shareable by their owner (or admins) only; public
     // files (e.g. plugin catalogs) may be shared by any viewer.
-    let shareable_by_viewer =
-        file.visibility == Visibility::Public && file.owner_id.is_none();
+    let shareable_by_viewer = file.visibility == Visibility::Public && file.owner_id.is_none();
     if !can_manage_file(&user, &file) && !shareable_by_viewer {
         return Err(ApiError::Forbidden);
     }
@@ -131,7 +130,8 @@ pub async fn create_share(
 
     let token = uuid::Uuid::new_v4().simple().to_string();
     let expires_at = req.expires_days.map(|days| {
-        (Utc::now() + Duration::days(days as i64)).to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+        (Utc::now() + Duration::days(days as i64))
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
     });
 
     sqlx::query(
@@ -158,9 +158,10 @@ pub async fn create_share(
     .bind(&token)
     .fetch_one(&st.db)
     .await?;
-    Ok((StatusCode::CREATED, Json(ShareResponse::from_share(
-        row.into_model()?,
-    ))))
+    Ok((
+        StatusCode::CREATED,
+        Json(ShareResponse::from_share(row.into_model()?)),
+    ))
 }
 
 // Public share views (no auth) ------------------------------------------------

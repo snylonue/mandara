@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 use bookshelf_core::model::{Position, ReadingSession};
 
 use crate::error::ApiError;
-use crate::rows::SessionRow;
 use crate::routes::{current_user, load_visible_file, St};
+use crate::rows::SessionRow;
 
 #[derive(Serialize)]
 pub struct SessionsResponse {

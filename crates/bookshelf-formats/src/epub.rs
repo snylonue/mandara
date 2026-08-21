@@ -26,8 +26,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use base64::Engine;
 use bookshelf_core::error::{Error, Result};
 use bookshelf_core::model::{ChapterFormat, TocNode};
-use epub::doc::{EpubDoc, NavPoint};
 use ego_tree::NodeRef;
+use epub::doc::{EpubDoc, NavPoint};
 use scraper::node::Node;
 use scraper::{ElementRef, Html, Selector};
 
@@ -40,21 +40,61 @@ const NCX_MIME: &str = "application/x-dtbncx+xml";
 
 /// Tags that are dropped **with their whole subtree**.
 const DROP_TAGS: [&str; 25] = [
-    "script", "style", "link", "meta", "base", "noscript", "title", "head",
-    "iframe", "object", "embed", "form", "input", "button", "select", "textarea",
-    "audio", "video", "source", "track", "svg", "canvas", "template", "math", "map",
+    "script", "style", "link", "meta", "base", "noscript", "title", "head", "iframe", "object",
+    "embed", "form", "input", "button", "select", "textarea", "audio", "video", "source", "track",
+    "svg", "canvas", "template", "math", "map",
 ];
 
 /// Tags kept in chapter content, per the safe subset of HTML usable in the
 /// reading UI. Ruby and friends are kept because CJK epubs rely on them.
 const ALLOWED_TAGS: [&str; 47] = [
-    "p", "div", "span", "br", "hr",
-    "h1", "h2", "h3", "h4", "h5", "h6",
-    "em", "strong", "i", "b", "u", "s", "small", "sub", "sup", "mark",
-    "blockquote", "pre", "code",
-    "ul", "ol", "li", "dl", "dt", "dd",
-    "table", "thead", "tbody", "tfoot", "tr", "th", "td",
-    "img", "a", "figure", "figcaption", "ruby", "rb", "rt", "rp", "q", "cite",
+    "p",
+    "div",
+    "span",
+    "br",
+    "hr",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "em",
+    "strong",
+    "i",
+    "b",
+    "u",
+    "s",
+    "small",
+    "sub",
+    "sup",
+    "mark",
+    "blockquote",
+    "pre",
+    "code",
+    "ul",
+    "ol",
+    "li",
+    "dl",
+    "dt",
+    "dd",
+    "table",
+    "thead",
+    "tbody",
+    "tfoot",
+    "tr",
+    "th",
+    "td",
+    "img",
+    "a",
+    "figure",
+    "figcaption",
+    "ruby",
+    "rb",
+    "rt",
+    "rp",
+    "q",
+    "cite",
 ];
 
 /// Elements serialized without a closing tag.
@@ -113,10 +153,8 @@ fn parse_path(path: &Path) -> Result<ParsedBook> {
     let branches = extract_toc_tree(&mut doc);
     let mut flat = Vec::new();
     flatten_branches(&branches, &mut flat);
-    let title_by_path: HashMap<String, String> = flat
-        .into_iter()
-        .map(|(p, l)| (path_key(&p), l))
-        .collect();
+    let title_by_path: HashMap<String, String> =
+        flat.into_iter().map(|(p, l)| (path_key(&p), l)).collect();
 
     // Spine order is the reading order; `linear="no"` items (cover, nav,
     // acknowledgements, …) are auxiliary and must not become chapters.
@@ -265,7 +303,10 @@ fn parse_nav_branches(html: &str, nav_path: &Path) -> Vec<TocBranch> {
     let nav = frag
         .select(&Selector::parse(r#"nav[epub\:type=toc]"#).expect("static selector"))
         .next()
-        .or_else(|| frag.select(&Selector::parse("nav").expect("static selector")).next());
+        .or_else(|| {
+            frag.select(&Selector::parse("nav").expect("static selector"))
+                .next()
+        });
     let Some(nav) = nav else {
         return Vec::new();
     };
@@ -361,9 +402,7 @@ fn collect_ncx_branches(parent: &scraper::ElementRef<'_>, base: &Path) -> Vec<To
             .next()
             .and_then(|c| c.value().attr("src"))
             .map(|s| s.to_string());
-        let path = href
-            .filter(|h| !h.starts_with('#'))
-            .map(|h| base.join(h));
+        let path = href.filter(|h| !h.starts_with('#')).map(|h| base.join(h));
         let children = collect_ncx_branches(&np, base);
         ordered.push((
             order,
@@ -596,7 +635,9 @@ fn inline_image<R: Read + Seek>(doc: &mut EpubDoc<R>, base: &Path, src: &str) ->
 /// http(s)/mailto links (opened by the reader in a new tab).
 fn keep_link(href: &str) -> bool {
     let h = href.trim();
-    h.starts_with('#') || h.starts_with("http://") || h.starts_with("https://")
+    h.starts_with('#')
+        || h.starts_with("http://")
+        || h.starts_with("https://")
         || h.starts_with("mailto:")
 }
 
@@ -669,8 +710,8 @@ mod tests {
         let mut buf = Vec::new();
         {
             let mut w = ZipWriter::new(std::io::Cursor::new(&mut buf));
-            let opts = SimpleFileOptions::default()
-                .compression_method(zip::CompressionMethod::Stored);
+            let opts =
+                SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
             let add = |w: &mut ZipWriter<_>, path: &str, data: &str| {
                 w.start_file(path, opts).unwrap();
                 w.write_all(data.as_bytes()).unwrap();
@@ -701,7 +742,11 @@ mod tests {
                     if *linear { "" } else { r#" linear="no""# }
                 ));
             }
-            let toc_file = if fx.version == "3.0" { "nav.xhtml" } else { "toc.ncx" };
+            let toc_file = if fx.version == "3.0" {
+                "nav.xhtml"
+            } else {
+                "toc.ncx"
+            };
             if fx.version == "3.0" {
                 manifest.push_str(&format!(
                     r#"<item id="nav" href="{toc_file}" media-type="application/xhtml+xml" properties="nav"/>"#
@@ -742,7 +787,8 @@ mod tests {
                     if !children.is_empty() {
                         nav_items.push_str("<ol>");
                         for (clabel, cfile) in children {
-                            nav_items.push_str(&format!(r#"<li><a href="{cfile}">{clabel}</a></li>"#));
+                            nav_items
+                                .push_str(&format!(r#"<li><a href="{cfile}">{clabel}</a></li>"#));
                         }
                         nav_items.push_str("</ol>");
                     }
@@ -841,7 +887,21 @@ mod tests {
             ],
         });
         let book = parse(&bytes).unwrap();
-        eprintln!("DBG toc={:?}", book.toc.iter().map(|n| (n.title.clone(), n.idx, n.children.len(), n.children.iter().map(|c| c.title.clone()).collect::<Vec<_>>())).collect::<Vec<_>>());
+        eprintln!(
+            "DBG toc={:?}",
+            book.toc
+                .iter()
+                .map(|n| (
+                    n.title.clone(),
+                    n.idx,
+                    n.children.len(),
+                    n.children
+                        .iter()
+                        .map(|c| c.title.clone())
+                        .collect::<Vec<_>>()
+                ))
+                .collect::<Vec<_>>()
+        );
 
         // Cover (linear="no") and unlinked front matter must not become
         // chapters; spine order kept.
@@ -879,7 +939,9 @@ mod tests {
         // Links: in-page anchor and http survive; cross-chapter href is
         // dropped (the reader renders one chapter at a time).
         assert!(c0.content.contains(r##"<a href="#sec1">"##));
-        assert!(c0.content.contains(r#"<a href="https://example.com">外部</a>"#));
+        assert!(c0
+            .content
+            .contains(r#"<a href="https://example.com">外部</a>"#));
         assert!(c0.content.contains("<a>跨章链接</a>"));
     }
 
