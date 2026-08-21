@@ -38,6 +38,16 @@ metadata sources.
    [Progress Log](#progress-log) current.
 10. Docs and code comments are written in English; UI strings and book
     example content stay Chinese (zh-CN is the product language).
+11. **One feature = one commit.** Commits land as soon as a feature is
+    finished; never bundle multiple features into a single commit.
+12. **Frontend/backend contract via API docs.** The OpenAPI description in
+    `docs/api/openapi.yaml` is the single source of truth for the HTTP API.
+    The frontend generates its request/response types from it
+    (`openapi-typescript`, see `frontend/package.json`); components must not
+    depend on backend implementation details beyond that contract.
+13. Frontend UI is **i18n-ready**: all UI strings live in
+    `frontend/src/i18n/locales/zh-CN.json` (i18next). Only zh-CN is shipped
+    for now; adding a locale = adding a JSON file.
 
 ## Tech Stack & Decisions
 
@@ -115,6 +125,11 @@ scripts/build-plugin-hello.sh      # build example plugin → plugins-built/
       (session snapshot banner + read-only reader), login/register, local-mode
       banner. `tsc` + `vite build` green.
 - [x] Server serves `frontend/dist` at `/` with SPA fallback when present.
+- [x] API contract: `docs/api/openapi.yaml` covers the whole HTTP API;
+      frontend generates typed schemas from it (`npm run api-types` →
+      `src/api/schema.d.ts`) instead of hand-mirroring backend types.
+- [x] Frontend i18n: i18next + react-i18next wired in; all UI strings
+      extracted to `src/i18n/locales/zh-CN.json`; only zh-CN shipped.
 - [x] End-to-end smoke test (curl): register → plugin book visible →
       chapter content → session create/update → book share (anonymous) →
       session share → txt upload → all HTTP 200/201.
@@ -137,6 +152,7 @@ scripts/build-plugin-hello.sh      # build example plugin → plugins-built/
 |---|---|
 | 2026-08-21 | Initial project setup: requirements, tech choices, workspace, backend (core/formats/plugin/server), example wasm plugin, React frontend, migrations, docs; all compile/test/e2e verified. |
 | 2026-08-21 | Rework #2 per owner feedback: (a) git history cleaned (`.direnv` removed, now gitignored); (b) all docs/comments converted to English (UI strings stay zh-CN); (c) permission model reworked: per-file public/private chosen by uploader, metadata (`books`) decoupled from files (`book_files`) so one metadata entry holds multiple files; chapters/sessions/shares now attach to files; API moved to `/api/files/*`, `POST /api/books/{id}/files` for extra editions; frontend updated (file-based library cards, visibility toggle, attach-upload, reader per file). E2E re-verified including visibility semantics (403 on hidden files for other users). |
+| 2026-08-21 | New working agreements recorded (req. 11–13) in AGENTS.md: one feature = one commit; API contract via `docs/api/openapi.yaml` (frontend types generated with openapi-typescript); frontend i18n via i18next (zh-CN only for now). |
 
 ## Conventions
 
