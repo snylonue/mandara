@@ -17,14 +17,17 @@ const fmtTime = (s: string) => new Date(s).toLocaleString("zh-CN", { hour12: fal
 const fmtPercent = (s: ReadingSession) => `${Math.round(s.position.fraction * 100)}%`;
 
 /// One file row: actions per file (read, visibility toggle, share, delete)
-/// plus its sessions.
+/// plus its sessions. Manage actions (visibility/share/delete) only show
+/// for the file's owner or an admin — other users' uploads are read-only.
 function FileSection({
   file,
+  canManage,
   onChanged,
   onShare,
   setError,
 }: {
   file: FileMeta;
+  canManage: boolean;
   onChanged: () => Promise<void>;
   onShare: (fileId: string, kind: "book" | "session", sessionId?: string) => Promise<void>;
   setError: (msg: string | null) => void;
@@ -89,7 +92,7 @@ function FileSection({
               {t("book.read")}
             </Link>
           )}
-          {file.source === "local" && (
+          {file.source === "local" && canManage && (
             <>
               <button className="link-btn" onClick={() => void toggleVisibility()}>
                 {file.visibility === "public" ? t("book.setPrivate") : t("book.setPublic")}
@@ -104,6 +107,9 @@ function FileSection({
                 {t("book.delete")}
               </button>
             </>
+          )}
+          {file.source === "local" && !canManage && (
+            <span className="hint">{t("book.othersUpload")}</span>
           )}
         </div>
       </div>
@@ -326,6 +332,7 @@ export function BookDetailPage() {
           <FileSection
             key={f.id}
             file={f}
+            canManage={user !== null && (user.role === "admin" || f.owner_id === user.id)}
             onChanged={load}
             onShare={makeShare}
             setError={setError}

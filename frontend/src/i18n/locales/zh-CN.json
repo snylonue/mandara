@@ -91,6 +91,7 @@
     "confirmDeleteFile": "删除文件「{{label}}」？该文件的所有章节与会话将被删除。",
     "deleteFailed": "删除失败",
     "opFailed": "操作失败",
+    "othersUpload": "他人上传 · 仅可阅读",
     "refreshFromSource": "从插件源更新元数据",
     "refreshed": "元数据已从插件源更新。",
     "deleteMetadata": "删除元数据",
