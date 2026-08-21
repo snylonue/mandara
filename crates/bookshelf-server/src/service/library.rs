@@ -722,6 +722,7 @@ impl Library {
             .map(|r| TocNode {
                 title: r.title,
                 idx: Some(r.idx.max(0) as u32),
+                frag: None,
                 children: Vec::new(),
             })
             .collect())

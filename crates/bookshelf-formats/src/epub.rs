@@ -229,6 +229,7 @@ fn parse_path(path: &Path) -> Result<ParsedBook> {
             .map(|(i, c)| TocNode {
                 title: c.title.clone(),
                 idx: Some(i as u32),
+                frag: None,
                 children: Vec::new(),
             })
             .collect();
@@ -513,8 +514,12 @@ fn path_key(p: &Path) -> String {
 /// Map the parsed branch tree onto the final chapter list.
 ///
 /// - a branch whose document became a chapter keeps its title and gets the
-///   chapter's index; fragment entries pointing into the same document as
-///   an ancestor are dropped (our reader navigates per chapter);
+///   chapter's index;
+/// - fragment entries (`file.html#section`) resolve to their containing
+///   file's chapter and stay in the tree with the fragment attached, so
+///   calibre-style per-section navPoints survive as structure (the reader
+///   jumps into the section); exact duplicates of an ancestor entry's
+///   target are dropped;
 /// - branches without a chapter of their own (no target at all, or their
 ///   document was not kept — auxiliary `linear="no"` part pages, pages
 ///   absent from the spine, image-only leaves) stay as pure structure
@@ -524,35 +529,46 @@ fn remap_branches(
     branches: &[TocBranch],
     spine_pos: &HashMap<String, usize>,
     kept: &[usize],
-    parent_idx: Option<u32>,
+    parent_key: Option<&str>,
 ) -> Vec<TocNode> {
     let mut out = Vec::new();
     for b in branches {
-        let this_idx: Option<u32> = b.path.as_ref().and_then(|p| {
-            let pos = spine_pos.get(&path_key(p))?;
+        let key = b.path.as_deref().map(path_key);
+        let base_key = key.as_deref().and_then(|k| k.split('#').next());
+        let this_idx: Option<u32> = base_key.and_then(|k| {
+            let pos = spine_pos.get(k)?;
             kept.binary_search(pos).ok().map(|i| i as u32)
         });
         match this_idx {
             None => {
                 // The branch has no chapter of its own: keep it as a
                 // structure node when it still has children.
-                let children = remap_branches(&b.children, spine_pos, kept, parent_idx);
+                let children = remap_branches(&b.children, spine_pos, kept, parent_key);
                 if !children.is_empty() {
                     out.push(TocNode {
                         title: b.title.clone(),
                         idx: None,
+                        frag: None,
                         children,
                     });
                 }
             }
             Some(i) => {
-                if parent_idx == Some(i) {
-                    continue; // same-document fragment: already reachable
+                // Exact duplicate of an ancestor entry (same target):
+                // already reachable, drop it.
+                if key.as_deref() == parent_key {
+                    continue;
                 }
-                let children = remap_branches(&b.children, spine_pos, kept, Some(i));
+                let frag = key
+                    .as_deref()
+                    .and_then(|k| k.split('#').nth(1))
+                    .filter(|f| !f.is_empty())
+                    .map(Into::into);
+                let children = remap_branches(&b.children, spine_pos, kept, key.as_deref());
                 out.push(TocNode {
                     title: b.title.clone(),
                     idx: Some(i),
+                    frag,
                     children,
                 });
             }
@@ -1222,6 +1238,66 @@ mod tests {
         assert_eq!(part2.idx, None);
         assert_eq!(part2.children[0].title, "韦伯与中国的现代性");
         assert_eq!(part2.children[0].idx, Some(2));
+    }
+
+    #[test]
+    fn keeps_fragment_sections() {
+        // Calibre-style epub: one real file per chapter plus fragment
+        // navPoints for the sections inside it (汪晖 epub: 61 of its 84
+        // navPoints are `file.html#section` entries, up to 4 levels deep).
+        for version in ["2.0", "3.0"] {
+            let bytes = build_epub(&Fixture {
+                version,
+                spine: vec![
+                    ("e1.xhtml".into(), true),
+                    ("e2.xhtml".into(), true),
+                    ("e3.xhtml".into(), true),
+                ],
+                toc: vec![
+                    e("序章", "e1.xhtml", vec![]),
+                    e(
+                        "去政治化的政治",
+                        "e2.xhtml",
+                        vec![
+                            e("一、中国与60年代的终结", "e2.xhtml#sec1", vec![]),
+                            e(
+                                "二、去政治化的政治",
+                                "e2.xhtml#sec2",
+                                vec![
+                                    e("去政治化与政党政治的转变", "e2.xhtml#sec2a", vec![]),
+                                    e("去政治化与理论辩论的终结", "e2.xhtml#sec2b", vec![]),
+                                ],
+                            ),
+                            e("三、去政治化的政治与现代社会", "e2.xhtml#sec3", vec![]),
+                        ],
+                    ),
+                    e("韦伯", "e3.xhtml", vec![]),
+                ],
+            });
+            let book = parse(&bytes).unwrap();
+            // Real files stay chapters; the sections resolve into them.
+            assert_eq!(book.chapters.len(), 3);
+            assert_eq!(book.toc.len(), 3);
+            let essay = &book.toc[1];
+            assert_eq!(essay.title, "去政治化的政治");
+            assert_eq!(essay.idx, Some(1));
+            assert_eq!(essay.frag, None);
+            assert_eq!(essay.children.len(), 3);
+            let s1 = &essay.children[0];
+            assert_eq!(s1.title, "一、中国与60年代的终结");
+            assert_eq!(s1.idx, Some(1));
+            assert_eq!(s1.frag.as_deref(), Some("sec1"));
+            let s2 = &essay.children[1];
+            assert_eq!(s2.frag.as_deref(), Some("sec2"));
+            assert_eq!(s2.children.len(), 2);
+            assert_eq!(s2.children[0].title, "去政治化与政党政治的转变");
+            assert_eq!(s2.children[0].idx, Some(1));
+            assert_eq!(s2.children[0].frag.as_deref(), Some("sec2a"));
+            assert_eq!(s2.children[1].frag.as_deref(), Some("sec2b"));
+            assert_eq!(essay.children[2].frag.as_deref(), Some("sec3"));
+            // Chapter title still comes from the file-level entry.
+            assert_eq!(book.chapters[1].title, "去政治化的政治");
+        }
     }
 
     #[test]

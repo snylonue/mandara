@@ -420,6 +420,8 @@ export interface components {
         TocNode: {
             title: string;
             idx: number | null;
+            /** @description Id fragment of the source href (`file.html#section`) when this entry points into the middle of its chapter; the reader scrolls to the element with that id. */
+            frag?: string | null;
             children: components["schemas"]["TocNode"][];
         };
         Chapter: {

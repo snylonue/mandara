@@ -34,6 +34,7 @@ pub fn parse(bytes: &[u8], filename: &str) -> Result<ParsedBook> {
         .map(|(i, c)| TocNode {
             title: c.title.clone(),
             idx: Some(i as u32),
+            frag: None,
             children: Vec::new(),
         })
         .collect();

@@ -35,13 +35,26 @@ export function Reader({
   const [loading, setLoading] = useState(false);
   const [fraction, setFraction] = useState(initialPosition?.fraction ?? 0);
   const loadedRef = useRef<Map<number, Chapter>>(new Map());
+  const pendingFragRef = useRef<string | null>(null);
+
+  function scrollToFragId(frag: string | null) {
+    // The chapter content carries the original element ids, so a TOC
+    // fragment entry (`file.html#section`) can scroll into its section.
+    requestAnimationFrame(() => {
+      const el = frag ? document.getElementById(frag) : null;
+      if (el) el.scrollIntoView({ block: "start" });
+    });
+  }
 
   // Load chapter content (cached), and restore scroll by fraction once.
   useEffect(() => {
     const cached = loadedRef.current.get(idx);
+    const frag = pendingFragRef.current;
+    pendingFragRef.current = null;
     if (cached) {
       setChapter(cached);
       restoreScroll(fraction);
+      scrollToFragId(frag);
       return;
     }
     setLoading(true);
@@ -50,6 +63,7 @@ export function Reader({
       setChapter(c);
       setLoading(false);
       restoreScroll(fraction);
+      scrollToFragId(frag);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [idx]);
@@ -67,11 +81,16 @@ export function Reader({
   }
 
   const goto = useCallback(
-    (next: number) => {
+    (next: number, frag?: string) => {
       const clamped = Math.max(0, Math.min(next, chapters.length - 1));
-      if (clamped === idx) return;
+      if (clamped === idx) {
+        // Same chapter: the content is already rendered — scroll directly.
+        if (frag) scrollToFragId(frag);
+        return;
+      }
       setIdx(clamped);
       setFraction(0);
+      pendingFragRef.current = frag ?? null;
     },
     [chapters.length, idx],
   );
@@ -176,7 +195,7 @@ function TocTree({
 }: {
   nodes: TocNode[];
   current: number;
-  onSelect: (idx: number) => void;
+  onSelect: (idx: number, frag?: string) => void;
   onClose: () => void;
   depth?: number;
 }) {
@@ -187,7 +206,7 @@ function TocTree({
         const leaf = n.children.length === 0;
         const sel = () => {
           if (n.idx !== null) {
-            onSelect(n.idx);
+            onSelect(n.idx, n.frag ?? undefined);
             onClose();
           }
         };

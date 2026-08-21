@@ -122,6 +122,11 @@ pub struct ChapterMeta {
 pub struct TocNode {
     pub title: String,
     pub idx: Option<u32>,
+    /// Leading fragment of the source href (`file.html#section`), when
+    /// this entry points into the middle of its chapter. The web reader
+    /// scrolls to the element with that id after loading the chapter.
+    #[serde(default)]
+    pub frag: Option<String>,
     pub children: Vec<TocNode>,
 }
 

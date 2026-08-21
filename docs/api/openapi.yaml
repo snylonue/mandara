@@ -940,6 +940,13 @@ components:
           type: string
         idx:
           type: [integer, "null"]
+        frag:
+          type: string
+          nullable: true
+          description: >
+            Id fragment of the source href (`file.html#section`) when this
+            entry points into the middle of its chapter; the reader
+            scrolls to the element with that id.
         children:
           type: array
           items:
