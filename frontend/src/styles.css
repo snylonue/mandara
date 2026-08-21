@@ -344,6 +344,84 @@ select:focus {
   min-width: 0;
 }
 
+/* Hierarchical TOC panel (tree per the ebook's nav/NCX). */
+.toc-panel {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 8px 10px;
+  margin: 10px 0;
+}
+
+.toc-list,
+.toc-list ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.toc-list li {
+  margin: 1px 0;
+}
+
+.toc-list .toc-nested {
+  margin-left: 1.2em;
+}
+
+.toc-list details > summary {
+  list-style-position: inside;
+  cursor: pointer;
+  user-select: none;
+  color: var(--muted);
+}
+
+.toc-list summary::marker {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.toc-link {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--text);
+  font-size: 14px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toc-link:hover {
+  background: var(--border);
+}
+
+.toc-link.current {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.toc-group {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  padding: 4px 2px;
+  letter-spacing: 0.05em;
+}
+
+.reader-controls button.active {
+  background: var(--accent);
+  color: #fff;
+}
+
 .progress-bar {
   height: 3px;
   background: var(--border);

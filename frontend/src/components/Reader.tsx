@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import type { Chapter, ChapterMeta, Position } from "../types";
+import type { Chapter, ChapterMeta, Position, TocNode } from "../types";
 
 interface ReaderProps {
   title: string;
@@ -11,6 +11,8 @@ interface ReaderProps {
   initialPosition?: Position;
   /** Called (debounced) with the reader's current scroll fraction. */
   onProgress?: (fraction: number) => void;
+  /** Hierarchical table of contents (per the ebook's nav/NCX). */
+  toc?: TocNode[];
   /** Disable prev/next persistence and session UI (public share view). */
   readOnly?: boolean;
 }
@@ -18,12 +20,14 @@ interface ReaderProps {
 export function Reader({
   title,
   chapters,
+  toc,
   loadChapter,
   initialPosition,
   onProgress,
   readOnly,
 }: ReaderProps) {
   const { t } = useTranslation();
+  const [tocOpen, setTocOpen] = useState(false);
   const [idx, setIdx] = useState(() =>
     Math.min(initialPosition?.chapter_idx ?? 0, Math.max(chapters.length - 1, 0)),
   );
@@ -104,25 +108,26 @@ export function Reader({
           {title} <span className="reader-sub">{cur?.title ?? ""}</span>
         </div>
         <div className="reader-controls">
+          <button
+            className={tocOpen ? "active" : undefined}
+            onClick={() => setTocOpen((v) => !v)}
+            aria-expanded={tocOpen}
+          >
+            {t("reader.toc")}
+          </button>
           <button onClick={() => goto(idx - 1)} disabled={idx <= 0}>
             {t("reader.prev")}
           </button>
-          <select
-            value={idx}
-            onChange={(e) => goto(Number(e.target.value))}
-            aria-label={t("reader.chapterSelect")}
-          >
-            {chapters.map((c) => (
-              <option key={c.idx} value={c.idx}>
-                {c.title}
-              </option>
-            ))}
-          </select>
           <button onClick={() => goto(idx + 1)} disabled={idx >= chapters.length - 1}>
             {t("reader.next")}
           </button>
         </div>
       </div>
+      {tocOpen && (toc ?? []).length > 0 && (
+        <nav className="toc-panel" aria-label={t("reader.toc")}>
+          <TocTree nodes={toc!} current={idx} onSelect={goto} onClose={() => setTocOpen(false)} />
+        </nav>
+      )}
       <div className="progress-bar">
         <div className="progress-fill" style={{ width: `${progress}%` }} />
       </div>
@@ -155,5 +160,74 @@ export function Reader({
         </button>
       </div>
     </div>
+  );
+}
+
+/// Recursive renderer for the hierarchical TOC.
+/// Group nodes (`idx == null`) are collapsible; leaf nodes jump to their
+/// chapter. Top-level groups start expanded.
+function TocTree({
+  nodes,
+  current,
+  onSelect,
+  onClose,
+  depth = 0,
+}: {
+  nodes: TocNode[];
+  current: number;
+  onSelect: (idx: number) => void;
+  onClose: () => void;
+  depth?: number;
+}) {
+  return (
+    <ul className="toc-list">
+      {nodes.map((n, i) => {
+        const key = `${n.idx ?? "group"}-${i}`;
+        const leaf = n.children.length === 0;
+        const sel = () => {
+          if (n.idx !== null) {
+            onSelect(n.idx);
+            onClose();
+          }
+        };
+        if (leaf) {
+          return (
+            <li key={key} className={depth > 0 ? "toc-nested" : undefined}>
+              <button
+                className={`toc-link${current === n.idx ? " current" : ""}`}
+                onClick={sel}
+              >
+                {n.title}
+              </button>
+            </li>
+          );
+        }
+        return (
+          <li key={key} className={depth > 0 ? "toc-nested" : undefined}>
+            <details open={depth === 0}>
+              <summary>
+                {n.idx !== null ? (
+                  <button
+                    className={`toc-link${current === n.idx ? " current" : ""}`}
+                    onClick={sel}
+                  >
+                    {n.title}
+                  </button>
+                ) : (
+                  <span className="toc-group">{n.title}</span>
+                )}
+              </summary>
+              <TocTree
+                nodes={n.children}
+                current={current}
+                onSelect={onSelect}
+                onClose={onClose}
+                depth={depth + 1}
+              />
+            </details>
+          </li>
+        );
+      })}
+    </ul>
   );
 }

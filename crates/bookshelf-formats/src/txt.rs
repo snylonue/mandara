@@ -4,7 +4,7 @@
 //! for Chinese light novels downloaded as txt).
 
 use bookshelf_core::error::{Error, Result};
-use bookshelf_core::model::ChapterFormat;
+use bookshelf_core::model::{ChapterFormat, TocNode};
 
 use crate::{ParsedBook, ParsedChapter};
 
@@ -17,12 +17,22 @@ const EXACT_HEADINGS: [&str; 12] = [
 pub fn parse(bytes: &[u8], filename: &str) -> Result<ParsedBook> {
     let text = decode(bytes)?;
     let (title, chapters) = split_chapters(&text, filename);
+    let toc = chapters
+        .iter()
+        .enumerate()
+        .map(|(i, c)| TocNode {
+            title: c.title.clone(),
+            idx: Some(i as u32),
+            children: Vec::new(),
+        })
+        .collect();
     Ok(ParsedBook {
         title,
         authors: Vec::new(),
         description: None,
         cover_url: None,
         chapters,
+        toc,
     })
 }
 

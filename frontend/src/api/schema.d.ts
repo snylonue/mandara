@@ -365,6 +365,12 @@ export interface components {
             idx: number;
             title: string;
         };
+        /** @description One node of the hierarchical table of contents. `idx` is the chapter index this entry points to (`null` for pure group nodes); leaf entries reference entries of the `chapters` list. */
+        TocNode: {
+            title: string;
+            idx: number | null;
+            children: components["schemas"]["TocNode"][];
+        };
         Chapter: {
             idx: number;
             title: string;
@@ -396,6 +402,7 @@ export interface components {
             file: components["schemas"]["FileMeta"];
             book: components["schemas"]["BookMeta"];
             chapters: components["schemas"]["ChapterMeta"][];
+            toc: components["schemas"]["TocNode"][];
         };
         PatchBook: {
             title?: string;
@@ -483,6 +490,7 @@ export interface components {
             book: components["schemas"]["ShareBookView"];
             file: components["schemas"]["ShareFileView"];
             chapters: components["schemas"]["ChapterMeta"][];
+            toc: components["schemas"]["TocNode"][];
         };
         PluginInfo: {
             id: string;

@@ -113,6 +113,18 @@ pub struct ChapterMeta {
     pub title: String,
 }
 
+/// One node of a hierarchical table of contents.
+///
+/// `idx` is the chapter index this entry points to (`None` for pure group
+/// entries); the book's spine order stays the flat reading order in
+/// `ChapterMeta` lists, this tree adds the author's structure.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TocNode {
+    pub title: String,
+    pub idx: Option<u32>,
+    pub children: Vec<TocNode>,
+}
+
 /// Content format of a chapter. `epub` chapters carry sanitized HTML
 /// (EPUB XHTML, structure preserved); `txt` and plugin chapters are plain
 /// text. The web reader renders accordingly.

@@ -817,6 +817,23 @@ components:
         title:
           type: string
 
+    TocNode:
+      type: object
+      description: >-
+        One node of the hierarchical table of contents. `idx` is the
+        chapter index this entry points to (`null` for pure group nodes);
+        leaf entries reference entries of the `chapters` list.
+      required: [title, idx, children]
+      properties:
+        title:
+          type: string
+        idx:
+          type: [integer, "null"]
+        children:
+          type: array
+          items:
+            $ref: "#/components/schemas/TocNode"
+
     Chapter:
       type: object
       required: [idx, title, format, content]
@@ -878,7 +895,7 @@ components:
 
     FileDetail:
       type: object
-      required: [file, book, chapters]
+      required: [file, book, chapters, toc]
       properties:
         file:
           $ref: "#/components/schemas/FileMeta"
@@ -888,6 +905,10 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ChapterMeta"
+        toc:
+          type: array
+          items:
+            $ref: "#/components/schemas/TocNode"
 
     PatchBook:
       type: object
@@ -1076,7 +1097,7 @@ components:
 
     ShareBookResponse:
       type: object
-      required: [book, file, chapters]
+      required: [book, file, chapters, toc]
       properties:
         book:
           $ref: "#/components/schemas/ShareBookView"
@@ -1086,6 +1107,10 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ChapterMeta"
+        toc:
+          type: array
+          items:
+            $ref: "#/components/schemas/TocNode"
 
     PluginInfo:
       type: object

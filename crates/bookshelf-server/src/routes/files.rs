@@ -7,7 +7,7 @@ use axum::response::IntoResponse;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 
-use bookshelf_core::model::{BookMeta, ChapterMeta, FileMeta, Visibility};
+use bookshelf_core::model::{BookMeta, ChapterMeta, FileMeta, TocNode, Visibility};
 
 use crate::error::ApiError;
 use crate::routes::{can_manage_file, current_user, load_visible_file, St};
@@ -17,6 +17,7 @@ pub struct FileDetail {
     pub file: FileMeta,
     pub book: BookMeta,
     pub chapters: Vec<ChapterMeta>,
+    pub toc: Vec<TocNode>,
 }
 
 // GET /api/files/{id} ---------------------------------------------------------
@@ -35,10 +36,12 @@ pub async fn get_file(
         .get_book(&file.book_id)
         .await?
         .ok_or_else(|| ApiError::not_found("book"))?;
+    let toc = st.library.file_toc(&file.id).await?;
     Ok(Json(FileDetail {
         file,
         book,
         chapters,
+        toc,
     }))
 }
 

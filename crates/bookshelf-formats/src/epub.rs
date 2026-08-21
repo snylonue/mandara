@@ -25,11 +25,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use bookshelf_core::error::{Error, Result};
-use bookshelf_core::model::ChapterFormat;
+use bookshelf_core::model::{ChapterFormat, TocNode};
 use epub::doc::{EpubDoc, NavPoint};
 use ego_tree::NodeRef;
 use scraper::node::Node;
-use scraper::{Html, Selector};
+use scraper::{ElementRef, Html, Selector};
 
 use crate::{ParsedBook, ParsedChapter};
 
@@ -108,8 +108,12 @@ fn parse_path(path: &Path) -> Result<ParsedBook> {
 
     let description = doc.mdata("description").map(|m| m.value.trim().to_string());
 
-    // TOC (nav doc / NCX) → resource path → label.
-    let title_by_path: HashMap<String, String> = extract_toc(&mut doc)
+    // TOC (nav doc / NCX) → tree, with a flattened path → label map for
+    // chapter titles (leaf entries win for documents with nested entries).
+    let branches = extract_toc_tree(&mut doc);
+    let mut flat = Vec::new();
+    flatten_branches(&branches, &mut flat);
+    let title_by_path: HashMap<String, String> = flat
         .into_iter()
         .map(|(p, l)| (path_key(&p), l))
         .collect();
@@ -126,8 +130,14 @@ fn parse_path(path: &Path) -> Result<ParsedBook> {
                 .map(|r| (s.idref.clone(), r.mime.clone(), r.path.clone()))
         })
         .collect();
+    let spine_pos: HashMap<String, usize> = spine
+        .iter()
+        .enumerate()
+        .map(|(i, (_, _, p))| (path_key(p), i))
+        .collect();
 
     let mut chapters = Vec::new();
+    let mut kept_spine = Vec::new(); // spine positions that became chapters
     for (chapter_idx, (id, mime, resource_path)) in spine.into_iter().enumerate() {
         if !XHTML_MIMES.contains(&mime.as_str()) {
             continue;
@@ -162,6 +172,7 @@ fn parse_path(path: &Path) -> Result<ParsedBook> {
             format: ChapterFormat::Html,
             content,
         });
+        kept_spine.push(chapter_idx);
     }
 
     if chapters.is_empty() {
@@ -170,25 +181,46 @@ fn parse_path(path: &Path) -> Result<ParsedBook> {
         ));
     }
 
+    // Map the TOC tree onto the final chapter list; synthesize a flat TOC
+    // when the ebook ships no usable TOC.
+    let mut toc = remap_branches(&branches, &spine_pos, &kept_spine, None);
+    if toc.is_empty() {
+        toc = chapters
+            .iter()
+            .enumerate()
+            .map(|(i, c)| TocNode {
+                title: c.title.clone(),
+                idx: Some(i as u32),
+                children: Vec::new(),
+            })
+            .collect();
+    }
+
     Ok(ParsedBook {
         title,
         authors,
         description,
         cover_url: None, // cover extraction (bytes) is not stored yet
         chapters,
+        toc,
     })
 }
 
 // ---- table of contents ------------------------------------------------
 
-/// One TOC entry: absolute resource path inside the container + label.
-type TocEntry = (PathBuf, String);
+/// TOC tree branch while parsing; `path` is the container path of the
+/// target document (`None` for pure group entries).
+struct TocBranch {
+    title: String,
+    path: Option<PathBuf>,
+    children: Vec<TocBranch>,
+}
 
-/// Extract the book's table of contents per the EPUB standard:
-/// the EPUB 3 nav document when present, otherwise the NCX `navMap`.
-/// Falls back to the flattened `EpubDoc` NCX parse when both are absent
-/// or unusable.
-fn extract_toc<R: Read + Seek>(doc: &mut EpubDoc<R>) -> Vec<TocEntry> {
+/// Extract the book's table of contents per the EPUB standard: the EPUB 3
+/// nav document when present, otherwise the NCX `navMap`, finally the
+/// flattened `EpubDoc` NCX parse. Returns the tree with hierarchy intact
+/// (`playOrder` respected for NCX).
+fn extract_toc_tree<R: Read + Seek>(doc: &mut EpubDoc<R>) -> Vec<TocBranch> {
     // EPUB 3: the nav document listed in the manifest with the `nav` property.
     if doc.version == epub::doc::EpubVersion::Version3_0 {
         if let Some(nav_id) = doc.get_nav_id() {
@@ -198,9 +230,9 @@ fn extract_toc<R: Read + Seek>(doc: &mut EpubDoc<R>) -> Vec<TocEntry> {
                     .get(&nav_id)
                     .map(|r| r.path.clone())
                     .unwrap_or_default();
-                let entries = parse_nav_doc(&html, &nav_path);
-                if !entries.is_empty() {
-                    return entries;
+                let branches = parse_nav_branches(&html, &nav_path);
+                if !branches.is_empty() {
+                    return branches;
                 }
             }
         }
@@ -214,118 +246,175 @@ fn extract_toc<R: Read + Seek>(doc: &mut EpubDoc<R>) -> Vec<TocEntry> {
         .map(|r| r.path.clone());
     if let Some(ncx_path) = ncx_path {
         if let Some(xml) = doc.get_resource_str_by_path(&ncx_path) {
-            let entries = parse_ncx(&xml, &ncx_path);
-            if !entries.is_empty() {
-                return entries;
+            let branches = parse_ncx_branches(&xml, &ncx_path);
+            if !branches.is_empty() {
+                return branches;
             }
         }
     }
 
     // Last resort: epub-rs' own NCX parse.
-    flatten_navpoints(&doc.toc, &doc.root_base)
+    navpoint_branches(&doc.toc)
 }
 
-/// Flatten an EPUB 3 nav document. `<nav epub:type="toc">` navs win;
+/// Branch list of an EPUB 3 nav document. `<nav epub:type="toc">` navs win;
 /// otherwise the first nav element is used. `href` values are relative to
-/// the nav document's directory. Returns entries in document order,
-/// depth-first.
-fn parse_nav_doc(html: &str, nav_path: &Path) -> Vec<TocEntry> {
+/// the nav document's directory.
+fn parse_nav_branches(html: &str, nav_path: &Path) -> Vec<TocBranch> {
     let frag = Html::parse_document(html);
     let nav = frag
-        .select(&Selector::parse("nav[epub\\:type=toc]").expect("static selector"))
+        .select(&Selector::parse(r#"nav[epub\:type=toc]"#).expect("static selector"))
         .next()
         .or_else(|| frag.select(&Selector::parse("nav").expect("static selector")).next());
     let Some(nav) = nav else {
         return Vec::new();
     };
     let base = nav_path.parent().unwrap_or(Path::new(""));
-    let mut entries = Vec::new();
-    collect_nav_items(nav, base, &mut entries);
-    entries
+    collect_nav_branches(nav, base)
 }
 
-fn collect_nav_items(nav: scraper::ElementRef<'_>, base: &Path, out: &mut Vec<TocEntry>) {
+#[allow(clippy::only_used_in_recursion)]
+fn collect_nav_branches(root: scraper::ElementRef<'_>, base: &Path) -> Vec<TocBranch> {
     let a_sel = Selector::parse("a[href]").expect("static selector");
-    let li_sel = Selector::parse("li").expect("static selector");
-    for li in nav.select(&li_sel) {
-        if let Some(a) = li.select(&a_sel).next() {
-            let Some(href) = a.value().attr("href") else { continue };
-            if href.starts_with('#') {
-                continue;
+    let mut out = Vec::new();
+    // Iterate `li` at exactly one depth level: the direct `li` children of
+    // a nested `ol` (`root` is the nav element or a `li`; recursion into a
+    // `li` visits its sub-list).
+    for li in root
+        .child_elements()
+        .filter(|e| e.value().name() == "ol")
+        .flat_map(|ol| ol.child_elements())
+        .filter(|e| e.value().name() == "li")
+    {
+        let (title, path) = match li.select(&a_sel).next() {
+            Some(a) => {
+                let t: String = a.text().collect::<String>().trim().to_string();
+                let href = a.value().attr("href").unwrap_or("");
+                if href.starts_with('#') {
+                    (t, None)
+                } else {
+                    (t, Some(base.join(href)))
+                }
             }
-            let label: String = a.text().collect::<String>().trim().to_string();
-            if !label.is_empty() {
-                out.push((base.join(href), label));
+            None => {
+                let t: String = li.text().collect::<String>().trim().to_string();
+                (t, None)
             }
+        };
+        if title.is_empty() && path.is_none() {
+            continue;
         }
-        // Nested `ol` inside the same `li` (sub-chapters).
-        if li.select(&Selector::parse("ol").expect("static selector")).next().is_some() {
-            collect_nav_items(li, base, out);
-        }
+        // A `li` may contain a nested `ol`; recurse into the `li` itself
+        // (its sub-lists are its `ol` children).
+        let children: Vec<TocBranch> = collect_nav_branches(li, base);
+        out.push(TocBranch {
+            title,
+            path,
+            children,
+        });
     }
+    out
 }
 
-/// Parse an EPUB 2 NCX `navMap`. `src` values are relative to the NCX
-/// document's directory; ordering follows `playOrder` when present,
-/// otherwise document order.
-fn parse_ncx(xml: &str, ncx_path: &Path) -> Vec<TocEntry> {
+/// Branch tree of an EPUB 2 NCX `navMap`. `src` values are relative to the
+/// NCX document's directory; sibling order follows `playOrder`.
+fn parse_ncx_branches(xml: &str, ncx_path: &Path) -> Vec<TocBranch> {
     let frag = Html::parse_fragment(xml);
     let base = ncx_path.parent().unwrap_or(Path::new(""));
-    let mut entries: Vec<(usize, TocEntry)> = Vec::new();
-    collect_ncx_items(&frag.root_element(), base, 0, &mut entries);
-    entries.sort_by_key(|(o, _)| *o);
-    entries.into_iter().map(|(_, e)| e).collect()
+    // The top-level `navPoint` elements live inside `navMap`; start there
+    // so `collect_ncx_branches` sees exactly one level per call.
+    let parent = frag
+        .select(&Selector::parse("navmap").expect("static selector"))
+        .next()
+        .unwrap_or(frag.root_element());
+    collect_ncx_branches(&parent, base)
 }
 
-fn collect_ncx_items(
-    parent: &scraper::ElementRef<'_>,
-    base: &Path,
-    depth: usize,
-    out: &mut Vec<(usize, TocEntry)>,
-) {
-    if depth > 32 {
-        return; // defensive: pathological nesting
-    }
-    let navpoint_sel = Selector::parse("navpoint").expect("static selector");
-    for np in parent.select(&navpoint_sel) {
+fn collect_ncx_branches(parent: &scraper::ElementRef<'_>, base: &Path) -> Vec<TocBranch> {
+    let navlabel_sel = Selector::parse("navlabel text").expect("static selector");
+    let content_sel = Selector::parse("content").expect("static selector");
+    let mut ordered: Vec<(usize, TocBranch)> = Vec::new();
+    // NCX is XML, but html5ever parses it as HTML: `<content …/>` does not
+    // self-close there, so nested `navPoint`s end up inside their
+    // ancestor's `<content>`. Descendant selection still sees them;
+    // entries whose nearest `navPoint` ancestor is not the recursion root
+    // belong to that ancestor's subtree and are skipped at this level
+    // (they are collected by the recursion below).
+    for np in parent.select(&Selector::parse("navpoint").expect("static selector")) {
+        if let Some(anc) = nearest_navpoint_ancestor(np) {
+            if anc != *parent {
+                continue;
+            }
+        }
         let order = np
             .value()
             .attr("playorder")
             .and_then(|o| o.parse::<usize>().ok())
             .unwrap_or(usize::MAX);
-        let label: Option<String> = np
-            .select(&Selector::parse("navlabel text").expect("static selector"))
+        let title: String = np
+            .select(&navlabel_sel)
             .next()
             .map(|t| t.text().collect::<String>().trim().to_string())
-            .filter(|s| !s.is_empty());
+            .unwrap_or_default();
         let href = np
-            .select(&Selector::parse("content").expect("static selector"))
+            .select(&content_sel)
             .next()
             .and_then(|c| c.value().attr("src"))
             .map(|s| s.to_string());
-        if let (Some(label), Some(href)) = (label, href) {
-            if !href.starts_with('#') {
-                out.push((order, (base.join(href), label)));
-            }
-        }
-        collect_ncx_items(&np, base, depth + 1, out);
+        let path = href
+            .filter(|h| !h.starts_with('#'))
+            .map(|h| base.join(h));
+        let children = collect_ncx_branches(&np, base);
+        ordered.push((
+            order,
+            TocBranch {
+                title,
+                path,
+                children,
+            },
+        ));
     }
+    ordered.sort_by_key(|(o, _)| *o);
+    ordered.into_iter().map(|(_, b)| b).collect()
 }
 
-/// Flatten epub-rs' parsed NCX tree (`NavPoint.content` is already joined
-/// with the root base dir).
-fn flatten_navpoints(points: &[NavPoint], root_base: &Path) -> Vec<TocEntry> {
-    let mut out = Vec::new();
-    for p in points {
-        let path = if p.content.is_absolute() {
-            p.content.clone()
-        } else {
-            root_base.join(&p.content)
-        };
-        out.push((path, p.label.clone()));
-        out.extend(flatten_navpoints(&p.children, root_base));
+/// Nearest ancestor element named `navpoint`, if any.
+fn nearest_navpoint_ancestor(el: scraper::ElementRef<'_>) -> Option<scraper::ElementRef<'_>> {
+    let mut cur = el.parent();
+    while let Some(p) = cur {
+        if let Node::Element(e) = p.value() {
+            if e.name() == "navpoint" {
+                return ElementRef::wrap(p);
+            }
+        }
+        cur = p.parent();
     }
-    out
+    None
+}
+
+/// Branch tree from epub-rs' parsed NCX (`NavPoint.content` is already
+/// joined with the root base dir).
+fn navpoint_branches(points: &[NavPoint]) -> Vec<TocBranch> {
+    points
+        .iter()
+        .map(|p| TocBranch {
+            title: p.label.clone(),
+            path: Some(p.content.clone()),
+            children: navpoint_branches(&p.children),
+        })
+        .collect()
+}
+
+/// Flatten a branch tree into `(path, label)` pairs, depth-first,
+/// **children last** so document-level title lookups prefer the deepest
+/// (most specific) entry for a document.
+fn flatten_branches(branches: &[TocBranch], out: &mut Vec<(PathBuf, String)>) {
+    for b in branches {
+        if let Some(path) = &b.path {
+            out.push((path.clone(), b.title.clone()));
+        }
+        flatten_branches(&b.children, out);
+    }
 }
 
 /// Canonical key for container paths: normalized components joined with
@@ -339,6 +428,47 @@ fn path_key(p: &Path) -> String {
         })
         .collect::<Vec<_>>()
         .join("/")
+}
+
+/// Map the parsed branch tree onto the final chapter list.
+///
+/// - a branch whose document became a chapter keeps its title and gets the
+///   chapter's index; fragment entries pointing into the same document as
+///   an ancestor are dropped (our reader navigates per chapter);
+/// - group branches (no target) are kept when they have surviving children;
+/// - branches whose document was filtered out (front matter, image-only
+///   pages, …) are spliced away, their children lifting up one level.
+fn remap_branches(
+    branches: &[TocBranch],
+    spine_pos: &HashMap<String, usize>,
+    kept: &[usize],
+    parent_idx: Option<u32>,
+) -> Vec<TocNode> {
+    let mut out = Vec::new();
+    for b in branches {
+        let this_idx: Option<u32> = b.path.as_ref().and_then(|p| {
+            let pos = spine_pos.get(&path_key(p))?;
+            kept.binary_search(pos).ok().map(|i| i as u32)
+        });
+        match this_idx {
+            None => {
+                // Group entry (or its doc was dropped): keep children.
+                out.extend(remap_branches(&b.children, spine_pos, kept, parent_idx));
+            }
+            Some(i) => {
+                if parent_idx == Some(i) {
+                    continue; // same-document fragment: already reachable
+                }
+                let children = remap_branches(&b.children, spine_pos, kept, Some(i));
+                out.push(TocNode {
+                    title: b.title.clone(),
+                    idx: Some(i),
+                    children,
+                });
+            }
+        }
+    }
+    out
 }
 
 // ---- XHTML sanitization -----------------------------------------------
@@ -483,17 +613,12 @@ fn escape_html(out: &mut String, s: &str) {
     }
 }
 
-/// Does the sanitized fragment carry meaningful content (text or images)?
+/// Does the sanitized fragment carry meaningful content? Image-only pages
+/// (illustration plates — 插图/扉页) are auxiliary material, not chapters:
+/// a chapter must contain readable text.
 fn has_readable_content(html: &str) -> bool {
     let frag = Html::parse_document(html);
     let root = frag.root_element();
-    if root
-        .select(&Selector::parse("img").expect("static selector"))
-        .next()
-        .is_some()
-    {
-        return true;
-    }
     let text: String = root.text().collect();
     !text.trim().is_empty()
 }
@@ -534,7 +659,8 @@ mod tests {
     struct Fixture {
         version: &'static str,
         spine: Vec<(String, bool)>, // (file name, linear)
-        toc: Vec<(String, String)>, // (label, file name)
+        /// (label, file name, children) — children are nested TOC entries.
+        toc: Vec<(String, String, Vec<(String, String)>)>,
     }
 
     /// Minimal but spec-shaped EPUB: container.xml + OPF + (NCX or nav) +
@@ -610,13 +736,18 @@ mod tests {
             );
 
             if fx.version == "3.0" {
-                let nav_items: String = fx
-                    .toc
-                    .iter()
-                    .map(|(label, file)| {
-                        format!(r#"<li><a href="{file}">{label}</a></li>"#)
-                    })
-                    .collect();
+                let mut nav_items = String::new();
+                for (label, file, children) in &fx.toc {
+                    nav_items.push_str(&format!(r#"<li><a href="{file}">{label}</a>"#));
+                    if !children.is_empty() {
+                        nav_items.push_str("<ol>");
+                        for (clabel, cfile) in children {
+                            nav_items.push_str(&format!(r#"<li><a href="{cfile}">{clabel}</a></li>"#));
+                        }
+                        nav_items.push_str("</ol>");
+                    }
+                    nav_items.push_str("</li>");
+                }
                 add(
                     &mut w,
                     "OEBPS/nav.xhtml",
@@ -629,16 +760,21 @@ mod tests {
                     ),
                 );
             } else {
-                let nav_points: String = fx
-                    .toc
-                    .iter()
-                    .enumerate()
-                    .map(|(i, (label, file))| {
-                        format!(
-                            r#"<navPoint id="np{i}" playOrder="{i}"><navLabel><text>{label}</text></navLabel><content src="{file}"/></navPoint>"#
-                        )
-                    })
-                    .collect();
+                let mut nav_points = String::new();
+                let mut order = 0usize;
+                for (label, file, children) in &fx.toc {
+                    nav_points.push_str(&format!(
+                        r#"<navPoint id="np{order}" playOrder="{order}"><navLabel><text>{label}</text></navLabel><content src="{file}"/>"#
+                    ));
+                    order += 1;
+                    for (clabel, cfile) in children {
+                        nav_points.push_str(&format!(
+                            r#"<navPoint id="np{order}" playOrder="{order}"><navLabel><text>{clabel}</text></navLabel><content src="{cfile}"/></navPoint>"#
+                        ));
+                        order += 1;
+                    }
+                    nav_points.push_str("</navPoint>");
+                }
                 add(
                     &mut w,
                     "OEBPS/toc.ncx",
@@ -662,7 +798,10 @@ mod tests {
   <table><tr><th>列</th></tr><tr><td>值</td></tr></table>
 </body>"##;
             for (i, (file, _)) in fx.spine.iter().enumerate() {
-                let doc = if file.starts_with("cover") {
+                let doc = if file.starts_with("pic") {
+                    // Illustration plate: image only, no text.
+                    r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><title>插图</title></head><body><p><img src="images/pic.png" alt="插图"/></p></body></html>"#
+                } else if file.starts_with("cover") {
                     r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><title>封面</title></head><body><p>封面图片</p></body></html>"#
                 } else if file.starts_with("title") {
                     // Front matter page: linked in the spine but not in the
@@ -690,19 +829,38 @@ mod tests {
                 ("title.xhtml".into(), true), // front matter: no TOC entry, no heading
                 ("ch1.xhtml".into(), true),
                 ("ch2.xhtml".into(), true),
+                ("ch2b.xhtml".into(), true),
             ],
             toc: vec![
-                ("第一章 起点".into(), "ch1.xhtml".into()),
-                ("第二章 风起".into(), "ch2.xhtml".into()),
+                ("第一章 起点".into(), "ch1.xhtml".into(), vec![]),
+                (
+                    "第二章 风起".into(),
+                    "ch2.xhtml".into(),
+                    vec![("第二章之二".into(), "ch2b.xhtml".into())],
+                ),
             ],
         });
         let book = parse(&bytes).unwrap();
+        eprintln!("DBG toc={:?}", book.toc.iter().map(|n| (n.title.clone(), n.idx, n.children.len(), n.children.iter().map(|c| c.title.clone()).collect::<Vec<_>>())).collect::<Vec<_>>());
 
         // Cover (linear="no") and unlinked front matter must not become
         // chapters; spine order kept.
-        assert_eq!(book.chapters.len(), 2);
+        assert_eq!(book.chapters.len(), 3);
         assert_eq!(book.chapters[0].title, "第一章 起点");
         assert_eq!(book.chapters[1].title, "第二章 风起");
+        assert_eq!(book.chapters[2].title, "第二章之二");
+
+        // TOC stays a tree: 第二章 风起 groups its 第二章之二 child; the
+        // same-document fragment entry is deduped against its parent.
+        assert_eq!(book.toc.len(), 2);
+        assert_eq!(book.toc[0].title, "第一章 起点");
+        assert_eq!(book.toc[0].idx, Some(0));
+        assert!(book.toc[0].children.is_empty());
+        assert_eq!(book.toc[1].title, "第二章 风起");
+        assert_eq!(book.toc[1].idx, Some(1));
+        assert_eq!(book.toc[1].children.len(), 1);
+        assert_eq!(book.toc[1].children[0].title, "第二章之二");
+        assert_eq!(book.toc[1].children[0].idx, Some(2));
 
         // HTML structure preserved, junk stripped.
         let c0 = &book.chapters[0];
@@ -729,17 +887,38 @@ mod tests {
     fn parses_epub3_nav_toc() {
         let bytes = build_epub(&Fixture {
             version: "3.0",
-            spine: vec![("ch1.xhtml".into(), true), ("ch2.xhtml".into(), true)],
+            spine: vec![
+                ("pic.xhtml".into(), true), // image-only 插图 page, linked in TOC
+                ("ch1.xhtml".into(), true),
+                ("ch2.xhtml".into(), true),
+                ("ch2b.xhtml".into(), true),
+            ],
             toc: vec![
-                ("序章".into(), "ch1.xhtml".into()),
-                ("终章".into(), "ch2.xhtml".into()),
+                ("插图".into(), "pic.xhtml".into(), vec![]),
+                ("序章".into(), "ch1.xhtml".into(), vec![]),
+                (
+                    "第二卷".into(),
+                    "ch2.xhtml".into(),
+                    vec![("终章".into(), "ch2b.xhtml".into())],
+                ),
             ],
         });
         let book = parse(&bytes).unwrap();
-        assert_eq!(book.chapters.len(), 2);
+        // Image-only pages never become chapters, nor TOC entries.
+        assert_eq!(book.chapters.len(), 3);
         assert_eq!(book.chapters[0].title, "序章");
-        assert_eq!(book.chapters[1].title, "终章");
-        assert!(book.chapters[0].content.contains("<h1>正文标题 0</h1>"));
+        assert_eq!(book.chapters[1].title, "第二卷");
+        assert_eq!(book.chapters[2].title, "终章");
+        // Nested nav items keep their hierarchy.
+        assert_eq!(book.toc.len(), 2);
+        assert_eq!(book.toc[0].title, "序章");
+        assert_eq!(book.toc[0].idx, Some(0));
+        assert_eq!(book.toc[1].title, "第二卷");
+        assert_eq!(book.toc[1].idx, Some(1));
+        assert_eq!(book.toc[1].children.len(), 1);
+        assert_eq!(book.toc[1].children[0].title, "终章");
+        assert_eq!(book.toc[1].children[0].idx, Some(2));
+        assert!(book.chapters[0].content.contains("<h1>正文标题 1</h1>"));
         assert!(book.chapters[0].content.contains("data:image/png;base64,"));
     }
 
@@ -753,6 +932,10 @@ mod tests {
         let book = parse(&bytes).unwrap();
         assert_eq!(book.chapters.len(), 1);
         assert_eq!(book.chapters[0].title, "正文标题 0");
+        // No usable TOC → flat synthesized TOC from the chapters.
+        assert_eq!(book.toc.len(), 1);
+        assert_eq!(book.toc[0].idx, Some(0));
+        assert_eq!(book.toc[0].title, "正文标题 0");
     }
 
     #[test]

@@ -15,7 +15,7 @@ use sqlx::SqlitePool;
 use tracing::info;
 
 use bookshelf_core::error::Result as CoreResult;
-use bookshelf_core::model::{BookMeta, Chapter, ChapterFormat, ChapterMeta, FileMeta, User, Visibility};
+use bookshelf_core::model::{BookMeta, Chapter, ChapterFormat, ChapterMeta, FileMeta, TocNode, User, Visibility};
 use bookshelf_core::source::BookSource;
 
 use crate::error::ApiError;
@@ -164,9 +164,10 @@ impl Library {
         .execute(&mut *tx)
         .await?;
 
+        let toc_json = serde_json::to_string(&parsed.toc).unwrap_or_else(|_| "[]".into());
         sqlx::query(
-            "INSERT INTO book_files (id, book_id, source, external_id, format, label, visibility, owner_id, chapter_count) \
-             VALUES (?, ?, 'local', ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO book_files (id, book_id, source, external_id, format, label, visibility, owner_id, chapter_count, toc) \
+             VALUES (?, ?, 'local', ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&file_id)
         .bind(&book_id)
@@ -176,6 +177,7 @@ impl Library {
         .bind(visibility.as_str())
         .bind(owner_id)
         .bind(parsed.chapters.len() as i64)
+        .bind(toc_json)
         .execute(&mut *tx)
         .await?;
 
@@ -222,10 +224,11 @@ impl Library {
         let file_id = uuid::Uuid::new_v4().simple().to_string();
         let format = detect_format(filename);
 
+        let toc_json = serde_json::to_string(&parsed.toc).unwrap_or_else(|_| "[]".into());
         let mut tx = self.db.begin().await?;
         sqlx::query(
-            "INSERT INTO book_files (id, book_id, source, external_id, format, label, visibility, owner_id, chapter_count) \
-             VALUES (?, ?, 'local', ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO book_files (id, book_id, source, external_id, format, label, visibility, owner_id, chapter_count, toc) \
+             VALUES (?, ?, 'local', ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&file_id)
         .bind(book_id)
@@ -235,6 +238,7 @@ impl Library {
         .bind(visibility.as_str())
         .bind(owner_id)
         .bind(parsed.chapters.len() as i64)
+        .bind(toc_json)
         .execute(&mut *tx)
         .await?;
 
@@ -417,6 +421,35 @@ impl Library {
         .fetch_all(&self.db)
         .await?;
         Ok(rows.into_iter().map(|r| r.into_model()).collect())
+    }
+
+    /// The file's hierarchical TOC. Files stored without one (plugin
+    /// books, legacy uploads) get a flat tree synthesized from the chapter
+    /// title rows.
+    pub async fn file_toc(&self, file_id: &str) -> Result<Vec<TocNode>, ApiError> {
+        let raw: String = sqlx::query_scalar("SELECT toc FROM book_files WHERE id = ?")
+            .bind(file_id)
+            .fetch_one(&self.db)
+            .await?;
+        if !raw.trim().is_empty() {
+            if let Ok(toc) = serde_json::from_str::<Vec<TocNode>>(&raw) {
+                return Ok(toc);
+            }
+        }
+        let rows: Vec<ChapterTitleRow> = sqlx::query_as(
+            "SELECT idx, title FROM chapters WHERE file_id = ? ORDER BY idx",
+        )
+        .bind(file_id)
+        .fetch_all(&self.db)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| TocNode {
+                title: r.title,
+                idx: Some(r.idx.max(0) as u32),
+                children: Vec::new(),
+            })
+            .collect())
     }
 
     /// Fetch a chapter, materializing it from its plugin source on first

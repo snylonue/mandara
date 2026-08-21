@@ -111,6 +111,7 @@ export function ReaderPage() {
       <Reader
         title={book.title}
         chapters={chapters}
+        toc={detail.toc}
         loadChapter={async (idx) => {
           const c = await api<Chapter>(`/files/${id}/chapters/${idx}`);
           return c;

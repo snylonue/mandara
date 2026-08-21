@@ -8,7 +8,7 @@ use axum::Json;
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
 
-use bookshelf_core::model::{ChapterMeta, Position, Share, ShareKind, User, Visibility};
+use bookshelf_core::model::{ChapterMeta, Position, Share, ShareKind, TocNode, User, Visibility};
 
 use crate::error::ApiError;
 use crate::rows::ShareRow;
@@ -276,6 +276,7 @@ pub struct ShareBookResponse {
     pub book: ShareBookView,
     pub file: ShareFileView,
     pub chapters: Vec<ChapterMeta>,
+    pub toc: Vec<TocNode>,
 }
 
 pub async fn share_book(
@@ -295,6 +296,7 @@ pub async fn share_book(
         .ok_or_else(|| ApiError::not_found("book"))?;
     st.library.ensure_titles(&file).await?;
     let chapters = st.library.chapter_titles(&file.id).await?;
+    let toc = st.library.file_toc(&file.id).await?;
     Ok(Json(ShareBookResponse {
         book: ShareBookView {
             id: book.id,
@@ -309,6 +311,7 @@ pub async fn share_book(
             chapter_count: file.chapter_count,
         },
         chapters,
+        toc,
     }))
 }
 

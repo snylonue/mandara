@@ -20,6 +20,7 @@ export type BookDetail = Schemas["BookDetail"];
 export type BookListEntry = Schemas["BookListEntry"];
 export type FileDetail = Schemas["FileDetail"];
 export type ChapterMeta = Schemas["ChapterMeta"];
+export type TocNode = Schemas["TocNode"];
 export type Chapter = Schemas["Chapter"];
 export type Position = Schemas["Position"];
 export type ReadingSession = Schemas["ReadingSession"];

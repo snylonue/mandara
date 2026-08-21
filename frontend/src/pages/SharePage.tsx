@@ -62,6 +62,7 @@ export function SharePage() {
       <Reader
         title={book.book.title}
         chapters={book.chapters}
+        toc={book.toc}
         loadChapter={async (idx) => {
           const c = await api<Chapter>(`/shares/${token}/chapters/${idx}`);
           return c;

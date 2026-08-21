@@ -9,7 +9,7 @@ pub mod txt;
 use std::path::Path;
 
 use bookshelf_core::error::{Error, Result};
-use bookshelf_core::model::ChapterFormat;
+use bookshelf_core::model::{ChapterFormat, TocNode};
 
 /// A parsed book in normalized form.
 #[derive(Debug, Clone)]
@@ -19,6 +19,9 @@ pub struct ParsedBook {
     pub description: Option<String>,
     pub cover_url: Option<String>,
     pub chapters: Vec<ParsedChapter>,
+    /// Hierarchical table of contents per the ebook's nav/NCX. `idx`
+    /// references entries of `chapters`; pure group nodes have `None`.
+    pub toc: Vec<TocNode>,
 }
 
 /// One chapter of a parsed book.
