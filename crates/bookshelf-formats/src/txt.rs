@@ -128,7 +128,7 @@ fn is_heading(line: &str) -> bool {
         return tail
             .chars()
             .next()
-            .map_or(false, |c| HEADING_SUFFIXES.contains(&c));
+            .is_some_and(|c| HEADING_SUFFIXES.contains(&c));
     }
     // Chapter N / VOL.1 / Vol 01 (char-safe comparison: lines may start
     // with multi-byte characters)
@@ -136,13 +136,13 @@ fn is_heading(line: &str) -> bool {
         return line
             .chars()
             .nth(7)
-            .map_or(false, |c| c.is_ascii_digit() || c.is_whitespace());
+            .is_some_and(|c| c.is_ascii_digit() || c.is_whitespace());
     }
     if starts_with_ascii_case_insensitive(line, "vol") {
         return line
             .chars()
             .nth(3)
-            .map_or(false, |c| c.is_ascii_digit() || c.is_whitespace() || c == '.');
+            .is_some_and(|c| c.is_ascii_digit() || c.is_whitespace() || c == '.');
     }
     EXACT_HEADINGS.contains(&line)
 }
@@ -152,7 +152,7 @@ fn starts_with_ascii_case_insensitive(line: &str, prefix: &str) -> bool {
     let mut chars = line.chars();
     prefix
         .chars()
-        .all(|p| chars.next().map_or(false, |c| c.eq_ignore_ascii_case(&p)))
+        .all(|p| chars.next().is_some_and(|c| c.eq_ignore_ascii_case(&p)))
 }
 
 #[cfg(test)]

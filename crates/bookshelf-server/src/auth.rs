@@ -118,7 +118,6 @@ impl AuthService {
                 .await?;
         row.map(UserRow::into_model)
             .ok_or(ApiError::Unauthorized)?
-            .map_err(ApiError::from)
     }
 
     pub fn require_admin(user: &User) -> Result<(), ApiError> {
