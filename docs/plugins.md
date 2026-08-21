@@ -16,6 +16,10 @@ Plugins are loaded from `data/plugins/*.wasm` at startup:
    content is **materialized** into the central database — afterwards the
    plugin book behaves like any uploaded file (it stays readable even if the
    plugin file is removed).
+3. When a user uploads a file with automatic metadata, plugins are asked to
+   identify it (`identify-upload`); the first match supplies the metadata
+   (see below). Metadata backed by a plugin source can be refreshed
+   per-book via `POST /api/books/{id}/refresh`.
 
 ## Interface (WIT)
 
@@ -47,8 +51,32 @@ world bookshelf-plugin {
     export list-books: func() -> list<book-entry>;
     export chapter-titles: func(book-id: string) -> list<string>;
     export get-chapter: func(book-id: string, index: u32) -> option<chapter>;
+    // optional book identification for uploaded files
+    export identify-upload: func(filename: string, file-hash: string) -> option<book-entry>;
 }
 ```
+
+## Identifying uploaded files (`identify-upload`)
+
+When a user uploads a file with automatic metadata, the server asks every
+loaded plugin (in load order) to identify it:
+
+```rust
+fn identify_upload(filename: String, file_hash: String) -> Option<BookEntry> {
+    // filename: original upload name; file_hash: sha-256 hex digest
+    // Return Some(book-entry) to claim the file, None to ignore it.
+}
+```
+
+The first `Some` wins: the plugin's `book-entry` becomes the upload's
+metadata (the upload is attached to the identified book's metadata entry,
+creating it from the plugin catalog first if needed). Identify by whatever
+you can — filename patterns, content hashes you know, ... — but return
+`None` unless you are confident, since a wrong match hijacks the upload's
+metadata.
+
+With the upload attached to a plugin-backed metadata entry, metadata can be
+refreshed from the plugin source later (`POST /api/books/{id}/refresh`).
 
 ## Writing a plugin
 

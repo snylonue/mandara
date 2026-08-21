@@ -154,6 +154,34 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
 
+  /api/plugins/{id}/catalog:
+    get:
+      tags: [plugins]
+      summary: Browse one plugin source's live catalog (for picking metadata)
+      operationId: pluginCatalog
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Plugin source id
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Catalog entries, annotated with their library book id when already synced
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PluginCatalogEntry"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /api/books:
     get:
       tags: [books]
@@ -187,7 +215,13 @@ paths:
           $ref: "#/components/responses/Unauthorized"
     post:
       tags: [books]
-      summary: Upload a book — creates a metadata entry plus its first file
+      summary: |
+        Upload a book — one endpoint for all three metadata modes:
+        attach to existing metadata (`book_id`), metadata from a plugin
+        source (`plugin_source` + `plugin_book_id`), or auto (plugins are
+        asked to identify the file, falling back to parsing the file).
+        `title`/`authors`/`description`/`cover_url` override the produced
+        metadata (manual mode; never applied when attaching).
       operationId: uploadBook
       security:
         - bearerAuth: []
@@ -211,6 +245,34 @@ paths:
                 label:
                   type: string
                   description: Short human label for this edition (e.g. "proofread")
+                book_id:
+                  type: string
+                  description: |
+                    Attach the file to this existing metadata entry instead
+                    of creating one. The caller must be able to see the
+                    book. Mutually exclusive with `plugin_source`.
+                plugin_source:
+                  type: string
+                  description: |
+                    Take the metadata from this plugin source's catalog
+                    (requires `plugin_book_id` too). The plugin book is
+                    synced into the library if needed and the upload is
+                    attached to its metadata entry.
+                plugin_book_id:
+                  type: string
+                  description: Id of the book inside the plugin's catalog
+                title:
+                  type: string
+                  description: "Manual metadata: overrides the title (auto mode uses the parsed/identified one)"
+                authors:
+                  type: string
+                  description: 'Manual metadata: JSON string array, e.g. `["A","B"]`'
+                description:
+                  type: string
+                  description: "Manual metadata: overrides the description"
+                cover_url:
+                  type: string
+                  description: "Manual metadata: cover image URL"
       responses:
         "201":
           description: Book and its first file created
@@ -222,6 +284,8 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
 
   /api/books/{id}:
     get:
@@ -270,7 +334,11 @@ paths:
           $ref: "#/components/responses/NotFound"
     delete:
       tags: [books]
-      summary: Delete metadata and all its files (creator or admin)
+      summary: |
+        Delete the metadata entry (creator or admin). Metadata and file
+        deletion are distinct operations: deleting files never touches the
+        metadata and deleting metadata only succeeds once every file has
+        been deleted explicitly.
       operationId: deleteBook
       security:
         - bearerAuth: []
@@ -279,6 +347,49 @@ paths:
       responses:
         "204":
           description: Deleted
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Book still has files; delete them first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error, files]
+                properties:
+                  error:
+                    type: string
+                  files:
+                    type: array
+                    description: Ids of the files still attached to the book
+                    items:
+                      type: string
+
+  /api/books/{id}/refresh:
+    post:
+      tags: [books]
+      summary: |
+        Update metadata from the book's plugin source(s) (creator or
+        admin). Re-pulls title/authors/description/cover-url and refreshes
+        the plugin file's chapter titles; materialized chapter content is
+        never overwritten.
+      operationId: refreshBook
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/BookId"
+      responses:
+        "200":
+          description: Metadata refreshed from the plugin source
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BookMeta"
+        "400":
+          description: Book has no plugin source (or the source is not loaded)
+          $ref: "#/components/responses/BadRequest"
         "403":
           $ref: "#/components/responses/Forbidden"
         "404":
@@ -1118,3 +1229,34 @@ components:
       properties:
         id:
           type: string
+
+    PluginCatalogEntry:
+      description: |
+        One book of a plugin source's live catalog, as offered right now
+        (`GET /api/plugins/{id}/catalog`), annotated with the library
+        metadata entry it is already synced into.
+      type: object
+      required: [plugin, id, title, authors, book_id]
+      properties:
+        plugin:
+          type: string
+          description: Plugin source id
+        id:
+          type: string
+          description: Book id inside the plugin
+        title:
+          type: string
+        authors:
+          type: array
+          items:
+            type: string
+        description:
+          type: string
+          nullable: true
+        cover_url:
+          type: string
+          nullable: true
+        book_id:
+          type: string
+          nullable: true
+          description: Library metadata entry the plugin book is already synced into, if any

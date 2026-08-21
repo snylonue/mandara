@@ -42,7 +42,10 @@ impl Guest for HelloPlugin {
     }
 
     fn chapter_titles(_book_id: String) -> Vec<String> {
-        ["第一章 你好，书架", "第二章 世界很大"].iter().map(|s| s.to_string()).collect()
+        ["第一章 你好，书架", "第二章 世界很大"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
     }
 
     fn get_chapter(book_id: String, index: u32) -> Option<Chapter> {
@@ -56,6 +59,24 @@ impl Guest for HelloPlugin {
                 content: "你可以用同样的方式写出自己的书籍来源插件：实现 list-books、chapter-titles 和 get-chapter 即可。\n\n参考 docs/plugins.md。".into(),
             }),
             _ => None,
+        }
+    }
+
+    /// Example book identification: any uploaded file whose name contains
+    /// "hello" is recognized as this plugin's sample book, so the server
+    /// can take the metadata from here instead of parsing the file.
+    fn identify_upload(filename: String, _file_hash: String) -> Option<BookEntry> {
+        let lower = filename.to_lowercase();
+        if lower.contains("hello") {
+            Some(BookEntry {
+                id: "hello-1".into(),
+                title: "Hello Bookshelf(示例书)".into(),
+                authors: vec!["Bookshelf Team".into()],
+                description: Some("这是一本由 wasm 插件提供的示例书。".into()),
+                cover_url: None,
+            })
+        } else {
+            None
         }
     }
 }

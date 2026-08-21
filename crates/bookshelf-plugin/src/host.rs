@@ -83,11 +83,15 @@ impl WasmPlugin {
         &self,
         f: impl FnOnce(&mut Store<HostState>, &BookshelfPlugin) -> wasmtime::Result<T>,
     ) -> Result<T> {
-        let mut store = Store::new(&self.engine, HostState { name: self.id.clone() });
+        let mut store = Store::new(
+            &self.engine,
+            HostState {
+                name: self.id.clone(),
+            },
+        );
         let bindings = BookshelfPlugin::instantiate(&mut store, &self.component, &self.linker)
             .map_err(|e| Error::Plugin(format!("instantiate `{}`: {e}", self.id)))?;
-        f(&mut store, &bindings)
-            .map_err(|e| Error::Plugin(format!("call into `{}`: {e}", self.id)))
+        f(&mut store, &bindings).map_err(|e| Error::Plugin(format!("call into `{}`: {e}", self.id)))
     }
 }
 
@@ -120,6 +124,17 @@ impl BookSource for WasmPlugin {
         Ok(chapter.map(|c| SourceChapter {
             title: c.title,
             content: c.content,
+        }))
+    }
+
+    async fn identify_upload(&self, filename: &str, file_hash: &str) -> Result<Option<SourceBook>> {
+        let book = self.call(|store, b| b.call_identify_upload(store, filename, file_hash))?;
+        Ok(book.map(|b| SourceBook {
+            id: b.id,
+            title: b.title,
+            authors: b.authors,
+            description: b.description,
+            cover_url: b.cover_url,
         }))
     }
 }

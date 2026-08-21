@@ -13,6 +13,10 @@ pub enum ApiError {
     Forbidden,
     NotFound(String),
     Conflict(String),
+    /// Deleting a metadata entry while it still owns files. Carries the
+    /// file ids so clients can delete them explicitly first (metadata and
+    /// file deletion are deliberately distinct operations).
+    ConflictWithFiles(Vec<String>),
     Internal(anyhow::Error),
 }
 
@@ -33,9 +37,26 @@ impl IntoResponse for ApiError {
             ApiError::Forbidden => (StatusCode::FORBIDDEN, "forbidden".into()),
             ApiError::NotFound(m) => (StatusCode::NOT_FOUND, m),
             ApiError::Conflict(m) => (StatusCode::CONFLICT, m),
+            ApiError::ConflictWithFiles(files) => {
+                let msg = format!(
+                    "book still has {} file(s); delete the files first",
+                    files.len()
+                );
+                return (
+                    StatusCode::CONFLICT,
+                    Json(serde_json::json!({
+                        "error": msg,
+                        "files": files,
+                    })),
+                )
+                    .into_response();
+            }
             ApiError::Internal(e) => {
                 tracing::error!("internal error: {e:#}");
-                (StatusCode::INTERNAL_SERVER_ERROR, "internal server error".into())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal server error".into(),
+                )
             }
         };
         (status, Json(serde_json::json!({ "error": msg }))).into_response()
@@ -50,6 +71,9 @@ impl std::fmt::Display for ApiError {
             ApiError::Forbidden => write!(f, "forbidden"),
             ApiError::NotFound(m) => write!(f, "not found: {m}"),
             ApiError::Conflict(m) => write!(f, "conflict: {m}"),
+            ApiError::ConflictWithFiles(files) => {
+                write!(f, "conflict: book still has {} file(s)", files.len())
+            }
             ApiError::Internal(e) => write!(f, "internal error: {e:#}"),
         }
     }

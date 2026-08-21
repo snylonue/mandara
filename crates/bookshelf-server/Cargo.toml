@@ -30,3 +30,4 @@ clap = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 dotenvy = { workspace = true }
+sha2 = "0.11.0"

@@ -1,5 +1,6 @@
-//! Book metadata endpoints: catalog, upload (new book), attach a file to an
-//! existing metadata entry.
+//! Book metadata endpoints: catalog, upload (attach / auto / manual
+//! metadata), metadata edit, refresh-from-plugin, deletion, and attaching
+//! files to an existing metadata entry.
 
 use axum::extract::{Multipart, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -11,6 +12,7 @@ use bookshelf_core::model::{BookMeta, FileMeta, Visibility};
 
 use crate::error::ApiError;
 use crate::routes::{current_user, ListParams, St};
+use crate::service::library::{MetadataOverrides, UploadMetadata};
 
 #[derive(Serialize)]
 pub struct BookDetail {
@@ -37,12 +39,48 @@ fn parse_visibility(value: Option<&str>, default: Visibility) -> Result<Visibili
     }
 }
 
-/// Read a multipart upload form: `file` (required), `visibility`, `label`.
-async fn read_upload(mut multipart: Multipart) -> Result<(Vec<u8>, String, Visibility, String), ApiError> {
+/// Metadata fields read from an upload form, besides the file itself.
+///
+/// The metadata fields of an upload that describe *where* the metadata
+/// comes from and how it is overridden.
+///
+/// - `book_id` present       -> attach to existing metadata,
+/// - `plugin_source` present  -> metadata from that plugin's catalog
+///   (`plugin_book_id` names the entry),
+/// - neither                  -> auto: plugins asked to identify the file,
+///   falling back to parsing the file.
+///
+/// `title`/`authors`/`description`/`cover_url` override the produced
+/// metadata in the auto/manual/plugin cases (never for attach).
+#[derive(Default)]
+struct UploadFields {
+    book_id: Option<String>,
+    plugin_source: Option<String>,
+    plugin_book_id: Option<String>,
+    title: Option<String>,
+    authors: Option<Vec<String>>,
+    description: Option<String>,
+    cover_url: Option<String>,
+}
+
+async fn field_text(field: axum::extract::multipart::Field<'_>) -> Result<String, ApiError> {
+    field
+        .text()
+        .await
+        .map(|s| s.trim().to_string())
+        .map_err(|e| ApiError::bad_request(format!("field read: {e}")))
+}
+
+/// Read a multipart upload form: `file` (required), `visibility`, `label`
+/// and the optional metadata fields.
+async fn read_upload(
+    mut multipart: Multipart,
+) -> Result<(Vec<u8>, String, Visibility, String, UploadFields), ApiError> {
     let mut bytes: Option<Vec<u8>> = None;
     let mut filename: Option<String> = None;
     let mut visibility = Visibility::Private;
     let mut label = String::new();
+    let mut fields = UploadFields::default();
 
     while let Some(mut field) = multipart
         .next_field()
@@ -63,19 +101,35 @@ async fn read_upload(mut multipart: Multipart) -> Result<(Vec<u8>, String, Visib
                 bytes = Some(buf);
             }
             Some("visibility") => {
-                let v = field
-                    .text()
-                    .await
-                    .map_err(|e| ApiError::bad_request(format!("visibility field: {e}")))?;
-                visibility = parse_visibility(Some(v.trim()), Visibility::Private)?;
+                let v = field_text(field).await?;
+                visibility = parse_visibility(Some(&v), Visibility::Private)?;
             }
-            Some("label") => {
-                label = field
-                    .text()
-                    .await
-                    .map_err(|e| ApiError::bad_request(format!("label field: {e}")))?
-                    .trim()
-                    .to_string();
+            Some("label") => label = field_text(field).await?,
+            Some("book_id") => fields.book_id = Some(field_text(field).await?),
+            Some("plugin_source") => fields.plugin_source = Some(field_text(field).await?),
+            Some("plugin_book_id") => fields.plugin_book_id = Some(field_text(field).await?),
+            Some("title") => fields.title = Some(field_text(field).await?),
+            Some("authors") => {
+                let raw = field_text(field).await?;
+                if !raw.is_empty() {
+                    fields.authors = Some(serde_json::from_str(&raw).map_err(|e| {
+                        ApiError::bad_request(format!(
+                            "authors must be a JSON string array, got `{raw}`: {e}"
+                        ))
+                    })?);
+                }
+            }
+            Some("description") => {
+                let v = field_text(field).await?;
+                if !v.is_empty() {
+                    fields.description = Some(v);
+                }
+            }
+            Some("cover_url") => {
+                let v = field_text(field).await?;
+                if !v.is_empty() {
+                    fields.cover_url = Some(v);
+                }
             }
             _ => {}
         }
@@ -83,7 +137,34 @@ async fn read_upload(mut multipart: Multipart) -> Result<(Vec<u8>, String, Visib
 
     let bytes = bytes.ok_or_else(|| ApiError::bad_request("missing `file` field"))?;
     let filename = filename.unwrap_or_else(|| "book.unknown".into());
-    Ok((bytes, filename, visibility, label))
+    Ok((bytes, filename, visibility, label, fields))
+}
+
+fn upload_mode(fields: &UploadFields) -> Result<UploadMetadata, ApiError> {
+    if let Some(book_id) = &fields.book_id {
+        return Ok(UploadMetadata::Attach {
+            book_id: book_id.clone(),
+        });
+    }
+    if let Some(source) = &fields.plugin_source {
+        let book_id_in_source = fields.plugin_book_id.clone().ok_or_else(|| {
+            ApiError::bad_request("`plugin_book_id` is required together with `plugin_source`")
+        })?;
+        return Ok(UploadMetadata::Plugin {
+            source: source.clone(),
+            book_id_in_source,
+        });
+    }
+    Ok(UploadMetadata::Auto)
+}
+
+fn overrides(fields: &UploadFields) -> MetadataOverrides {
+    MetadataOverrides {
+        title: fields.title.clone(),
+        authors: fields.authors.clone(),
+        description: fields.description.clone(),
+        cover_url: fields.cover_url.clone(),
+    }
 }
 
 // GET /api/books -----------------------------------------------------------
@@ -105,7 +186,10 @@ pub async fn list_books(
     Ok(Json(entries))
 }
 
-// POST /api/books (multipart: upload a new book = metadata + first file) ----
+// POST /api/books (multipart) ------------------------------------------------
+//
+// One upload endpoint for all three metadata modes; see `UploadFields` for
+// how the mode is selected.
 
 pub async fn upload_book(
     State(st): State<St>,
@@ -113,15 +197,31 @@ pub async fn upload_book(
     multipart: Multipart,
 ) -> Result<impl IntoResponse, ApiError> {
     let user = current_user(&st, &headers).await?;
-    let (bytes, filename, visibility, label) = read_upload(multipart).await?;
+    let (bytes, filename, visibility, label, fields) = read_upload(multipart).await?;
     let (book, file) = st
         .library
-        .ingest_upload(&user.id, &filename, &bytes, visibility, &label)
+        .upload_file(
+            &user,
+            crate::service::library::UploadInput {
+                bytes: &bytes,
+                filename: &filename,
+                visibility,
+                label: &label,
+            },
+            upload_mode(&fields)?,
+            &overrides(&fields),
+        )
         .await?;
-    Ok((StatusCode::CREATED, Json(BookDetail { book, files: vec![file] })))
+    Ok((
+        StatusCode::CREATED,
+        Json(BookDetail {
+            book,
+            files: vec![file],
+        }),
+    ))
 }
 
-// POST /api/books/{id}/files (multipart: attach another edition) ------------
+// POST /api/books/{id}/files (multipart: attach another edition) -------------
 
 pub async fn attach_file(
     State(st): State<St>,
@@ -140,16 +240,25 @@ pub async fn attach_file(
         .map(|f| f.visibility)
         .unwrap_or(Visibility::Private);
 
-    let (bytes, filename, visibility, label) = read_upload(multipart).await?;
-    let file = st
+    let (bytes, filename, visibility, label, fields) = read_upload(multipart).await?;
+    let (_book, file) = st
         .library
-        .attach_upload(
-            &book_id,
-            &user.id,
-            &filename,
-            &bytes,
-            if visibility == Visibility::Private { default_visibility } else { visibility },
-            &label,
+        .upload_file(
+            &user,
+            crate::service::library::UploadInput {
+                bytes: &bytes,
+                filename: &filename,
+                visibility: if visibility == Visibility::Private {
+                    default_visibility
+                } else {
+                    visibility
+                },
+                label: &label,
+            },
+            UploadMetadata::Attach {
+                book_id: book_id.clone(),
+            },
+            &overrides(&fields),
         )
         .await?;
     Ok((StatusCode::CREATED, Json(file)))
@@ -175,6 +284,12 @@ pub async fn get_book(
     Ok(Json(BookDetail { book, files }))
 }
 
+/// Check the caller may manage the book's metadata (its creator or admin).
+fn can_manage_metadata(user: &bookshelf_core::model::User, book: &BookMeta) -> bool {
+    user.role == bookshelf_core::model::Role::Admin
+        || book.created_by.as_deref() == Some(user.id.as_str())
+}
+
 // PATCH /api/books/{id} ------------------------------------------------------
 
 #[derive(Deserialize)]
@@ -195,19 +310,40 @@ pub async fn patch_book(
         .get_book(&id)
         .await?
         .ok_or_else(|| ApiError::not_found("book"))?;
-    // Only the creator of the metadata (or an admin) may edit it.
-    let owned = book.created_by.as_deref() == Some(user.id.as_str());
-    if !owned && user.role != bookshelf_core::model::Role::Admin {
+    if !can_manage_metadata(&user, &book) {
         return Err(ApiError::Forbidden);
     }
     let updated = st
         .library
-        .update_book(&id, req.title.as_deref(), req.description.as_deref())
+        .update_book(
+            &id,
+            req.title.as_deref(),
+            req.description.as_deref(),
+            None,
+            None,
+        )
         .await?;
     Ok(Json(updated))
 }
 
+// POST /api/books/{id}/refresh -------------------------------------------------
+//
+// Re-pull metadata from the plugin source(s) backing this book.
+
+pub async fn refresh_book(
+    State(st): State<St>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let user = current_user(&st, &headers).await?;
+    let book = st.library.refresh_book(&user, &id).await?;
+    Ok(Json(book))
+}
+
 // DELETE /api/books/{id} -----------------------------------------------------
+//
+// Metadata deletion is distinct from file deletion: it only succeeds once
+// every file of the book has been deleted explicitly (409 otherwise).
 
 pub async fn delete_book(
     State(st): State<St>,
@@ -220,8 +356,7 @@ pub async fn delete_book(
         .get_book(&id)
         .await?
         .ok_or_else(|| ApiError::not_found("book"))?;
-    let owned = book.created_by.as_deref() == Some(user.id.as_str());
-    if !owned && user.role != bookshelf_core::model::Role::Admin {
+    if !can_manage_metadata(&user, &book) {
         return Err(ApiError::Forbidden);
     }
     st.library.delete_book(&id).await?;

@@ -78,6 +78,7 @@ pub fn router(state: St) -> Router {
         .route("/api/auth/me", get(auth::me))
         .route("/api/plugins", get(plugins::list_plugins))
         .route("/api/plugins/sync", post(plugins::sync_plugins))
+        .route("/api/plugins/{id}/catalog", get(plugins::plugin_catalog))
         .route(
             "/api/books",
             get(books::list_books).post(books::upload_book),
@@ -89,6 +90,7 @@ pub fn router(state: St) -> Router {
                 .delete(delete(books::delete_book)),
         )
         .route("/api/books/{id}/files", post(books::attach_file))
+        .route("/api/books/{id}/refresh", post(books::refresh_book))
         .route(
             "/api/files/{id}",
             get(files::get_file)
@@ -114,7 +116,9 @@ pub fn router(state: St) -> Router {
             "/api/shares/{token}/chapters/{idx}",
             get(shares::share_chapter),
         )
-        .layer(DefaultBodyLimit::max(state.cfg.max_upload_mb as usize * 1024 * 1024))
+        .layer(DefaultBodyLimit::max(
+            state.cfg.max_upload_mb as usize * 1024 * 1024,
+        ))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
         .with_state(state.clone());

@@ -106,6 +106,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/plugins/{id}/catalog": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Browse one plugin source's live catalog (for picking metadata) */
+        get: operations["pluginCatalog"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/books": {
         parameters: {
             query?: never;
@@ -116,7 +133,14 @@ export interface paths {
         /** List visible books with their visible files */
         get: operations["listBooks"];
         put?: never;
-        /** Upload a book — creates a metadata entry plus its first file */
+        /**
+         * Upload a book — one endpoint for all three metadata modes:
+         *     attach to existing metadata (`book_id`), metadata from a plugin
+         *     source (`plugin_source` + `plugin_book_id`), or auto (plugins are
+         *     asked to identify the file, falling back to parsing the file).
+         *     `title`/`authors`/`description`/`cover_url` override the produced
+         *     metadata (manual mode; never applied when attaching).
+         */
         post: operations["uploadBook"];
         delete?: never;
         options?: never;
@@ -135,12 +159,39 @@ export interface paths {
         get: operations["getBook"];
         put?: never;
         post?: never;
-        /** Delete metadata and all its files (creator or admin) */
+        /**
+         * Delete the metadata entry (creator or admin). Metadata and file
+         *     deletion are distinct operations: deleting files never touches the
+         *     metadata and deleting metadata only succeeds once every file has
+         *     been deleted explicitly.
+         */
         delete: operations["deleteBook"];
         options?: never;
         head?: never;
         /** Edit metadata (creator or admin) */
         patch: operations["patchBook"];
+        trace?: never;
+    };
+    "/api/books/{id}/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Update metadata from the book's plugin source(s) (creator or
+         *     admin). Re-pulls title/authors/description/cover-url and refreshes
+         *     the plugin file's chapter titles; materialized chapter content is
+         *     never overwritten.
+         */
+        post: operations["refreshBook"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/books/{id}/files": {
@@ -495,6 +546,23 @@ export interface components {
         PluginInfo: {
             id: string;
         };
+        /**
+         * @description One book of a plugin source's live catalog, as offered right now
+         *     (`GET /api/plugins/{id}/catalog`), annotated with the library
+         *     metadata entry it is already synced into.
+         */
+        PluginCatalogEntry: {
+            /** @description Plugin source id */
+            plugin: string;
+            /** @description Book id inside the plugin */
+            id: string;
+            title: string;
+            authors: string[];
+            description?: string | null;
+            cover_url?: string | null;
+            /** @description Library metadata entry the plugin book is already synced into, if any */
+            book_id: string | null;
+        };
     };
     responses: {
         /** @description Error response */
@@ -704,6 +772,31 @@ export interface operations {
             403: components["responses"]["Forbidden"];
         };
     };
+    pluginCatalog: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Plugin source id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Catalog entries, annotated with their library book id when already synced */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PluginCatalogEntry"][];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
     listBooks: {
         parameters: {
             query?: {
@@ -753,6 +846,29 @@ export interface operations {
                     visibility?: "private" | "public";
                     /** @description Short human label for this edition (e.g. "proofread") */
                     label?: string;
+                    /**
+                     * @description Attach the file to this existing metadata entry instead
+                     *     of creating one. The caller must be able to see the
+                     *     book. Mutually exclusive with `plugin_source`.
+                     */
+                    book_id?: string;
+                    /**
+                     * @description Take the metadata from this plugin source's catalog
+                     *     (requires `plugin_book_id` too). The plugin book is
+                     *     synced into the library if needed and the upload is
+                     *     attached to its metadata entry.
+                     */
+                    plugin_source?: string;
+                    /** @description Id of the book inside the plugin's catalog */
+                    plugin_book_id?: string;
+                    /** @description Manual metadata: overrides the title (auto mode uses the parsed/identified one) */
+                    title?: string;
+                    /** @description Manual metadata: JSON string array, e.g. `["A","B"]` */
+                    authors?: string;
+                    /** @description Manual metadata: overrides the description */
+                    description?: string;
+                    /** @description Manual metadata: cover image URL */
+                    cover_url?: string;
                 };
             };
         };
@@ -768,6 +884,7 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
         };
     };
     getBook: {
@@ -816,6 +933,19 @@ export interface operations {
             };
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            /** @description Book still has files; delete them first */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                        /** @description Ids of the files still attached to the book */
+                        files: string[];
+                    };
+                };
+            };
         };
     };
     patchBook: {
@@ -843,6 +973,33 @@ export interface operations {
                     "application/json": components["schemas"]["BookMeta"];
                 };
             };
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    refreshBook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Book (metadata) id */
+                id: components["parameters"]["BookId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Metadata refreshed from the plugin source */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BookMeta"];
+                };
+            };
+            /** @description Book has no plugin source (or the source is not loaded) */
+            400: components["responses"]["BadRequest"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
         };

@@ -45,4 +45,14 @@ pub trait BookSource: Send + Sync {
 
     /// Fetch one chapter. `None` means the book/id does not exist.
     async fn get_chapter(&self, book_id: &str, index: u32) -> Result<Option<SourceChapter>>;
+
+    /// Try to identify the book behind an uploaded file. `filename` is the
+    /// original upload name, `file_hash` the sha-256 hex digest of the file
+    /// bytes. Returns `Ok(None)` when the source does not recognize the
+    /// file; the server asks every source in order and uses the first
+    /// match as metadata for the upload.
+    async fn identify_upload(&self, filename: &str, file_hash: &str) -> Result<Option<SourceBook>> {
+        let _ = (filename, file_hash);
+        Ok(None)
+    }
 }

@@ -51,4 +51,13 @@ world bookshelf-plugin {
 
     /// Fetch one chapter of `book-id` by index. `none` means not found.
     export get-chapter: func(book-id: string, index: u32) -> option<chapter>;
+
+    /// Try to identify the book behind an uploaded file.
+    ///
+    /// `filename` is the original upload name, `file-hash` the sha-256 hex
+    /// digest of the file bytes. Return the matching `book-entry` (usually
+    /// with an `id` already offered in `list-books`) or `none` when this
+    /// plugin does not recognize the file. The server asks every loaded
+    /// plugin in order; the first match supplies the metadata.
+    export identify-upload: func(filename: string, file-hash: string) -> option<book-entry>;
 }
