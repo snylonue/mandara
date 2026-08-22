@@ -202,9 +202,11 @@ impl WasmPlugin {
     /// trapped at the next wasm backedge.
     fn start_epoch_pump(&self) {
         let engine = self.engine.clone();
-        std::thread::spawn(move || loop {
-            std::thread::sleep(Duration::from_millis(EPOCH_PUMP_MS));
-            engine.increment_epoch();
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(Duration::from_millis(EPOCH_PUMP_MS));
+                engine.increment_epoch();
+            }
         });
     }
 
@@ -520,30 +522,34 @@ pub fn validate_config(
         if value.is_null() && field.required {
             errors.push(&field.key, "required field is missing");
         }
-        match (&field.kind, &value) {
-            (ConfigKind::Text, serde_json::Value::String(_))
-            | (ConfigKind::Number, serde_json::Value::Number(_))
-            | (ConfigKind::Boolean, serde_json::Value::Bool(_)) => {}
-            (ConfigKind::EnumOptions(options), serde_json::Value::Number(n)) => {
-                if n.as_u64()
-                    .map(|i| (i as usize) < options.len())
-                    .unwrap_or(false)
-                {
-                    // valid index
-                } else {
-                    errors.push(
-                        &field.key,
-                        format!("must be an index in 0..{} (enum options)", options.len()),
-                    );
+        // Optional fields without a default stay `null` (absent) — only
+        // present values are type-checked.
+        if !value.is_null() {
+            match (&field.kind, &value) {
+                (ConfigKind::Text, serde_json::Value::String(_))
+                | (ConfigKind::Number, serde_json::Value::Number(_))
+                | (ConfigKind::Boolean, serde_json::Value::Bool(_)) => {}
+                (ConfigKind::EnumOptions(options), serde_json::Value::Number(n)) => {
+                    if n.as_u64()
+                        .map(|i| (i as usize) < options.len())
+                        .unwrap_or(false)
+                    {
+                        // valid index
+                    } else {
+                        errors.push(
+                            &field.key,
+                            format!("must be an index in 0..{} (enum options)", options.len()),
+                        );
+                    }
                 }
-            }
-            (ConfigKind::ListOfString, serde_json::Value::Array(items)) => {
-                if !items.iter().all(|i| i.is_string()) {
-                    errors.push(&field.key, "must be an array of strings");
+                (ConfigKind::ListOfString, serde_json::Value::Array(items)) => {
+                    if !items.iter().all(|i| i.is_string()) {
+                        errors.push(&field.key, "must be an array of strings");
+                    }
                 }
-            }
-            _ => {
-                errors.push(&field.key, format!("expected {}", kind_name(&field.kind)));
+                _ => {
+                    errors.push(&field.key, format!("expected {}", kind_name(&field.kind)));
+                }
             }
         }
         if !value.is_null() {

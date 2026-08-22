@@ -2509,6 +2509,8 @@ dependencies = [
 name = "reader-plugin"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "wit-bindgen 0.60.0",
 ]
 
@@ -4167,6 +4169,8 @@ checksum = "626c4bac6755d76ffc12cb01b2eac751db1996b9e0041de9aa02c8c211ddc82c"
 name = "wiki-plugin"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "wit-bindgen 0.60.0",
 ]
 

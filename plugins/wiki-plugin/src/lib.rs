@@ -1,13 +1,20 @@
-//! Guest side of the `bookshelf:plugin/bookshelf-plugin` world (v2).
+//! Guest side of the `bookshelf:plugin/bookshelf-plugin` world (v3).
 //!
-//! A *metadata-only* source (design R5 demo): a wiki that knows a book
-//! universe but holds no chapter bodies. Every `book-entry` points its
+//! A *metadata-only* source speaking HTTP: the catalog lives on a remote
+//! site (config `base-url`), fetched through the host's `http.fetch`
+//! import — the only network a plugin gets (see
+//! `docs/plugin-http-api-design.md`). Every `book-entry` points its
 //! `content-source` at the `reader` instance and its `content-id` at the
 //! reader's book id, so the host materializes metadata from here and
-//! chapters from the reader plugin.
+//! chapters from the reader plugin (R5 demo).
 //!
-//! Catalog access is lazy: `search` + `lookup` only (no `declare`) — the
-//! library stays empty until a user picks a book from the source browser.
+//! The demo source is `scripts/mock-source.py` (port 8765); point
+//! `base-url` at any HTTP API with the same shape:
+//!   GET /api/search?q=&page_size=&offset=&limit= -> {"total","items":[...]}
+//!   GET /api/books/{id}                          -> book-entry | 404
+//!
+//! Fetch failures surface as empty results (the guest logs the
+//! underlying error); retrigger via the source browser / refresh.
 //!
 //! Build:
 //! ```sh
@@ -20,8 +27,10 @@ wit_bindgen::generate!({
     path: "../../crates/bookshelf-plugin/wit",
 });
 
+const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8765/wiki";
+
 /// Config schema field order — the host injects values in this order.
-const FIELDS: [&str; 2] = ["site-name", "page-size"];
+const FIELDS: [&str; 4] = ["base-url", "api-key", "site-name", "page-size"];
 
 fn values() -> Vec<ConfigValue> {
     bookshelf::plugin::config::configure()
@@ -43,97 +52,89 @@ fn config_number(key: &str, default: u32) -> u32 {
     }
 }
 
-/// One fake "wiki page". `site`/`page_size` shape the metadata, so the
-/// demo shows config injection end-to-end.
-struct WikiBook {
-    id: &'static str,
-    title: &'static str,
-    author: &'static str,
-    description: &'static str,
-    reader_id: &'static str,
-    chapter_count: usize,
+fn log_error(context: &str, url: &str, err: &str) {
+    bookshelf::plugin::store::log(&format!("{context} `{url}` failed: {err}"));
 }
 
-const BOOKS: &[WikiBook] = &[
-    WikiBook {
-        id: "w-1",
-        title: "星海拾遗",
-        author: "洛离",
-        description: "宇宙边缘电台的周播栏目档案。",
-        reader_id: "r-1",
-        chapter_count: 3,
-    },
-    WikiBook {
-        id: "w-2",
-        title: "雾都侦探手记",
-        author: "白川",
-        description: "终年有雾的城市里，一间小事务所的接案记录。",
-        reader_id: "r-2",
-        chapter_count: 3,
-    },
-    WikiBook {
-        id: "w-3",
-        title: "剑与茶室",
-        author: "山岚",
-        description: "隐于山道的茶室，白天泡茶，晚上磨剑。",
-        reader_id: "r-3",
-        chapter_count: 2,
-    },
-    WikiBook {
-        id: "w-4",
-        title: "云端咖啡馆",
-        author: "苏晚晴",
-        description: "开在平流层边缘的咖啡馆。",
-        reader_id: "r-4",
-        chapter_count: 2,
-    },
-    WikiBook {
-        id: "w-5",
-        title: "旧书店的猫",
-        author: "林默",
-        description: "每本旧书里都有一枚猫爪印。",
-        reader_id: "r-5",
-        chapter_count: 3,
-    },
-    WikiBook {
-        id: "w-6",
-        title: "时间旅人的信",
-        author: "迟舟",
-        description: "寄信人来自明天。",
-        reader_id: "r-6",
-        chapter_count: 3,
-    },
-    WikiBook {
-        id: "w-7",
-        title: "深海广播",
-        author: "韩潮",
-        description: "马里亚纳海沟下的电台信号。",
-        reader_id: "r-7",
-        chapter_count: 2,
-    },
-    WikiBook {
-        id: "w-8",
-        title: "第七封印物语",
-        author: "陆离",
-        description: "第七道封印之后，世界安静得不像话。",
-        reader_id: "r-8",
-        chapter_count: 3,
-    },
-];
+/// RFC 3986 percent-encoding of a UTF-8 string (query values; the host
+/// logs are query-stripped, so special characters are fine here).
+fn urlencode(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.as_bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
 
-fn entry(book: &WikiBook, site: &str) -> BookEntry {
-    BookEntry {
-        id: book.id.into(),
-        title: book.title.into(),
-        authors: vec![book.author.into()],
-        description: Some(format!(
-            "{}（词条由 {site} 提供，共 {} 章）",
-            book.description, book.chapter_count
-        )),
-        cover_url: None,
-        // Content comes from the `reader` plugin instance (R5).
-        content_source: Some("reader".into()),
-        content_id: Some(book.reader_id.into()),
+/// One remote `http.fetch` (timeout 5 s); application statuses come back
+/// as `(status, body)` — only transport-level problems are errors.
+fn http_get(url: &str) -> Result<(u16, Vec<u8>), String> {
+    let mut headers = Vec::new();
+    let api_key = config_string("api-key", "");
+    if !api_key.is_empty() {
+        headers.push(bookshelf::plugin::http::Header {
+            name: "X-Api-Key".into(),
+            value: api_key,
+        });
+    }
+    let request = bookshelf::plugin::http::Request {
+        method: "GET".into(),
+        url: url.into(),
+        headers,
+        body: None,
+        timeout_ms: Some(5_000),
+    };
+    match bookshelf::plugin::http::fetch(&request) {
+        Ok(resp) => Ok((resp.status, resp.body)),
+        Err(e) => Err(format!("{e:?}")),
+    }
+}
+
+/// The wire format of a `book-entry` on the remote source.
+#[derive(serde::Deserialize)]
+struct JsonEntry {
+    id: String,
+    title: String,
+    authors: Vec<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    cover_url: Option<String>,
+    #[serde(default)]
+    content_source: Option<String>,
+    #[serde(default)]
+    content_id: Option<String>,
+}
+
+impl From<JsonEntry> for BookEntry {
+    fn from(e: JsonEntry) -> Self {
+        BookEntry {
+            id: e.id,
+            title: e.title,
+            authors: e.authors,
+            description: e.description,
+            cover_url: e.cover_url,
+            content_source: e.content_source,
+            content_id: e.content_id,
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct JsonSearch {
+    total: u64,
+    items: Vec<JsonEntry>,
+}
+
+fn empty_search() -> SearchResult {
+    SearchResult {
+        total: 0,
+        items: Vec::new(),
     }
 }
 
@@ -146,6 +147,22 @@ impl Guest for WikiPlugin {
 
     fn config_schema() -> Vec<ConfigField> {
         vec![
+            ConfigField {
+                key: "base-url".into(),
+                label: "站点地址".into(),
+                kind: bookshelf::plugin::config::ConfigKind::Text,
+                default: Some(DEFAULT_BASE_URL.into()),
+                required: true,
+                hint: Some("远程 API 的根地址（含命名空间），如 http://127.0.0.1:8765/wiki".into()),
+            },
+            ConfigField {
+                key: "api-key".into(),
+                label: "API 密钥".into(),
+                kind: bookshelf::plugin::config::ConfigKind::Text,
+                default: None,
+                required: false,
+                hint: Some("非空时作为 X-Api-Key 请求头发送；仅在管理员配置页可见".into()),
+            },
             ConfigField {
                 key: "site-name".into(),
                 label: "站点名称".into(),
@@ -160,7 +177,7 @@ impl Guest for WikiPlugin {
                 kind: bookshelf::plugin::config::ConfigKind::Number,
                 default: Some("8".into()),
                 required: false,
-                hint: Some("模拟上游分页取回的词条数（1~8）".into()),
+                hint: Some("向上游请求的词条数上限（page_size 参数）".into()),
             },
         ]
     }
@@ -176,34 +193,57 @@ impl Guest for WikiPlugin {
     }
 
     fn search_books(query: String, offset: u32, limit: u32) -> SearchResult {
-        let site = config_string("site-name", "维基书源");
-        let page_size = config_number("page-size", 8).min(BOOKS.len() as u32);
-        let q = query.trim().to_lowercase();
-        let all: Vec<BookEntry> = BOOKS
-            .iter()
-            .take(page_size as usize)
-            .filter(|b| {
-                q.is_empty()
-                    || b.title.to_lowercase().contains(&q)
-                    || b.author.to_lowercase().contains(&q)
-            })
-            .map(|b| entry(b, &site))
-            .collect();
-        let total = all.len() as u64;
-        let items = all
-            .into_iter()
-            .skip(offset as usize)
-            .take(limit as usize)
-            .collect();
-        SearchResult { total, items }
+        let base = config_string("base-url", DEFAULT_BASE_URL);
+        let page_size = config_number("page-size", 8);
+        let url = format!(
+            "{base}/api/search?q={}&page_size={page_size}&offset={offset}&limit={limit}",
+            urlencode(&query)
+        );
+        match http_get(&url) {
+            Ok((200, body)) => match serde_json::from_slice::<JsonSearch>(&body) {
+                Ok(result) => SearchResult {
+                    total: result.total,
+                    items: result.items.into_iter().map(BookEntry::from).collect(),
+                },
+                Err(e) => {
+                    log_error("search", &url, &format!("json: {e}"));
+                    empty_search()
+                }
+            },
+            Ok((status, _)) => {
+                log_error("search", &url, &format!("status {status}"));
+                empty_search()
+            }
+            Err(e) => {
+                log_error("search", &url, &e);
+                empty_search()
+            }
+        }
     }
 
     fn get_book(book_id: String) -> Option<BookEntry> {
-        let site = config_string("site-name", "维基书源");
-        BOOKS
-            .iter()
-            .find(|b| b.id == book_id)
-            .map(|b| entry(b, &site))
+        let base = config_string("base-url", DEFAULT_BASE_URL);
+        let url = format!("{base}/api/books/{book_id}");
+        match http_get(&url) {
+            Ok((200, body)) => match serde_json::from_slice::<JsonEntry>(&body) {
+                Ok(entry) => Some(entry.into()),
+                Err(e) => {
+                    log_error("get-book", &url, &format!("json: {e}"));
+                    None
+                }
+            },
+            Ok((status, _)) => {
+                // 404 = not found, everything else = logged + none.
+                if status != 404 {
+                    log_error("get-book", &url, &format!("status {status}"));
+                }
+                None
+            }
+            Err(e) => {
+                log_error("get-book", &url, &e);
+                None
+            }
+        }
     }
 
     fn chapter_titles(_book_id: String) -> Vec<String> {
