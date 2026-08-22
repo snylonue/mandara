@@ -257,9 +257,13 @@ export interface paths {
         put?: never;
         /**
          * Materialize exactly one book of a lookup-capable source into the
-         *     library: metadata + virtual file + chapter-title placeholders;
-         *     chapter bodies stay lazy until first read. The caller claims the
-         *     metadata (becomes its creator).
+         *     library. Materialization modes (docs/plugin-http-api-design.md): a
+         *     source declaring book-file is materialized in FILE mode first —
+         *     the whole file is fetched via get-book-file and parsed like an
+         *     upload (format epub/txt, chapters, hierarchical TOC, sanitized
+         *     HTML); otherwise CHAPTER mode: metadata + virtual file +
+         *     chapter-title placeholders, chapter bodies stay lazy until first
+         *     read. The caller claims the metadata (becomes its creator).
          */
         post: operations["materializeBook"];
         delete?: never;
@@ -729,7 +733,7 @@ export interface components {
             /** @description Human-readable plugin name (from the plugin itself) */
             name: string;
             enabled: boolean;
-            /** @description Subset of [declare, search, lookup, identify, content] */
+            /** @description Subset of [declare, search, lookup, identify, content, book-file]. book-file instances materialize whole book files through the upload parser (file mode wins over chapter mode). */
             capabilities: string[];
         };
         /** @description One field of a plugin's configuration schema */
