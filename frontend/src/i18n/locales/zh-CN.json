@@ -3,7 +3,8 @@
     "brand": "📚 Bookshelf",
     "localMode": "本地模式",
     "logout": "退出",
-    "login": "登录"
+    "login": "登录",
+    "plugins": "插件管理"
   },
   "common": {
     "loading": "加载中…",
@@ -61,7 +62,9 @@
     "metadataHint": "一个条目可关联多个文件（不同格式/版本）：上传时可选择自动生成、挂到已有条目或手动填写元数据。",
     "empty": "书架空空如也，上传一本 epub/txt 试试。",
     "requestFailed": "请求失败",
-    "uploadFailed": "上传失败"
+    "uploadFailed": "上传失败",
+    "sourceBrowser": "源浏览器",
+    "sourceBrowserTitle": "从插件源添加书籍"
   },
   "book": {
     "filesTitle": "文件版本（{{count}}）",
@@ -105,7 +108,11 @@
     "sessionProgress": "进度",
     "sessionUpdated": "更新时间",
     "noSessions": "还没有会话",
-    "view": "查看"
+    "view": "查看",
+    "changeContentSource": "更换内容源",
+    "rebindTitle": "更换「{{label}}」的内容源",
+    "useAsContentSource": "设为内容源",
+    "contentSourceLine": "元数据来源：{{source}} · 章节来源：{{content}}（{{external}}）"
   },
   "reader": {
     "prev": "← 上一章",
@@ -127,5 +134,38 @@
     "updatedAt": "（更新于 {{time}}）",
     "from": "分享自 Bookshelf · ",
     "deploy": "自己部署一个 →"
+  },
+  "plugin": {
+    "chooseSource": "选择插件源…",
+    "searchPlaceholder": "搜索书名 / 作者…",
+    "noResults": "没有更多结果",
+    "inLibrary": "已在书架",
+    "addToShelf": "加入书架",
+    "more": "加载更多（还有 {{total}} 条）",
+    "manualId": "手动输入书目 ID：",
+    "manualIdPlaceholder": "如 r-1337",
+    "useManualId": "使用该 ID",
+    "manageTitle": "插件管理",
+    "registerTitle": "注册插件实例",
+    "registerHint": "从服务器已加载的 wasm 组件注册一个新实例；实例 ID 是书源 ID（元数据插件可用它指向内容插件实例）。",
+    "pickWasmFile": "选择 wasm 文件…",
+    "idPlaceholder": "实例 ID（留空自动生成）",
+    "register": "注册",
+    "instancesTitle": "已注册实例",
+    "noInstances": "还没有注册任何实例。",
+    "enabled": "已启用",
+    "disabled": "已停用",
+    "enable": "启用",
+    "disable": "停用",
+    "resync": "重新同步",
+    "configure": "配置",
+    "capabilities": "能力",
+    "noCapabilities": "无",
+    "confirmDelete": "确认删除实例 {{id}}？删除前需先删除引用它的文件。",
+    "registered": "实例已注册。",
+    "synced": "同步完成：{{n}} 本书。",
+    "configSaved": "配置已保存。",
+    "saveConfig": "保存配置",
+    "listPlaceholder": "每行一个（或逗号分隔）"
   }
 }

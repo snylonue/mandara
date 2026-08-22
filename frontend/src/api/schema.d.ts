@@ -79,8 +79,25 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List loaded wasm plugin sources */
+        /** List registered plugin instances (id, wasm file, name, capabilities) */
         get: operations["listPlugins"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plugins/wasm-files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Basenames of the compiled wasm components loaded at startup (admin only) */
+        get: operations["wasmFiles"];
         put?: never;
         post?: never;
         delete?: never;
@@ -98,7 +115,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Re-sync all plugin catalogs into the library (admin only) */
+        /** Re-sync the catalogs of every enabled declare-capable instance (admin only) */
         post: operations["syncPlugins"];
         delete?: never;
         options?: never;
@@ -106,17 +123,145 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/plugins/{id}/catalog": {
+    "/api/plugins/instances": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Browse one plugin source's live catalog (for picking metadata) */
-        get: operations["pluginCatalog"];
+        get?: never;
+        put?: never;
+        /**
+         * Register a plugin instance (admin only). `wasm_file` must be a
+         *     basename returned by GET /api/plugins/wasm-files; `config` is
+         *     validated against the plugin's config schema (defaults fill the
+         *     rest). An explicit `id` becomes the source id used in
+         *     `book_files.source` — stable ids let metadata plugins point their
+         *     `content-source` at a content plugin's instance. A declare-capable
+         *     instance is synced right away.
+         */
+        post: operations["registerInstance"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plugins/instances/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
         put?: never;
         post?: never;
+        /** Delete a plugin instance (admin only) */
+        delete: operations["deleteInstance"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plugins/instances/{id}/enabled": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Enable or disable a plugin instance (admin only). Disabling stops
+         *     sync/browse/materialize; already materialized chapters stay
+         *     readable.
+         */
+        put: operations["setInstanceEnabled"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plugins/{id}/config-schema": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Config schema plus current values for the admin form (admin only) */
+        get: operations["pluginConfigSchema"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plugins/{id}/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Validate and store an instance's configuration (admin only).
+         *     Unknown keys are rejected, required fields enforced, enum indices
+         *     range-checked; errors come back field-by-field for inline form
+         *     display. A declare-capable instance is re-synced after the change.
+         */
+        put: operations["putPluginConfig"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plugins/{id}/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Paginated catalog search of a search-capable instance. The library
+         *     does not enumerate large sources; users pick books here and
+         *     materialize them one by one. Caps: limit 1..50, offset <= 10000.
+         */
+        get: operations["searchPlugins"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plugins/{id}/books": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Materialize exactly one book of a lookup-capable source into the
+         *     library: metadata + virtual file + chapter-title placeholders;
+         *     chapter bodies stay lazy until first read. The caller claims the
+         *     metadata (becomes its creator).
+         */
+        post: operations["materializeBook"];
         delete?: never;
         options?: never;
         head?: never;
@@ -241,6 +386,29 @@ export interface paths {
         get: operations["getChapter"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/files/{id}/content-source": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rebind a file's chapter source (owner/admin only; metadata/content
+         *     separation). The target instance must exist; when it has the
+         *     `lookup` capability the book must resolve via get-book. Existing
+         *     chapter bodies are cleared and re-materialized from the new source
+         *     on next read; title placeholders refresh from the new source.
+         */
+        post: operations["setContentSource"];
         delete?: never;
         options?: never;
         head?: never;
@@ -403,6 +571,13 @@ export interface components {
             source: string;
             /** @description Id within the source (same as `id` for local files) */
             external_id: string;
+            /**
+             * @description Instance id whose chapters back this file when different from
+             *     `source` (metadata/content source separation); null = `source`.
+             */
+            content_source: string | null;
+            /** @description Book id inside the content source; null = `external_id`. */
+            content_external_id: string | null;
             /** @enum {string} */
             format: "epub" | "txt" | "plugin";
             /** @description Short human label for this edition */
@@ -545,28 +720,72 @@ export interface components {
             chapters: components["schemas"]["ChapterMeta"][];
             toc: components["schemas"]["TocNode"][];
         };
-        PluginInfo: {
+        /** @description One registered plugin instance (source id = `id`) */
+        PluginInstance: {
+            /** @description Source id used in `book_files.source` */
             id: string;
+            /** @description Basename of the wasm component backing this instance */
+            wasm_file: string;
+            /** @description Human-readable plugin name (from the plugin itself) */
+            name: string;
+            enabled: boolean;
+            /** @description Subset of [declare, search, lookup, identify, content] */
+            capabilities: string[];
         };
-        /**
-         * @description One book of a plugin source's live catalog, as offered right now
-         *     (`GET /api/plugins/{id}/catalog`), annotated with the library
-         *     metadata entry it is already synced into.
-         */
-        PluginCatalogEntry: {
-            /** @description Plugin source id */
-            plugin: string;
-            /** @description Book id inside the plugin */
+        /** @description One field of a plugin's configuration schema */
+        ConfigField: {
+            key: string;
+            /** @description zh-CN display label for the admin form */
+            label: string;
+            /** @enum {string} */
+            kind: "string" | "number" | "boolean" | "enum" | "list-of-string";
+            /** @description Enum options (kind=enum); index is the stored value */
+            options?: string[];
+            /** @description Serialized default value (JSON) */
+            default?: string | null;
+            required: boolean;
+            hint?: string | null;
+        };
+        /** @description Plugin config schema plus the stored values, for the admin form */
+        ConfigSchema: {
+            fields: components["schemas"]["ConfigField"][];
+            /** @description Current validated values keyed by field key */
+            config: Record<string, never>;
+        };
+        ConfigError: {
+            field: string;
+            message: string;
+        };
+        /** @description One search hit, annotated with the library book it is already synced into */
+        PluginSearchItem: {
+            /** @description Book id inside the source */
             id: string;
             title: string;
             authors: string[];
             description?: string | null;
             cover_url?: string | null;
-            /** @description Library metadata entry the plugin book is already synced into, if any */
+            /** @description Library metadata entry already materialized for this book, if any */
             book_id: string | null;
+        };
+        PluginSearchResponse: {
+            /** @description Source-side total match count (may be capped by the source) */
+            total: number;
+            items: components["schemas"]["PluginSearchItem"][];
         };
     };
     responses: {
+        /** @description Structured config validation errors (field-by-field for inline form display) */
+        ValidationError: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": {
+                    error: string;
+                    errors: components["schemas"]["ConfigError"][];
+                };
+            };
+        };
         /** @description Error response */
         Error: {
             headers: {
@@ -629,6 +848,8 @@ export interface components {
         FileId: string;
         /** @description Share token */
         ShareToken: string;
+        /** @description Plugin instance id (source id) */
+        PluginId: string;
     };
     requestBodies: never;
     headers: never;
@@ -740,15 +961,37 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Loaded plugin ids */
+            /** @description Registered instances in creation order */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["PluginInfo"][];
+                    "application/json": components["schemas"]["PluginInstance"][];
                 };
             };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    wasmFiles: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Wasm file basenames, e.g. ["wiki.wasm", "reader.wasm"] */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string[];
+                };
+            };
+            403: components["responses"]["Forbidden"];
         };
     };
     syncPlugins: {
@@ -774,28 +1017,217 @@ export interface operations {
             403: components["responses"]["Forbidden"];
         };
     };
-    pluginCatalog: {
+    registerInstance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Explicit instance id (default: generated uuid) */
+                    id?: string;
+                    wasm_file: string;
+                    /** @description Config values keyed by schema field keys */
+                    config?: Record<string, never>;
+                };
+            };
+        };
+        responses: {
+            /** @description The registered instance */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PluginInstance"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    deleteInstance: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                /** @description Plugin source id */
-                id: string;
+                /** @description Plugin instance id (source id) */
+                id: components["parameters"]["PluginId"];
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Catalog entries, annotated with their library book id when already synced */
+            /** @description Instance deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["NotFound"];
+            /** @description Files still reference the instance (delete them first) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                        files: string[];
+                    };
+                };
+            };
+        };
+    };
+    setInstanceEnabled: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Plugin instance id (source id) */
+                id: components["parameters"]["PluginId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    enabled: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description The updated instance */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["PluginCatalogEntry"][];
+                    "application/json": components["schemas"]["PluginInstance"];
                 };
             };
-            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    pluginConfigSchema: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Plugin instance id (source id) */
+                id: components["parameters"]["PluginId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Schema fields and the stored (validated) config values */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigSchema"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+        };
+    };
+    putPluginConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Plugin instance id (source id) */
+                id: components["parameters"]["PluginId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Config values keyed by schema field keys */
+                    config: Record<string, never>;
+                };
+            };
+        };
+        responses: {
+            /** @description The updated instance */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PluginInstance"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    searchPlugins: {
+        parameters: {
+            query?: {
+                /** @description Free-text query (empty = page through everything) */
+                q?: string;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                /** @description Plugin instance id (source id) */
+                id: components["parameters"]["PluginId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Search page, entries annotated with their library book id when already materialized */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PluginSearchResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    materializeBook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Plugin instance id (source id) */
+                id: components["parameters"]["PluginId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Book id inside the source */
+                    book_id: string;
+                };
+            };
+        };
+        responses: {
+            /** @description The materialized book with its visible files */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BookDetail"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
             404: components["responses"]["NotFound"];
         };
     };
@@ -1146,6 +1578,41 @@ export interface operations {
                     "application/json": components["schemas"]["Chapter"];
                 };
             };
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    setContentSource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Book file id */
+                id: components["parameters"]["FileId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Target plugin instance id (must exist) */
+                    content_source: string;
+                    /** @description Book id inside the content source (default: the file's external_id) */
+                    content_external_id?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description The updated file */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FileMeta"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
         };

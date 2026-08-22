@@ -32,5 +32,13 @@ export type ShareFileView = Schemas["ShareFileView"];
 export type ShareSessionView = Schemas["ShareSessionView"];
 export type ShareView = Schemas["ShareView"];
 export type ShareBookResponse = Schemas["ShareBookResponse"];
-export type PluginInfo = Schemas["PluginInfo"];
-export type PluginCatalogEntry = Schemas["PluginCatalogEntry"];
+export type PluginInstance = Schemas["PluginInstance"];
+export type PluginSearchItem = Schemas["PluginSearchItem"];
+export type PluginSearchResponse = Schemas["PluginSearchResponse"];
+export type ConfigField = Schemas["ConfigField"];
+export type ConfigSchema = Schemas["ConfigSchema"];
+export type ConfigError = Schemas["ConfigError"];
+export type ValidationErrorResponse = {
+  error: string;
+  errors: ConfigError[];
+};
