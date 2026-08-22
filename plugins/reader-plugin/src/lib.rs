@@ -178,7 +178,15 @@ impl Guest for ReaderPlugin {
     }
 
     fn capabilities() -> Vec<String> {
-        vec!["search".into(), "lookup".into(), "content".into()]
+        // Chapter mode (`content`) + file mode (`book-file`): the host
+        // tries the whole-file download first and falls back to
+        // per-chapter pulls when `get-book-file` returns none.
+        vec![
+            "search".into(),
+            "lookup".into(),
+            "content".into(),
+            "book-file".into(),
+        ]
     }
 
     fn declare() -> Option<Vec<DeclaredBook>> {
@@ -302,8 +310,26 @@ impl Guest for ReaderPlugin {
         None // no `identify` capability; host never calls this
     }
 
-    fn get_book_file(_book_id: String) -> Option<BookFile> {
-        None // no `book-file` capability yet; host never calls this
+    fn get_book_file(book_id: String) -> Option<BookFile> {
+        let base = config_string("base-url", DEFAULT_BASE_URL);
+        let url = format!("{base}/api/books/{book_id}/download");
+        match http_get(&url) {
+            Ok((200, bytes)) => Some(BookFile {
+                filename: format!("{book_id}.epub"),
+                mime: "application/epub+zip".into(),
+                bytes,
+            }),
+            Ok((status, _)) => {
+                if status != 404 {
+                    log_error("get-book-file", &url, &format!("status {status}"));
+                }
+                None
+            }
+            Err(e) => {
+                log_error("get-book-file", &url, &e);
+                None
+            }
+        }
     }
 }
 

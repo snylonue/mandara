@@ -25,7 +25,7 @@ use tracing::{info, warn};
 use bookshelf_core::model::{
     BookMeta, Chapter, ChapterFormat, ChapterMeta, FileMeta, TocNode, User, Visibility,
 };
-use bookshelf_core::source::{SourceBook, SourceChapter};
+use bookshelf_core::source::{SourceBook, SourceBookFile, SourceChapter};
 
 use crate::error::ApiError;
 use crate::rows::{BookRow, ChapterRow, ChapterTitleRow, FileRow};
@@ -167,6 +167,13 @@ impl Library {
     /// (`get-book` + chapter-title placeholders; bodies stay lazy until
     /// first read). The caller claims the metadata (becomes its creator),
     /// like an upload identified as this plugin book.
+    ///
+    /// v3 acquisition modes (docs/plugin-http-api-design.md §4.2): an
+    /// instance declaring `book-file` is materialized in **file mode**
+    /// first — the whole file is fetched via `get-book-file` and run
+    /// through the upload parser (chapters + hierarchical TOC + sanitized
+    /// HTML, stored like a local upload). Chapter mode (titles + lazy
+    /// bodies) is the fallback when the source has no file.
     pub async fn materialize_plugin_book(
         &self,
         user: &User,
@@ -180,7 +187,20 @@ impl Library {
             ))
         })?;
         let entry = SourceBook::from(entry);
-        // Titles (and bodies) come from the *content* instance.
+
+        // File mode first: a declared `book-file` capability means the
+        // source offers whole files; we fall back to chapter mode when
+        // `get-book-file` returns none/errors.
+        if self.plugins.declares(instance, "book-file").await?
+            && let Some(book_file) = self.plugins.get_book_file(instance, &entry.id).await?
+        {
+            return self
+                .materialize_file_mode(user, instance, &entry, &book_file)
+                .await;
+        }
+
+        // Chapter mode: titles (and bodies) come from the *content*
+        // instance.
         let (content_inst, content_id) = self.plugins.content_target(instance, &entry);
         let titles = self
             .plugins
@@ -195,6 +215,75 @@ impl Library {
             .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("plugin file vanished")))?;
         // Title placeholders; bodies stay lazy (first read).
         self.ensure_titles(&file).await?;
+        let book = self
+            .get_book(&book_id)
+            .await?
+            .ok_or_else(|| ApiError::not_found("book"))?;
+        Ok((book, file))
+    }
+
+    /// File-mode materialization: store a `get-book-file` result like a
+    /// local upload (format `epub`/`txt` from the file name, chapters +
+    /// hierarchical TOC + sanitized HTML). The metadata comes from the
+    /// source's `book-entry`; afterwards the DB is the source of truth
+    /// and the plugin is not consulted for content.
+    async fn materialize_file_mode(
+        &self,
+        user: &User,
+        source: &str,
+        entry: &SourceBook,
+        book_file: &SourceBookFile,
+    ) -> Result<(BookMeta, FileMeta), ApiError> {
+        let parsed = bookshelf_formats::parse(&book_file.bytes, &book_file.filename)?;
+        let (book_id, file_id) = self
+            .ensure_plugin_book(source, Some(&user.id), entry, &[])
+            .await?;
+        let format = detect_format(&book_file.filename);
+        let toc_json = serde_json::to_string(&parsed.toc).unwrap_or_else(|_| "[]".into());
+        let label = format!("{source} 下载");
+
+        // Rewrite the virtual row into a stored file: self-contained
+        // (no content indirection), real format/toc/chapter count.
+        sqlx::query(
+            "UPDATE book_files SET format = ?, label = ?, toc = ?, content_source = NULL, \
+             content_external_id = NULL, chapter_count = ? WHERE id = ?",
+        )
+        .bind(format)
+        .bind(&label)
+        .bind(toc_json)
+        .bind(parsed.chapters.len() as i64)
+        .bind(&file_id)
+        .execute(&self.db)
+        .await?;
+        sqlx::query("DELETE FROM chapters WHERE file_id = ?")
+            .bind(&file_id)
+            .execute(&self.db)
+            .await?;
+        for (idx, chapter) in parsed.chapters.iter().enumerate() {
+            sqlx::query(
+                "INSERT INTO chapters (file_id, idx, title, format, content) VALUES (?, ?, ?, ?, ?)",
+            )
+            .bind(&file_id)
+            .bind(idx as i64)
+            .bind(&chapter.title)
+            .bind(chapter.format.as_str())
+            .bind(&chapter.content)
+            .execute(&self.db)
+            .await?;
+        }
+        info!(
+            source = %source,
+            book = %book_id,
+            file = %file_id,
+            format,
+            chapters = parsed.chapters.len(),
+            "plugin book materialized in file mode (upload parser)"
+        );
+
+        let file = self
+            .get_file(&file_id)
+            .await?
+            .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("plugin file vanished")))?;
         let book = self
             .get_book(&book_id)
             .await?
@@ -863,10 +952,10 @@ impl Library {
             .bind(file_id)
             .fetch_one(&self.db)
             .await?;
-        if !raw.trim().is_empty() {
-            if let Ok(toc) = serde_json::from_str::<Vec<TocNode>>(&raw) {
-                return Ok(toc);
-            }
+        if !raw.trim().is_empty()
+            && let Ok(toc) = serde_json::from_str::<Vec<TocNode>>(&raw)
+        {
+            return Ok(toc);
         }
         let rows: Vec<ChapterTitleRow> =
             sqlx::query_as("SELECT idx, title FROM chapters WHERE file_id = ? ORDER BY idx")
@@ -916,6 +1005,109 @@ impl Library {
         if source_id == "local" {
             return Ok(None);
         }
+
+        // v3 first-access file mode: a virtual row whose source offers
+        // whole book files is materialized *as a file* on first read
+        // (once; the DB becomes the source of truth afterwards). The
+        // upload parser gives it a real TOC + sanitized HTML for free.
+        if file.format == "plugin" && file.content_source.is_none() {
+            let entry = self
+                .plugins
+                .get_book(source_id, external_id)
+                .await
+                .map_err(|e| warn!(source = %source_id, book = %external_id, "file-mode metadata unavailable: {e}"))
+                .ok()
+                .flatten()
+                .map(SourceBook::from);
+            if self.plugins.declares(source_id, "book-file").await?
+                && let Some(book_file) = self.plugins.get_book_file(source_id, external_id).await?
+            {
+                if let (Some(entry), Ok(parsed)) = (
+                    entry.as_ref(),
+                    bookshelf_formats::parse(&book_file.bytes, &book_file.filename),
+                ) {
+                    // Rewrite this row like `materialize_file_mode`
+                    // (metadata stays; content becomes self-contained).
+                    let toc_json =
+                        serde_json::to_string(&parsed.toc).unwrap_or_else(|_| "[]".into());
+                    let format = detect_format(&book_file.filename);
+                    let label = format!("{source_id} 下载");
+                    sqlx::query(
+                        "UPDATE book_files SET format = ?, label = ?, toc = ?, \
+                             content_source = NULL, content_external_id = NULL, \
+                             chapter_count = ? WHERE id = ?",
+                    )
+                    .bind(format)
+                    .bind(&label)
+                    .bind(toc_json)
+                    .bind(parsed.chapters.len() as i64)
+                    .bind(&file.id)
+                    .execute(&self.db)
+                    .await?;
+                    sqlx::query("DELETE FROM chapters WHERE file_id = ?")
+                        .bind(&file.id)
+                        .execute(&self.db)
+                        .await?;
+                    for (i, chapter) in parsed.chapters.iter().enumerate() {
+                        sqlx::query(
+                            "INSERT INTO chapters (file_id, idx, title, format, content) \
+                                 VALUES (?, ?, ?, ?, ?)",
+                        )
+                        .bind(&file.id)
+                        .bind(i as i64)
+                        .bind(&chapter.title)
+                        .bind(chapter.format.as_str())
+                        .bind(&chapter.content)
+                        .execute(&self.db)
+                        .await?;
+                    }
+                    // Keep the metadata fresh from the source entry.
+                    let authors =
+                        serde_json::to_string(&entry.authors).unwrap_or_else(|_| "[]".into());
+                    sqlx::query(
+                        "UPDATE books SET title = ?, authors = ?, description = ?, cover_url = ? \
+                             WHERE id = ?",
+                    )
+                    .bind(&entry.title)
+                    .bind(&authors)
+                    .bind(&entry.description)
+                    .bind(&entry.cover_url)
+                    .bind(&file.book_id)
+                    .execute(&self.db)
+                    .await?;
+                    info!(
+                        source = %source_id,
+                        book = %file.book_id,
+                        file = %file.id,
+                        format,
+                        chapters = parsed.chapters.len(),
+                        "plugin book materialized in file mode on first access"
+                    );
+                } else {
+                    warn!(
+                        source = %source_id,
+                        book = %external_id,
+                        "could not materialize book file (metadata or parse); \
+                         falling back to chapter mode"
+                    );
+                }
+            }
+        }
+
+        // Re-read after a possible file-mode materialization.
+        if let Some(row) = sqlx::query_as::<_, ChapterRow>(
+            "SELECT idx, title, format, content FROM chapters WHERE file_id = ? AND idx = ?",
+        )
+        .bind(&file.id)
+        .bind(idx as i64)
+        .fetch_optional(&self.db)
+        .await?
+            && !row.content.is_empty()
+        {
+            return Ok(Some(row.into_model()));
+        }
+
+        // Chapter mode (lazy per-chapter pulls from the content source).
         let Some(chapter) = self
             .plugins
             .get_chapter(source_id, external_id, idx)

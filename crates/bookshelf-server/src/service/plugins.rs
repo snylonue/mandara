@@ -24,10 +24,10 @@ use serde::Serialize;
 use sqlx::SqlitePool;
 
 use bookshelf_core::error::Error as CoreError;
-use bookshelf_core::source::{SourceBook, SourceChapter};
+use bookshelf_core::source::{SourceBook, SourceBookFile, SourceChapter};
 use bookshelf_plugin::{
-    validate_config, values_from_config, BookEntry, ConfigErrors, ConfigField, ConfigKind,
-    ConfigValue, SearchResult, WasmPlugin,
+    BookEntry, ConfigErrors, ConfigField, ConfigKind, ConfigValue, SearchResult, WasmPlugin,
+    validate_config, values_from_config,
 };
 
 use crate::error::ApiError;
@@ -518,6 +518,49 @@ impl PluginService {
             wasm.get_chapter(values, &book_id, index)
         })
         .await
+    }
+
+    /// Does the instance's wasm declare `cap`? (Used to pick acquisition
+    /// modes before calling into the plugin, e.g. file mode vs chapter
+    /// mode.)
+    pub async fn declares(&self, id: &str, cap: &str) -> Result<bool, ApiError> {
+        let row = self
+            .row(id)
+            .await?
+            .ok_or_else(|| ApiError::not_found("plugin instance"))?;
+        let wasm = self.wasm_info(&row.wasm_file).ok_or_else(|| {
+            ApiError::bad_request(format!("wasm file `{}` is not loaded", row.wasm_file))
+        })?;
+        Ok(wasm.capabilities.iter().any(|c| c == cap))
+    }
+
+    /// Whole-book file (`book-file` capability, file mode). Per the
+    /// design, plugin errors are logged and treated as "no file" — the
+    /// caller falls back to chapter mode.
+    pub async fn get_book_file(
+        &self,
+        id: &str,
+        book_id: &str,
+    ) -> Result<Option<SourceBookFile>, ApiError> {
+        let book_id = book_id.to_string();
+        let result = self
+            .call(id, true, {
+                let book_id = book_id.clone();
+                move |wasm, values| wasm.get_book_file(values, &book_id)
+            })
+            .await;
+        match result {
+            Ok(file) => Ok(file),
+            Err(e) => {
+                tracing::warn!(
+                    source = %id,
+                    book = %book_id,
+                    error = %e,
+                    "get-book-file failed; falling back to chapter mode"
+                );
+                Ok(None)
+            }
+        }
     }
 
     /// Ask every enabled `identify`-capable instance in creation order;
