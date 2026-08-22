@@ -14,10 +14,10 @@
 //!   chapters, `<div class="divimage"><a href="IMG"><img class=
 //!   "imagecontent" src="IMG"></a></div>` plates.
 //! - wenku8 puts an `插图` (color plates) chapter at the *end of every
-//!   volume* (`<后记>` then `插图`). Physical books print the plates at
-//!   the *front*; like [linovelib2epub's Wenku8Spider], the plugin moves
-//!   them to the front of their volume by default (`front`), or keeps
-//!   them in place (`end`) / drops them (`skip`) — configurable.
+//!   volume* (`<后记>` then `插图`). The plugin keeps them **in that
+//!   original position** by default (`end`), or moves them to the
+//!   volume front like the physical book / [linovelib2epub's
+//!   Wenku8Spider] (`front`), or drops them (`skip`) — configurable.
 //! - Search, listings and the txt/epub downloads are all **login-walled**
 //!   (guests get redirects to login.php / Cloudflare); only `book/` and
 //!   `reader.php` work anonymously. So this plugin does **not** declare
@@ -64,8 +64,8 @@ fn config_string(key: &str, default: &str) -> String {
 /// 插图 placement policy (index into the config enum options).
 #[derive(PartialEq, Clone, Copy)]
 enum Placement {
+    End,   // keep wenku8's own order (插图 at the end of every volume) — default
     Front, // move 插图 chapters to the front of their volume (like the print book)
-    End,   // keep wenku8's own order (插图 at the end of every volume)
     Skip,  // do not include 插图 chapters at all
 }
 
@@ -75,9 +75,9 @@ fn placement() -> Placement {
         .position(|k| *k == "illustration-placement")
         .unwrap();
     match values().get(idx) {
-        Some(ConfigValue::EnumIndex(1)) => Placement::End,
+        Some(ConfigValue::EnumIndex(1)) => Placement::Front,
         Some(ConfigValue::EnumIndex(2)) => Placement::Skip,
-        _ => Placement::Front,
+        _ => Placement::End,
     }
 }
 
@@ -707,13 +707,15 @@ impl Guest for Wenku8Plugin {
                 key: "illustration-placement".into(),
                 label: "插画章节位置".into(),
                 kind: bookshelf::plugin::config::ConfigKind::EnumOptions(vec![
+                    "保留在卷尾（原文位置，与 wenku8 目录一致）".into(),
                     "移至卷首（如实体书彩插）".into(),
-                    "保留在卷尾（与站内目录一致）".into(),
                     "跳过不收".into(),
                 ]),
                 default: Some("0".into()),
                 required: false,
-                hint: Some("wenku8 把每卷的插画章放在卷尾，阅读时默认移到卷首".into()),
+                hint: Some(
+                    "wenku8 把每卷的插画章放在卷尾：默认保留原文位置；可选移到卷首或跳过".into(),
+                ),
             },
         ]
     }

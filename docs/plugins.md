@@ -235,9 +235,10 @@ and, when it has `lookup`, the book id).
   rebind dialog, support lookup-only sources. Config: `base-url`
   (mirror-switchable), optional `referer` override, and
   `illustration-placement` — wenku8 appends an `插图` (color plates)
-  chapter at the *end of every volume*; the plugin moves it to the
-  volume front by default (like the physical book / linovelib2epub),
-  keeps it in place (`end`), or drops it (`skip`). Plates are extracted
+  chapter at the *end of every volume*; the plugin keeps it **in that
+  original position** by default (`end`), or moves it to the volume
+  front like the physical book / linovelib2epub (`front`), or drops it
+  (`skip`). Plates are extracted
   as numbered image URLs (plugin chapters are text; the host has no
   per-chapter HTML format yet). Needs the host allow list:
   `BOOKSHELF_PLUGIN_FETCH_ALLOWED_HOSTS=www.wenku8.net`.
