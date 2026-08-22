@@ -13,7 +13,8 @@
     "failed": "加载失败",
     "failed_verb": "失败",
     "chapters": "章",
-    "anonymous": "佚名"
+    "anonymous": "佚名",
+    "close": "关闭"
   },
   "auth": {
     "loginTitle": "登录",
@@ -64,7 +65,9 @@
     "requestFailed": "请求失败",
     "uploadFailed": "上传失败",
     "sourceBrowser": "源浏览器",
-    "sourceBrowserTitle": "从插件源添加书籍"
+    "sourceBrowserTitle": "从插件源添加书籍",
+    "sectionMeta": "元数据",
+    "sectionFile": "文件"
   },
   "book": {
     "filesTitle": "文件版本（{{count}}）",

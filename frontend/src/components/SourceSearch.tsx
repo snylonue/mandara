@@ -9,6 +9,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api, ApiError } from "../api";
+import { Modal } from "./Modal";
 import type { PluginInstance, PluginSearchItem, PluginSearchResponse } from "../types";
 
 export const SEARCH_PAGE_SIZE = 10;
@@ -210,13 +211,7 @@ export function SourceBrowserDialog({
       .finally(() => setManualPickLoading(false));
   };
   return (
-    <div className="card">
-      <div className="row">
-        <h3>{title}</h3>
-        <button className="link-btn" onClick={onClose}>
-          {t("library.cancel")}
-        </button>
-      </div>
+    <Modal open onClose={onClose} title={title} wide>
       <SourceSearchPane
         instances={instances}
         filter={filter}
@@ -260,7 +255,7 @@ export function SourceBrowserDialog({
         </div>
       )}
       {pickError && <div className="error">{pickError}</div>}
-    </div>
+    </Modal>
   );
 }
 

@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { useAuth } from "../auth";
+import { Modal } from "../components/Modal";
 import {
   SourceBrowserDialog,
   SourceSearchPane,
@@ -52,6 +53,8 @@ export function LibraryPage() {
   const [entries, setEntries] = useState<BookListEntry[]>([]);
   const [q, setQ] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // Which toolbar dialog is open — at most one at a time.
+  const [dialog, setDialog] = useState<"upload" | "source" | null>(null);
 
   const load = useCallback(async (query: string) => {
     try {
@@ -76,11 +79,12 @@ export function LibraryPage() {
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
-        <SourceBrowser onMaterialized={() => { setQ(""); void load(""); }} />
-        <UploadDialog
-          instances={instances}
-          onUploaded={() => { setQ(""); void load(""); }}
-        />
+        <button onClick={() => setDialog("source")}>
+          {t("library.sourceBrowser")}
+        </button>
+        <button className="primary" onClick={() => setDialog("upload")}>
+          {t("library.upload")}
+        </button>
       </div>
       {error && <div className="error">{error}</div>}
       {user?.role === "admin" && <p className="hint">{t("library.adminHint")}</p>}
@@ -91,27 +95,12 @@ export function LibraryPage() {
         ))}
       </div>
       {!entries.length && !error && <p className="hint">{t("library.empty")}</p>}
-    </div>
-  );
-}
 
-/**
- * Library toolbar "源浏览器": search a plugin source and materialize a
- * book into the library (one book at a time, R4 lazy catalog access).
- */
-function SourceBrowser({ onMaterialized }: { onMaterialized: () => void }) {
-  const { t } = useTranslation();
-  const instances = usePluginInstances();
-  const [open, setOpen] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  return (
-    <div>
-      <button className="primary" onClick={() => setOpen(true)}>
-        {t("library.sourceBrowser")}
-      </button>
+      {/* Source browser: search a plugin source and materialize a book
+          into the library (one book at a time, R4 lazy catalog access). */}
       <SourceBrowserDialog
-        open={open}
-        onClose={() => setOpen(false)}
+        open={dialog === "source"}
+        onClose={() => setDialog(null)}
         instances={instances}
         filter={(i) => i.enabled && i.capabilities.includes("lookup")}
         title={t("library.sourceBrowserTitle")}
@@ -121,12 +110,22 @@ function SourceBrowser({ onMaterialized }: { onMaterialized: () => void }) {
             method: "POST",
             body: JSON.stringify({ book_id: pick.item.id }),
           });
-          setOpen(false);
+          setDialog(null);
           setError(null);
-          onMaterialized();
+          setQ("");
+          void load("");
         }}
       />
-      {error && <div className="error">{error}</div>}
+
+      <UploadDialog
+        open={dialog === "upload"}
+        onClose={() => setDialog(null)}
+        instances={instances}
+        onUploaded={() => {
+          setQ("");
+          void load("");
+        }}
+      />
     </div>
   );
 }
@@ -140,14 +139,17 @@ function SourceBrowser({ onMaterialized }: { onMaterialized: () => void }) {
  *            and its metadata can be refreshed from it later).
  */
 function UploadDialog({
+  open,
+  onClose,
   instances,
   onUploaded,
 }: {
+  open: boolean;
+  onClose: () => void;
   instances: PluginInstance[];
   onUploaded: () => void;
 }) {
   const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<UploadMode>("auto");
   const [uploading, setUploading] = useState(false);
   const [visibility, setVisibility] = useState<Visibility>("private");
@@ -183,17 +185,22 @@ function UploadDialog({
     setPickerError(null);
   };
 
-  async function openDialog() {
-    setOpen(true);
+  // Snapshot the books the caller may attach to whenever the dialog opens.
+  useEffect(() => {
+    if (!open) return;
     setDialogError(null);
-    // Snapshot the books the caller may attach to.
-    try {
-      const list = await api<BookListEntry[]>("/books");
-      setBookOptions(list);
-    } catch {
-      setBookOptions([]);
-    }
-  }
+    let cancelled = false;
+    api<BookListEntry[]>("/books")
+      .then((list) => {
+        if (!cancelled) setBookOptions(list);
+      })
+      .catch(() => {
+        if (!cancelled) setBookOptions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
 
   function usePluginBook(pick: SourcePick) {
     setPluginRef({ source: pick.instance.id, id: pick.item.id });
@@ -237,7 +244,7 @@ function UploadDialog({
       }
       await api<BookDetail>("/books", { method: "POST", body: form });
       reset();
-      setOpen(false);
+      onClose();
       onUploaded();
     } catch (err) {
       setDialogError(err instanceof Error ? err.message : t("library.uploadFailed"));
@@ -248,131 +255,134 @@ function UploadDialog({
     }
   }
 
+  function close() {
+    reset();
+    onClose();
+  }
+
   return (
-    <div className="upload-dialog">
-      <button className="primary" onClick={() => void openDialog()}>
-        {t("library.upload")}
-      </button>
-      {open && (
-        <div className="card">
-          <div className="row">
-            <label className="radio">
-              <input
-                type="radio"
-                checked={mode === "auto"}
-                onChange={() => setMode("auto")}
-              />
-              {t("library.modeAuto")}
-            </label>
-            <label className="radio">
-              <input
-                type="radio"
-                checked={mode === "attach"}
-                onChange={() => setMode("attach")}
-              />
-              {t("library.modeAttach")}
-            </label>
-            <label className="radio">
-              <input
-                type="radio"
-                checked={mode === "manual"}
-                onChange={() => setMode("manual")}
-              />
-              {t("library.modeManual")}
-            </label>
-          </div>
-
-          {mode === "auto" && <p className="hint">{t("library.modeAutoHint")}</p>}
-
-          {mode === "attach" && (
-            <div className="field">
-              <p className="hint">{t("library.modeAttachHint")}</p>
-              <select value={attachBookId} onChange={(e) => setAttachBookId(e.target.value)}>
-                <option value="">{t("library.chooseBook")}</option>
-                {bookOptions.map(({ book }) => (
-                  <option key={book.id} value={book.id}>
-                    {book.title}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-
-          {mode === "manual" && (
-            <div className="field">
-              <p className="hint">{t("library.modeManualHint")}</p>
-              <input
-                placeholder={t("library.bookPlaceholder")}
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-              />
-              <input
-                placeholder={t("library.authorsPlaceholder")}
-                value={authors}
-                onChange={(e) => setAuthors(e.target.value)}
-              />
-              <textarea
-                placeholder={t("library.descriptionPlaceholder")}
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-              />
-              <div className="picker">
-                <SourceSearchPane
-                  instances={instances}
-                  filter={(i) => i.enabled && i.capabilities.includes("search") && i.capabilities.includes("lookup")}
-                  onPick={(pick) => {
-                    usePluginBook(pick);
-                  }}
-                />
-              </div>
-              {pickerError && <p className="error">{pickerError}</p>}
-              {pluginRef && (
-                <p className="hint">
-                  {t("library.pluginSource", { plugin: pluginRef.source, id: pluginRef.id })}{" "}
-                  <button className="link-btn" onClick={() => setPluginRef(null)}>
-                    {t("library.clearPlugin")}
-                  </button>
-                </p>
-              )}
-            </div>
-          )}
-
-          <div className="field">
-            <div className="row">
-              <select
-                value={visibility}
-                onChange={(e) => setVisibility(e.target.value as Visibility)}
-                aria-label={t("library.visibilityLabel")}
-              >
-                <option value="private">{t("library.visibilityPrivate")}</option>
-                <option value="public">{t("library.visibilityPublic")}</option>
-              </select>
-              <input
-                placeholder={t("library.labelPlaceholder")}
-                value={label}
-                onChange={(e) => setLabel(e.target.value)}
-              />
-              <button className="primary" onClick={() => void submit()} disabled={uploading}>
-                {uploading ? t("library.uploading") : t("library.upload")}
-              </button>
-              <button className="link-btn" onClick={() => { reset(); setOpen(false); }}>
-                {t("library.cancel")}
-              </button>
-            </div>
-            <label className="file-picker">
-              <span>{fileName ?? t("library.pickFile")}</span>
-              <input
-                ref={fileRef}
-                type="file"
-                accept=".epub,.txt,.text"
-                hidden
-                onChange={(e) => setFileName(e.target.files?.[0]?.name ?? null)}
-              />
-            </label>
-          </div>
-          {dialogError && <div className="error">{dialogError}</div>}
+    <Modal open={open} onClose={close} title={t("library.upload")} wide>
+      <section className="modal-section">
+        <h3>{t("library.sectionMeta")}</h3>
+        <div className="row">
+          <label className="radio">
+            <input
+              type="radio"
+              checked={mode === "auto"}
+              onChange={() => setMode("auto")}
+            />
+            {t("library.modeAuto")}
+          </label>
+          <label className="radio">
+            <input
+              type="radio"
+              checked={mode === "attach"}
+              onChange={() => setMode("attach")}
+            />
+            {t("library.modeAttach")}
+          </label>
+          <label className="radio">
+            <input
+              type="radio"
+              checked={mode === "manual"}
+              onChange={() => setMode("manual")}
+            />
+            {t("library.modeManual")}
+          </label>
         </div>
-      )}
-    </div>
+
+        {mode === "auto" && <p className="hint">{t("library.modeAutoHint")}</p>}
+
+        {mode === "attach" && (
+          <div className="field">
+            <select value={attachBookId} onChange={(e) => setAttachBookId(e.target.value)}>
+              <option value="">{t("library.chooseBook")}</option>
+              {bookOptions.map(({ book }) => (
+                <option key={book.id} value={book.id}>
+                  {book.title}
+                </option>
+              ))}
+            </select>
+            <p className="hint">{t("library.modeAttachHint")}</p>
+          </div>
+        )}
+
+        {mode === "manual" && (
+          <div className="field">
+            <input
+              placeholder={t("library.bookPlaceholder")}
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+            />
+            <input
+              placeholder={t("library.authorsPlaceholder")}
+              value={authors}
+              onChange={(e) => setAuthors(e.target.value)}
+            />
+            <textarea
+              placeholder={t("library.descriptionPlaceholder")}
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+            />
+            <p className="hint">{t("library.modeManualHint")}</p>
+            <div className="picker">
+              <SourceSearchPane
+                instances={instances}
+                filter={(i) => i.enabled && i.capabilities.includes("search") && i.capabilities.includes("lookup")}
+                onPick={(pick) => {
+                  usePluginBook(pick);
+                }}
+              />
+            </div>
+            {pickerError && <p className="error">{pickerError}</p>}
+            {pluginRef && (
+              <p className="hint">
+                {t("library.pluginSource", { plugin: pluginRef.source, id: pluginRef.id })}{" "}
+                <button className="link-btn" onClick={() => setPluginRef(null)}>
+                  {t("library.clearPlugin")}
+                </button>
+              </p>
+            )}
+          </div>
+        )}
+      </section>
+
+      <section className="modal-section">
+        <h3>{t("library.sectionFile")}</h3>
+        <label className="file-picker">
+          <span>{fileName ?? t("library.pickFile")}</span>
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".epub,.txt,.text"
+            hidden
+            onChange={(e) => setFileName(e.target.files?.[0]?.name ?? null)}
+          />
+        </label>
+        <div className="row">
+          <select
+            value={visibility}
+            onChange={(e) => setVisibility(e.target.value as Visibility)}
+            aria-label={t("library.visibilityLabel")}
+          >
+            <option value="private">{t("library.visibilityPrivate")}</option>
+            <option value="public">{t("library.visibilityPublic")}</option>
+          </select>
+          <input
+            placeholder={t("library.labelPlaceholder")}
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+          />
+        </div>
+      </section>
+
+      {dialogError && <div className="error">{dialogError}</div>}
+      <div className="modal-actions">
+        <button onClick={close}>{t("library.cancel")}</button>
+        <button className="primary" onClick={() => void submit()} disabled={uploading}>
+          {uploading ? t("library.uploading") : t("library.upload")}
+        </button>
+      </div>
+    </Modal>
   );
 }
