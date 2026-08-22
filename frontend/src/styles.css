@@ -1,14 +1,53 @@
+/*
+ * Design tokens.
+ *
+ * Every color / spacing / font size used below resolves through these
+ * variables — no hardcoded light-theme fallbacks anywhere else.
+ */
 :root {
+  color-scheme: dark;
+
+  /* base surfaces */
   --bg: #10141c;
   --bg2: #171d29;
   --card: #1c2433;
+  --panel: #141a25;
+  --card-bg: var(--card);
+
+  /* semantic palette */
+  --surface: var(--bg);
+  --surface-raised: var(--card);
   --border: #2a3550;
+  --border-strong: #40507a;
   --text: #d7dde8;
+  --text-strong: #f3f6fc;
   --muted: #8b96ab;
+  --text-muted: var(--muted);
   --accent: #5b8cff;
   --accent2: #7aa2ff;
+  --accent-hover: #709bff;
   --danger: #e06c75;
+  --danger-hover: #ea838b;
+  --ok: #98c379;
+  --warn: #e5c07b;
+
+  /* spacing scale */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+
+  /* type scale */
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-md: 14px;
+  --fs-lg: 17px;
+  --fs-xl: 20px;
+  --fs-2xl: 24px;
+
   --radius: 10px;
+  --radius-sm: 6px;
 }
 
 * {
@@ -82,13 +121,21 @@ body {
 }
 
 h1 {
-  font-size: 24px;
-  margin: 8px 0;
+  font-size: var(--fs-2xl);
+  margin: var(--space-2) 0;
+  color: var(--text-strong);
 }
 
 h2 {
-  font-size: 17px;
-  margin: 0 0 12px;
+  font-size: var(--fs-lg);
+  margin: 0 0 var(--space-3);
+  color: var(--text-strong);
+}
+
+h3 {
+  font-size: var(--fs-md);
+  margin: 0 0 var(--space-2);
+  color: var(--text-strong);
 }
 
 a {
@@ -97,7 +144,7 @@ a {
 
 .hint {
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 
 .center {
@@ -133,6 +180,7 @@ a {
   color: var(--danger);
 }
 
+/* ---- buttons: primary / default / ghost / danger × md / sm ---- */
 button {
   background: var(--bg2);
   color: var(--text);
@@ -140,11 +188,17 @@ button {
   border-radius: 8px;
   padding: 7px 14px;
   cursor: pointer;
-  font-size: 14px;
+  font-size: var(--fs-md);
+  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
 }
 
-button:hover:not(:disabled) {
+button:hover:not(:disabled):not(.link-btn) {
   border-color: var(--accent);
+  color: var(--text-strong);
+}
+
+button:active:not(:disabled):not(.link-btn) {
+  transform: translateY(1px);
 }
 
 button:disabled {
@@ -159,20 +213,80 @@ button.primary {
   font-weight: 600;
 }
 
+button.primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+  color: #fff;
+}
+
+button.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--accent2);
+}
+
+button.ghost:hover:not(:disabled) {
+  border-color: var(--border);
+}
+
+button.danger {
+  background: rgba(224, 108, 117, 0.12);
+  border-color: rgba(224, 108, 117, 0.5);
+  color: var(--danger);
+}
+
+button.danger:hover:not(:disabled) {
+  background: rgba(224, 108, 117, 0.22);
+  border-color: var(--danger);
+  color: var(--danger-hover);
+}
+
+button.sm {
+  padding: 4px 10px;
+  font-size: var(--fs-sm);
+  border-radius: var(--radius-sm);
+}
+
+/* Keyboard focus rings for every interactive control. */
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 input,
-select {
+select,
+textarea {
   background: var(--bg);
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 8px 12px;
-  font-size: 14px;
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--fs-md);
   outline: none;
+  font-family: inherit;
+  transition: border-color 0.15s;
+}
+
+textarea {
+  resize: vertical;
+  min-height: 64px;
 }
 
 input:focus,
-select:focus {
+select:focus,
+textarea:focus {
   border-color: var(--accent);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--muted);
+  opacity: 0.7;
 }
 
 /* ---- auth ---- */
@@ -621,7 +735,7 @@ select:focus {
   padding: 0;
   max-height: 22rem;
   overflow: auto;
-  border-top: 1px solid var(--border, #ddd);
+  border-top: 1px solid var(--border);
 }
 
 .source-result {
@@ -630,19 +744,19 @@ select:focus {
   align-items: center;
   gap: 0.75rem;
   padding: 0.5rem 0.25rem;
-  border-bottom: 1px solid var(--border, #ddd);
+  border-bottom: 1px solid var(--border);
 }
 
 .picker {
   max-height: 18rem;
   overflow: auto;
-  border: 1px solid var(--border, #ddd);
+  border: 1px solid var(--border);
   border-radius: 6px;
   padding: 0.5rem;
 }
 
 .plugin-instance {
-  border-bottom: 1px solid var(--border, #ddd);
+  border-bottom: 1px solid var(--border);
   padding: 0.5rem 0;
 }
 
@@ -651,6 +765,6 @@ select:focus {
   flex-direction: column;
   gap: 0.5rem;
   padding: 0.75rem;
-  background: var(--card-bg, #fafafa);
+  background: var(--panel);
   border-radius: 6px;
 }
