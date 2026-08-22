@@ -1,15 +1,15 @@
 //! Auth endpoints: register / login / me.
 
+use axum::Json;
 use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::response::IntoResponse;
-use axum::Json;
 use serde::{Deserialize, Serialize};
 
 use bookshelf_core::model::User;
 
 use crate::error::ApiError;
-use crate::routes::{current_user, St};
+use crate::routes::{St, current_user};
 use crate::rows::UserRow;
 
 #[derive(Deserialize)]
@@ -51,10 +51,10 @@ pub async fn register(
     .bind(&hash)
     .execute(&st.db)
     .await;
-    if let Err(sqlx::Error::Database(e)) = &result {
-        if e.is_unique_violation() {
-            return Err(ApiError::Conflict("username already taken".into()));
-        }
+    if let Err(sqlx::Error::Database(e)) = &result
+        && e.is_unique_violation()
+    {
+        return Err(ApiError::Conflict("username already taken".into()));
     }
     result?;
 

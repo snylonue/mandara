@@ -2,16 +2,16 @@
 //! metadata), metadata edit, refresh-from-plugin, deletion, and attaching
 //! files to an existing metadata entry.
 
+use axum::Json;
 use axum::extract::{Multipart, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
-use axum::Json;
 use serde::{Deserialize, Serialize};
 
 use bookshelf_core::model::{BookMeta, FileMeta, Visibility};
 
 use crate::error::ApiError;
-use crate::routes::{current_user, ListParams, St};
+use crate::routes::{ListParams, St, current_user};
 use crate::service::library::{MetadataOverrides, UploadMetadata};
 
 #[derive(Serialize)]

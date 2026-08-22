@@ -1,16 +1,16 @@
 //! Reading session endpoints: one user, multiple sessions per file
 //! (e.g. one per device), each with independent progress.
 
+use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
-use axum::Json;
 use serde::{Deserialize, Serialize};
 
 use bookshelf_core::model::{Position, ReadingSession};
 
 use crate::error::ApiError;
-use crate::routes::{current_user, load_visible_file, St};
+use crate::routes::{St, current_user, load_visible_file};
 use crate::rows::SessionRow;
 
 #[derive(Serialize)]

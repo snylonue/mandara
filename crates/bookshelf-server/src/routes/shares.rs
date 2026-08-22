@@ -1,17 +1,17 @@
 //! Share endpoints: public read links for files and progress links for
 //! reading sessions.
 
+use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
-use axum::Json;
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
 
 use bookshelf_core::model::{ChapterMeta, Position, Share, ShareKind, TocNode, User, Visibility};
 
 use crate::error::ApiError;
-use crate::routes::{can_manage_file, current_user, load_visible_file, St};
+use crate::routes::{St, can_manage_file, current_user, load_visible_file};
 use crate::rows::ShareRow;
 
 fn now() -> String {
@@ -56,11 +56,11 @@ async fn load_share(st: &St, token: &str) -> Result<ShareRow, ApiError> {
     let Some(row) = row else {
         return Err(ApiError::not_found("share"));
     };
-    if let Some(expires) = &row.expires_at {
-        if expires.as_str() < now().as_str() {
-            // RFC3339 strings with the same prefix format compare correctly
-            return Err(ApiError::not_found("share"));
-        }
+    if let Some(expires) = &row.expires_at
+        && expires.as_str() < now().as_str()
+    {
+        // RFC3339 strings with the same prefix format compare correctly
+        return Err(ApiError::not_found("share"));
     }
     Ok(row)
 }

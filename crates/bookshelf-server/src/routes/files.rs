@@ -1,16 +1,16 @@
 //! File endpoints: file detail (+ chapters), chapter content, visibility
 //! toggling, deletion.
 
+use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
-use axum::Json;
 use serde::{Deserialize, Serialize};
 
 use bookshelf_core::model::{BookMeta, ChapterMeta, FileMeta, TocNode, Visibility};
 
 use crate::error::ApiError;
-use crate::routes::{can_manage_file, current_user, load_visible_file, St};
+use crate::routes::{St, can_manage_file, current_user, load_visible_file};
 
 #[derive(Serialize)]
 pub struct FileDetail {

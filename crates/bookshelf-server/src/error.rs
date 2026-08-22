@@ -1,8 +1,8 @@
 //! API error type rendered as JSON.
 
+use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 
 use bookshelf_core::error::Error as CoreError;
 

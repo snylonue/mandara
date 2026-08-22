@@ -8,7 +8,7 @@ mod common;
 use std::thread;
 use std::time::Duration;
 
-use bookshelf_plugin::http_fetch::{fetch, FetchError, FetchPolicy, FetchRequest, FetchResponse};
+use bookshelf_plugin::http_fetch::{FetchError, FetchPolicy, FetchRequest, FetchResponse, fetch};
 
 use common::MockServer;
 

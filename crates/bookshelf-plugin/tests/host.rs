@@ -7,11 +7,11 @@
 use std::sync::Arc;
 
 use bookshelf_core::error::Error;
-use bookshelf_plugin::host::{
-    validate_config, values_from_config, ConfigErrors, ConfigField, ConfigKind, ConfigValue,
-    WasmPlugin, MAX_SEARCH_LIMIT,
-};
 use bookshelf_plugin::FetchPolicy;
+use bookshelf_plugin::host::{
+    ConfigErrors, ConfigField, ConfigKind, ConfigValue, MAX_SEARCH_LIMIT, WasmPlugin,
+    validate_config, values_from_config,
+};
 
 const FIXTURE: &[u8] = include_bytes!("fixtures/hello.wasm");
 
@@ -149,12 +149,14 @@ fn config_is_injected_into_calls() {
     let first = &declared[0];
     assert_eq!(first.book.id, "hello-1");
     assert!(first.book.title.contains("测试站点"));
-    assert!(first
-        .book
-        .description
-        .as_deref()
-        .unwrap()
-        .contains("tag1、tag2"));
+    assert!(
+        first
+            .book
+            .description
+            .as_deref()
+            .unwrap()
+            .contains("tag1、tag2")
+    );
     assert_eq!(first.chapters.len(), 2);
     assert!(first.chapters[0].content.contains("测试站点"));
 

@@ -16,7 +16,7 @@ use clap::Parser;
 use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
 
-use bookshelf_plugin::{load_dir, FetchPolicy};
+use bookshelf_plugin::{FetchPolicy, load_dir};
 use service::plugins::PluginService;
 use state::AppState;
 

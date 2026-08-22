@@ -261,19 +261,18 @@ struct TocBranch {
 /// (`playOrder` respected for NCX).
 fn extract_toc_tree<R: Read + Seek>(doc: &mut EpubDoc<R>) -> Vec<TocBranch> {
     // EPUB 3: the nav document listed in the manifest with the `nav` property.
-    if doc.version == epub::doc::EpubVersion::Version3_0 {
-        if let Some(nav_id) = doc.get_nav_id() {
-            if let Some((html, _)) = doc.get_resource_str(&nav_id) {
-                let nav_path = doc
-                    .resources
-                    .get(&nav_id)
-                    .map(|r| r.path.clone())
-                    .unwrap_or_default();
-                let branches = parse_nav_branches(&html, &nav_path);
-                if !branches.is_empty() {
-                    return branches;
-                }
-            }
+    if doc.version == epub::doc::EpubVersion::Version3_0
+        && let Some(nav_id) = doc.get_nav_id()
+        && let Some((html, _)) = doc.get_resource_str(&nav_id)
+    {
+        let nav_path = doc
+            .resources
+            .get(&nav_id)
+            .map(|r| r.path.clone())
+            .unwrap_or_default();
+        let branches = parse_nav_branches(&html, &nav_path);
+        if !branches.is_empty() {
+            return branches;
         }
     }
 
@@ -283,12 +282,12 @@ fn extract_toc_tree<R: Read + Seek>(doc: &mut EpubDoc<R>) -> Vec<TocBranch> {
         .values()
         .find(|r| r.mime == NCX_MIME)
         .map(|r| r.path.clone());
-    if let Some(ncx_path) = ncx_path {
-        if let Some(xml) = doc.get_resource_str_by_path(&ncx_path) {
-            let branches = parse_ncx_branches(&xml, &ncx_path);
-            if !branches.is_empty() {
-                return branches;
-            }
+    if let Some(ncx_path) = ncx_path
+        && let Some(xml) = doc.get_resource_str_by_path(&ncx_path)
+    {
+        let branches = parse_ncx_branches(&xml, &ncx_path);
+        if !branches.is_empty() {
+            return branches;
         }
     }
 
@@ -413,10 +412,10 @@ fn collect_ncx_branches(parent: &scraper::ElementRef<'_>, base: &Path) -> Vec<To
     // belong to that ancestor's subtree and are skipped at this level
     // (they are collected by the recursion below).
     for np in parent.select(&Selector::parse("navpoint").expect("static selector")) {
-        if let Some(anc) = nearest_navpoint_ancestor(np) {
-            if anc != *parent {
-                continue;
-            }
+        if let Some(anc) = nearest_navpoint_ancestor(np)
+            && anc != *parent
+        {
+            continue;
         }
         let order = np
             .value()
@@ -463,10 +462,10 @@ fn collect_ncx_branches(parent: &scraper::ElementRef<'_>, base: &Path) -> Vec<To
 fn nearest_navpoint_ancestor(el: scraper::ElementRef<'_>) -> Option<scraper::ElementRef<'_>> {
     let mut cur = el.parent();
     while let Some(p) = cur {
-        if let Node::Element(e) = p.value() {
-            if e.name() == "navpoint" {
-                return ElementRef::wrap(p);
-            }
+        if let Node::Element(e) = p.value()
+            && e.name() == "navpoint"
+        {
+            return ElementRef::wrap(p);
         }
         cur = p.parent();
     }
@@ -753,8 +752,8 @@ fn extract_heading(html: &str) -> Option<String> {
 mod tests {
     use super::*;
     use std::io::Write;
-    use zip::write::SimpleFileOptions;
     use zip::ZipWriter;
+    use zip::write::SimpleFileOptions;
 
     const PNG_1PX: &[u8] = &[
         0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
@@ -1032,9 +1031,10 @@ mod tests {
         // Links: in-page anchor and http survive; cross-chapter href is
         // dropped (the reader renders one chapter at a time).
         assert!(c0.content.contains(r##"<a href="#sec1">"##));
-        assert!(c0
-            .content
-            .contains(r#"<a href="https://example.com">外部</a>"#));
+        assert!(
+            c0.content
+                .contains(r#"<a href="https://example.com">外部</a>"#)
+        );
         assert!(c0.content.contains("<a>跨章链接</a>"));
     }
 
@@ -1146,7 +1146,7 @@ mod tests {
         assert_eq!(vol2.idx, None);
         assert_eq!(vol2.children[0].title, "第一话");
         assert_eq!(vol2.children[0].children[0].idx, Some(6)); // 第四章
-                                                               // Group titles must not concatenate their children's titles.
+        // Group titles must not concatenate their children's titles.
         assert_eq!(vol1.title, "第一卷");
         assert_eq!(vol1.children[1].title, "第二话");
     }

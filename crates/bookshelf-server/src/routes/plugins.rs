@@ -1,16 +1,16 @@
 //! Plugin endpoints: instances (admin), catalog search + materialization
 //! (any logged-in user), config schema/update (admin), re-sync (admin).
 
+use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use axum::response::IntoResponse;
-use axum::Json;
 use serde::{Deserialize, Serialize};
 
 use bookshelf_plugin::{MAX_SEARCH_LIMIT, MAX_SEARCH_OFFSET};
 
 use crate::error::ApiError;
-use crate::routes::{current_user, St};
+use crate::routes::{St, current_user};
 
 // GET /api/plugins ------------------------------------------------------------
 

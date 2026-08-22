@@ -40,10 +40,15 @@ impl MockServer {
     /// Start a server; `handler(path_and_query, method, headers, body)`
     /// returns `(status, response_headers, response_body)`.
     pub fn start(
-        handler: impl Fn(&str, &str, &[(String, String)], &[u8]) -> (u16, Vec<(String, String)>, Vec<u8>)
-            + Send
-            + Sync
-            + 'static,
+        handler: impl Fn(
+            &str,
+            &str,
+            &[(String, String)],
+            &[u8],
+        ) -> (u16, Vec<(String, String)>, Vec<u8>)
+        + Send
+        + Sync
+        + 'static,
     ) -> MockServer {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock server");
         let addr = listener.local_addr().expect("mock address");
@@ -81,9 +86,11 @@ impl MockServer {
 
 fn serve(
     mut stream: TcpStream,
-    handler: &(dyn Fn(&str, &str, &[(String, String)], &[u8]) -> (u16, Vec<(String, String)>, Vec<u8>)
-          + Send
-          + Sync),
+    handler: &(
+         dyn Fn(&str, &str, &[(String, String)], &[u8]) -> (u16, Vec<(String, String)>, Vec<u8>)
+             + Send
+             + Sync
+     ),
     requests: &Mutex<Vec<Request>>,
 ) -> std::io::Result<()> {
     stream
