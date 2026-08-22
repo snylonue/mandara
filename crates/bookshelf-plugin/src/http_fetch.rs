@@ -424,46 +424,45 @@ pub fn fetch(policy: &FetchPolicy, request: FetchRequest) -> Result<FetchRespons
                 } else {
                     None
                 };
-                if status == 301 || status == 302 || status == 303 || status == 307 || status == 308
+                if ((301..=303).contains(&status) || (307..=308).contains(&status))
+                    && let Some(location) = location
                 {
-                    if let Some(location) = location {
-                        if hops >= MAX_REDIRECTS {
-                            return Err(FetchError::RedirectLimit(MAX_REDIRECTS));
-                        }
-                        let next = url.join(&location).map_err(|e| {
-                            FetchError::InvalidUrl(format!("bad redirect `{location}`: {e}"))
-                        })?;
-                        // The hop itself is a new request: check it too.
-                        check_url(policy, &next)?;
-                        match status {
-                            // curl-style: POST/PUT etc. become GET.
-                            301..=303 if method != "HEAD" => {
-                                method = "GET".into();
-                                body = None;
-                            }
-                            307 | 308 => {} // keep method + body
-                            _ => {
-                                body = None;
-                            }
-                        }
-                        let same_origin = next.host_str() == Some(original_host.as_str())
-                            && next.port() == original_port;
-                        if !same_origin {
-                            headers.retain(|(n, _)| !is_credential_header(n));
-                        }
-                        info!(
-                            fetch = %log_url(&url),
-                            hop = hops + 1,
-                            status,
-                            location = %log_fragment(&location, Some(&next)),
-                            "plugin fetch redirect"
-                        );
-                        url = next;
-                        hops += 1;
-                        continue;
+                    if hops >= MAX_REDIRECTS {
+                        return Err(FetchError::RedirectLimit(MAX_REDIRECTS));
                     }
-                    // 3xx without Location (304 etc.): a plain response.
+                    let next = url.join(&location).map_err(|e| {
+                        FetchError::InvalidUrl(format!("bad redirect `{location}`: {e}"))
+                    })?;
+                    // The hop itself is a new request: check it too.
+                    check_url(policy, &next)?;
+                    match status {
+                        // curl-style: POST/PUT etc. become GET.
+                        301..=303 if method != "HEAD" => {
+                            method = "GET".into();
+                            body = None;
+                        }
+                        307 | 308 => {} // keep method + body
+                        _ => {
+                            body = None;
+                        }
+                    }
+                    let same_origin = next.host_str() == Some(original_host.as_str())
+                        && next.port() == original_port;
+                    if !same_origin {
+                        headers.retain(|(n, _)| !is_credential_header(n));
+                    }
+                    info!(
+                        fetch = %log_url(&url),
+                        hop = hops + 1,
+                        status,
+                        location = %log_fragment(&location, Some(&next)),
+                        "plugin fetch redirect"
+                    );
+                    url = next;
+                    hops += 1;
+                    continue;
                 }
+                // 3xx without Location (304 etc.): a plain response.
                 let final_url = url.as_str().to_string();
                 let resp_headers = response_headers(&resp);
                 let bytes = read_body(resp, policy.max_bytes)?;
