@@ -3,11 +3,16 @@ import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { useAuth } from "../auth";
+import {
+  SourceBrowserDialog,
+  SourceSearchPane,
+  usePluginInstances,
+  type SourcePick,
+} from "../components/SourceSearch";
 import type {
   BookDetail,
   BookListEntry,
-  PluginCatalogEntry,
-  PluginInfo,
+  PluginInstance,
   Visibility,
 } from "../types";
 
@@ -43,6 +48,7 @@ const splitAuthors = (raw: string) =>
 export function LibraryPage() {
   const { user } = useAuth();
   const { t } = useTranslation();
+  const instances = usePluginInstances();
   const [entries, setEntries] = useState<BookListEntry[]>([]);
   const [q, setQ] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -70,7 +76,11 @@ export function LibraryPage() {
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
-        <UploadDialog onUploaded={() => { setQ(""); void load(""); }} />
+        <SourceBrowser onMaterialized={() => { setQ(""); void load(""); }} />
+        <UploadDialog
+          instances={instances}
+          onUploaded={() => { setQ(""); void load(""); }}
+        />
       </div>
       {error && <div className="error">{error}</div>}
       {user?.role === "admin" && <p className="hint">{t("library.adminHint")}</p>}
@@ -86,6 +96,41 @@ export function LibraryPage() {
 }
 
 /**
+ * Library toolbar "源浏览器": search a plugin source and materialize a
+ * book into the library (one book at a time, R4 lazy catalog access).
+ */
+function SourceBrowser({ onMaterialized }: { onMaterialized: () => void }) {
+  const { t } = useTranslation();
+  const instances = usePluginInstances();
+  const [open, setOpen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <div>
+      <button className="primary" onClick={() => setOpen(true)}>
+        {t("library.sourceBrowser")}
+      </button>
+      <SourceBrowserDialog
+        open={open}
+        onClose={() => setOpen(false)}
+        instances={instances}
+        filter={(i) => i.enabled && i.capabilities.includes("search") && i.capabilities.includes("lookup")}
+        title={t("library.sourceBrowserTitle")}
+        onPick={async (pick: SourcePick) => {
+          await api<BookDetail>(`/plugins/${pick.instance.id}/books`, {
+            method: "POST",
+            body: JSON.stringify({ book_id: pick.item.id }),
+          });
+          setOpen(false);
+          setError(null);
+          onMaterialized();
+        }}
+      />
+      {error && <div className="error">{error}</div>}
+    </div>
+  );
+}
+
+/**
  * Upload dialog with three metadata modes:
  * - auto:    parse metadata from the file; plugins may identify it first,
  * - attach:  attach the file to an existing metadata entry,
@@ -93,7 +138,13 @@ export function LibraryPage() {
  *            catalog (the upload then stays linked to that plugin source
  *            and its metadata can be refreshed from it later).
  */
-function UploadDialog({ onUploaded }: { onUploaded: () => void }) {
+function UploadDialog({
+  instances,
+  onUploaded,
+}: {
+  instances: PluginInstance[];
+  onUploaded: () => void;
+}) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<UploadMode>("auto");
@@ -113,13 +164,9 @@ function UploadDialog({ onUploaded }: { onUploaded: () => void }) {
   const [authors, setAuthors] = useState("");
   const [description, setDescription] = useState("");
 
-  // manual mode: metadata from a plugin source
-  const [plugins, setPlugins] = useState<PluginInfo[]>([]);
-  const [pluginSel, setPluginSel] = useState("");
-  const [catalog, setCatalog] = useState<PluginCatalogEntry[]>([]);
-  const [catalogLoading, setCatalogLoading] = useState(false);
-  const [catalogFailed, setCatalogFailed] = useState(false);
+  // manual mode: metadata from a plugin source (resolved via get-book)
   const [pluginRef, setPluginRef] = useState<{ source: string; id: string } | null>(null);
+  const [pickerError, setPickerError] = useState<string | null>(null);
 
   const reset = () => {
     setMode("auto");
@@ -131,9 +178,8 @@ function UploadDialog({ onUploaded }: { onUploaded: () => void }) {
     setTitle("");
     setAuthors("");
     setDescription("");
-    setPluginSel("");
-    setCatalog([]);
     setPluginRef(null);
+    setPickerError(null);
   };
 
   async function openDialog() {
@@ -146,37 +192,14 @@ function UploadDialog({ onUploaded }: { onUploaded: () => void }) {
     } catch {
       setBookOptions([]);
     }
-    // Snapshot the plugin sources, to offer "metadata from plugin".
-    if (!plugins.length) {
-      try {
-        setPlugins(await api<PluginInfo[]>("/plugins"));
-      } catch {
-        setPlugins([]);
-      }
-    }
   }
 
-  async function pickPlugin(id: string) {
-    setPluginSel(id);
-    setCatalog([]);
-    setCatalogFailed(false);
-    setPluginRef(null);
-    if (!id) return;
-    setCatalogLoading(true);
-    try {
-      setCatalog(await api<PluginCatalogEntry[]>(`/plugins/${id}/catalog`));
-    } catch {
-      setCatalogFailed(true);
-    } finally {
-      setCatalogLoading(false);
-    }
-  }
-
-  function usePluginBook(entry: PluginCatalogEntry) {
-    setPluginRef({ source: entry.plugin, id: entry.id });
-    setTitle(entry.title);
-    setAuthors(entry.authors.join("，"));
-    setDescription(entry.description ?? "");
+  function usePluginBook(pick: SourcePick) {
+    setPluginRef({ source: pick.instance.id, id: pick.item.id });
+    setTitle(pick.item.title);
+    setAuthors(pick.item.authors.join("，"));
+    setDescription(pick.item.description ?? "");
+    setPickerError(null);
   }
 
   async function submit() {
@@ -292,35 +315,16 @@ function UploadDialog({ onUploaded }: { onUploaded: () => void }) {
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
               />
-              <div className="row">
-                <select value={pluginSel} onChange={(e) => void pickPlugin(e.target.value)}>
-                  <option value="">{t("library.choosePlugin")}</option>
-                  {plugins.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.id}
-                    </option>
-                  ))}
-                </select>
-                {pluginSel && (
-                  <select
-                    value={pluginRef?.id ?? ""}
-                    disabled={catalogLoading}
-                    onChange={(e) => {
-                      const entry = catalog.find((c) => c.id === e.target.value);
-                      if (entry) usePluginBook(entry);
-                    }}
-                  >
-                    <option value="">{t("library.choosePluginBook")}</option>
-                    {catalog.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.title}
-                        {c.book_id ? ` (${t("library.inLibrary")})` : ""}
-                      </option>
-                    ))}
-                  </select>
-                )}
+              <div className="picker">
+                <SourceSearchPane
+                  instances={instances}
+                  filter={(i) => i.enabled && i.capabilities.includes("search") && i.capabilities.includes("lookup")}
+                  onPick={(pick) => {
+                    usePluginBook(pick);
+                  }}
+                />
               </div>
-              {catalogFailed && <p className="error">{t("library.catalogFailed")}</p>}
+              {pickerError && <p className="error">{pickerError}</p>}
               {pluginRef && (
                 <p className="hint">
                   {t("library.pluginSource", { plugin: pluginRef.source, id: pluginRef.id })}{" "}
