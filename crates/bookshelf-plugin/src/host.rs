@@ -58,14 +58,26 @@ pub const MAX_BOOK_FILE_BYTES: usize = 256 * 1024 * 1024;
 /// The epoch pump fires every `EPOCH_PUMP_MS`; a guest that keeps running
 /// past its per-call epoch deadline gets trapped.
 ///
-/// The deadline is set a couple of ticks beyond the current epoch, so a
-/// call shorter than one full pump interval can never be trapped (a trap
-/// needs the deadline to be exceeded at a wasm backedge), while runaway
-/// plugins die within a few intervals.
+/// The deadline is measured in pump ticks from the start of the call, so
+/// a call shorter than one full pump interval can never be trapped (a
+/// trap needs the deadline to be exceeded at a wasm backedge).
 const EPOCH_PUMP_MS: u64 = 200;
 
-/// Deadline offset in ticks beyond the current epoch (see above).
+/// Minimum deadline offset in ticks beyond the current epoch (see
+/// [`WasmPlugin::call`]).
 const EPOCH_DEADLINE_TICKS: u64 = 2;
+
+/// A call's epoch deadline in pump ticks: the network budget plus the
+/// minimum offset. `http.fetch` waits are the dominant legitimate cost of
+/// a real-world source (wenku8 etc. answer in ~1 s), and they are already
+/// bounded by the policy's fetch timeout — so the guard bounds the *whole
+/// call* (compute + network) at roughly that budget, while keeping calls
+/// that never fetch (e.g. `declare` sync, pure-compute plugins) on the
+/// tight minimum.
+fn call_deadline_ticks(policy: &FetchPolicy) -> u64 {
+    let fetch_budget = policy.timeout_ms.div_ceil(EPOCH_PUMP_MS);
+    fetch_budget + EPOCH_DEADLINE_TICKS
+}
 
 /// Host-side state handed to plugin imports for the duration of one call.
 struct HostState {
@@ -227,11 +239,14 @@ impl WasmPlugin {
         );
         // Epoch deadline: calls shorter than one pump interval are never
         // trapped; a runaway plugin is interrupted within a few intervals.
-        store.set_epoch_deadline(EPOCH_DEADLINE_TICKS);
+        // The budget scales with the fetch-timeout cap, so real-world
+        // sources (whose `http.fetch` waits dominate the call) are not
+        // interrupted mid-network — see `call_deadline_ticks`.
+        store.set_epoch_deadline(call_deadline_ticks(&self.policy));
         let bindings = BookshelfPlugin::instantiate(&mut store, &self.component, &self.linker)
             .map_err(|e| Error::Plugin(format!("instantiate `{}`: {e}", self.file)))?;
         f(&mut store, &bindings)
-            .map_err(|e| Error::Plugin(format!("call into `{}`: {e}", self.file)))
+            .map_err(|e| Error::Plugin(format!("call into `{}`: {e:#}", self.file)))
     }
 
     /// Human-readable plugin name (same for all instances).

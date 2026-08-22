@@ -120,9 +120,13 @@ World exports:
 Host caps: `search-books` limit ≤ 50 / offset ≤ 10 000 (400 beyond);
 `declare` ≤ 10 000 books / 100 000 chapters (error beyond, warn past 90%);
 chapter content ≤ 2 MiB per call; book files ≤ 256 MiB (the http size cap
-usually applies first). Runaway plugins are trapped by the epoch deadline
-(a call running for more than a few 200 ms pump intervals is interrupted —
-keep catalog/chapter generation fast, or split it across calls). Plugin
+usually applies first). Runaway plugins are trapped by the epoch deadline:
+per call, a plugin may run for at most the fetch-timeout budget
+(`BOOKSHELF_PLUGIN_FETCH_TIMEOUT_MS`, default 30 s — network waits
+count, they are bounded by that same cap) plus a few 200 ms pump ticks;
+compute-only calls (e.g. `declare` sync) keep that minimum. A call that
+exceeds the budget is interrupted at the next wasm backedge — keep
+catalog/chapter generation fast, or split it across calls. Plugin
 calls run on blocking threads, so a slow source never stalls a worker.
 
 ## HTTP acquisition (`http.fetch`)
@@ -223,6 +227,21 @@ and, when it has `lookup`, the book id).
   `lookup` + `content` + `book-file`; chapter mode for `r-N` books, and
   `get-book-file` returning the epub the source serves (file mode wins,
   chapter mode is the fallback).
+- `plugins/wenku8-plugin/` — a **real-world** source: 轻小说文库
+  (`https://www.wenku8.net/`, GBK-encoded pages). `lookup` + `content`
+  only: wenku8's search and listings are login-walled, so books are
+  materialized by their numeric id (the number in the book URL, e.g.
+  `3617`) — the library source browser's manual-id entry, and the
+  rebind dialog, support lookup-only sources. Config: `base-url`
+  (mirror-switchable), optional `referer` override, and
+  `illustration-placement` — wenku8 appends an `插图` (color plates)
+  chapter at the *end of every volume*; the plugin moves it to the
+  volume front by default (like the physical book / linovelib2epub),
+  keeps it in place (`end`), or drops it (`skip`). Plates are extracted
+  as numbered image URLs (plugin chapters are text; the host has no
+  per-chapter HTML format yet). Needs the host allow list:
+  `BOOKSHELF_PLUGIN_FETCH_ALLOWED_HOSTS=www.wenku8.net`.
+  Build: `./scripts/build-plugins.sh wenku8`.
 
 ## Building & running the demos
 

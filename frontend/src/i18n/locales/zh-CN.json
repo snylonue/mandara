@@ -142,6 +142,7 @@
     "inLibrary": "已在书架",
     "addToShelf": "加入书架",
     "more": "加载更多（还有 {{total}} 条）",
+    "noSearch": "该来源不支持搜索，请在下方直接输入书目 ID（wenku8 等站点的搜索需登录）",
     "manualId": "手动输入书目 ID：",
     "manualIdPlaceholder": "如 r-1337",
     "useManualId": "使用该 ID",

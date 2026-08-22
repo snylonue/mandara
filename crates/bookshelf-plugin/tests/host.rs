@@ -203,7 +203,20 @@ fn upload_identification() {
 
 #[test]
 fn runaway_plugin_is_trapped_by_epoch_deadline() {
-    let plugin = load();
+    // A tight fetch-timeout cap keeps the call deadline small (the guard
+    // scales with the network budget, see `call_deadline_ticks`), so the
+    // spin loop traps after a few pump intervals instead of ~30 s.
+    let plugin = Arc::new(
+        WasmPlugin::load(
+            "hello.wasm",
+            FIXTURE.to_vec(),
+            Arc::new(FetchPolicy {
+                timeout_ms: 100,
+                ..FetchPolicy::default()
+            }),
+        )
+        .expect("fixture loads"),
+    );
     let fields = plugin.config_schema().unwrap();
     // `spin: true` makes the guest loop forever inside get_chapter.
     let config = validate_config(

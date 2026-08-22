@@ -55,6 +55,12 @@ export function SourceSearchPane({
   const [pickError, setPickError] = useState<string | null>(null);
   const seq = useRef(0);
 
+  // A selected instance without the `search` capability cannot be
+  // browsed (e.g. wenku8: login-walled search); only the manual-id entry
+  // of the host dialog applies to it.
+  const selected = options.find((i) => i.id === sel);
+  const canSearch = Boolean(selected?.capabilities.includes("search"));
+
   // Keep the selection valid when the instance list changes (e.g. after
   // registration in the admin page).
   useEffect(() => {
@@ -77,16 +83,17 @@ export function SourceSearchPane({
     }
   }
 
-  // Re-search when the instance or the query changes.
+  // Re-search when the instance or the query changes. Instances without
+  // `search` are not searched (their books are picked by id).
   useEffect(() => {
-    if (!sel) {
+    if (!sel || !canSearch) {
       setResult(null);
       setError(null);
       return;
     }
     void load(sel, q, 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sel, q]);
+  }, [sel, q, canSearch]);
 
   const total = result?.total ?? 0;
   const shown = result?.items.length ?? 0;
@@ -102,7 +109,7 @@ export function SourceSearchPane({
             </option>
           ))}
         </select>
-        {sel && (
+        {sel && canSearch && (
           <input
             className="search"
             placeholder={t("plugin.searchPlaceholder")}
@@ -110,12 +117,16 @@ export function SourceSearchPane({
             onChange={(e) => setQ(e.target.value)}
           />
         )}
+        {sel && !canSearch && <span className="hint">{t("plugin.noSearch")}</span>}
       </div>
 
       {error && <div className="error">{error}</div>}
       {loading && <p className="hint">{t("common.loading")}</p>}
-      {!loading && !error && sel && result && result.items.length === 0 && (
+      {!loading && !error && canSearch && sel && result && result.items.length === 0 && (
         <p className="hint">{t("plugin.noResults")}</p>
+      )}
+      {!loading && !error && !canSearch && !result && (
+        <p className="hint">—</p>
       )}
       <ul className="source-results">
         {result?.items.map((item) => (

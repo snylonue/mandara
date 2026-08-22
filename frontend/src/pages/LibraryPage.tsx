@@ -113,8 +113,9 @@ function SourceBrowser({ onMaterialized }: { onMaterialized: () => void }) {
         open={open}
         onClose={() => setOpen(false)}
         instances={instances}
-        filter={(i) => i.enabled && i.capabilities.includes("search") && i.capabilities.includes("lookup")}
+        filter={(i) => i.enabled && i.capabilities.includes("lookup")}
         title={t("library.sourceBrowserTitle")}
+        allowManualId
         onPick={async (pick: SourcePick) => {
           await api<BookDetail>(`/plugins/${pick.instance.id}/books`, {
             method: "POST",
