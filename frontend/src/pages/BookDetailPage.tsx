@@ -4,13 +4,19 @@ import { useTranslation } from "react-i18next";
 import { ApiError, api } from "../api";
 import { useAuth } from "../auth";
 import {
-  type BookDetail,
-  type BookMeta,
-  type FileMeta,
-  type ReadingSession,
-  type SessionsResponse,
-  type ShareInfo,
-  type Visibility,
+  SourceBrowserDialog,
+  usePluginInstances,
+  type SourcePick,
+} from "../components/SourceSearch";
+import type {
+  BookDetail,
+  BookMeta,
+  FileMeta,
+  PluginInstance,
+  ReadingSession,
+  SessionsResponse,
+  ShareInfo,
+  Visibility,
 } from "../types";
 
 const fmtTime = (s: string) => new Date(s).toLocaleString("zh-CN", { hour12: false });
@@ -33,7 +39,33 @@ function FileSection({
   setError: (msg: string | null) => void;
 }) {
   const { t } = useTranslation();
+  const instances = usePluginInstances();
+  const [rebindOpen, setRebindOpen] = useState(false);
+  const [rebindError, setRebindError] = useState<string | null>(null);
+  const [rebinding, setRebinding] = useState(false);
   const [sessions, setSessions] = useState<ReadingSession[]>([]);
+
+  async function rebind(pick: SourcePick) {
+    setRebindError(null);
+    setRebinding(true);
+    try {
+      const body: Record<string, string> = { content_source: pick.instance.id };
+      // The file's external_id (its id in the *metadata* source) rarely
+      // matches the content source's id; use the picked book's id unless
+      // the user picked the default (self) of the current source.
+      body.content_external_id = pick.item.id;
+      await api<FileMeta>(`/files/${file.id}/content-source`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      setRebindOpen(false);
+      await onChanged();
+    } catch (e) {
+      setRebindError(e instanceof ApiError ? e.message : t("common.failed_verb"));
+    } finally {
+      setRebinding(false);
+    }
+  }
 
   const loadSessions = useCallback(async () => {
     try {
@@ -108,14 +140,40 @@ function FileSection({
               </button>
             </>
           )}
+          {file.source !== "local" && canManage && (
+            <>
+              <button className="link-btn" onClick={() => setRebindOpen(true)}>
+                {t("book.changeContentSource")}
+              </button>
+              <button className="link-btn" onClick={() => void onShare(file.id, "book")}>
+                {t("book.share")}
+              </button>
+            </>
+          )}
           {file.source === "local" && !canManage && (
             <span className="hint">{t("book.othersUpload")}</span>
           )}
         </div>
       </div>
       <div className="file-meta hint">
-        {t("book.uploadedAt", { count: file.chapter_count, time: fmtTime(file.created_at) })}
+        {file.content_source
+          ? t("book.contentSourceLine", {
+              source: file.source,
+              content: file.content_source,
+              external: file.content_external_id ?? file.external_id,
+            })
+          : t("book.uploadedAt", { count: file.chapter_count, time: fmtTime(file.created_at) })}
       </div>
+      <SourceBrowserDialog
+        open={rebindOpen}
+        onClose={() => setRebindOpen(false)}
+        instances={instances}
+        filter={(i: PluginInstance) => i.enabled && i.id !== file.source && i.capabilities.includes("content")}
+        title={t("book.rebindTitle", { label: file.label || file.format })}
+        pickLabel={() => t("book.useAsContentSource")}
+        onPick={(pick) => (rebinding ? Promise.resolve() : rebind(pick))}
+      />
+      {rebindError && <div className="error">{rebindError}</div>}
 
       {sessions.length > 0 && (
         <table className="sessions">
