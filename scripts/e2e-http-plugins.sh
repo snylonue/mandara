@@ -39,9 +39,19 @@ pass() { echo "ok: $*"; }
 
 cleanup() {
     [ "$KEEP" = 1 ] && return
-    for pid in $(pgrep -f 'e2e-http' || true); do kill "$pid" 2>/dev/null || true; done
-    for pid in $(pgrep -f 'mock-source.py' || true); do kill "$pid" 2>/dev/null || true; done
-    rm -f "$DB"
+    [ -f /tmp/e2e-http-server.pid ] && kill "$(cat /tmp/e2e-http-server.pid)" 2>/dev/null || true
+    [ -f /tmp/e2e-http-mock.pid ] && kill "$(cat /tmp/e2e-http-mock.pid)" 2>/dev/null || true
+    remove_pid_stale() {
+        # kill leftover mock/servers still bound to our e2e database
+        for pid in $(pgrep -f 'mock-source.py' || true); do kill "$pid" 2>/dev/null || true; done
+        for pid in $(pgrep -f 'bookshelf-server' || true); do
+            if tr '\0' ' ' < /proc/$pid/environ 2>/dev/null | grep -q "BOOKSHELF_DB=.*e2e-http"; then
+                kill "$pid" 2>/dev/null || true
+            fi
+        done
+    }
+    remove_pid_stale
+    rm -f "$DB" /tmp/e2e-http-server.pid /tmp/e2e-http-mock.pid
 }
 trap cleanup EXIT
 
