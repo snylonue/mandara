@@ -19,15 +19,19 @@ use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Config, Engine, Store};
 
 use bookshelf_core::error::{Error, Result};
-use bookshelf_core::source::{SourceBook, SourceChapter};
+use bookshelf_core::source::{SourceBook, SourceBookFile, SourceChapter};
+
+use crate::http_fetch::{self, FetchPolicy};
 
 // Generates the bindings for the `bookshelf:plugin/bookshelf-plugin` world
 // from `wit/bookshelf.wit`:
-//   - `store::Host` + `config::Host` traits for the imported interfaces
+//   - `store::Host` + `config::Host` + `http::Host` traits for the
+//     imported interfaces
 //   - `BookshelfPlugin` world handle with `add_to_linker` / `instantiate`
 //     and `call_name`, `call_config_schema`, `call_capabilities`,
 //     `call_declare`, `call_search_books`, `call_get_book`,
-//     `call_chapter_titles`, `call_get_chapter`, `call_identify_upload`.
+//     `call_chapter_titles`, `call_get_chapter`, `call_identify_upload`,
+//     `call_get_book_file`.
 wasmtime::component::bindgen!({
     path: "wit",
     world: "bookshelf:plugin/bookshelf-plugin",
@@ -47,6 +51,9 @@ pub const MAX_SEARCH_OFFSET: u32 = 10_000;
 pub const MAX_DECLARE_BOOKS: usize = 10_000;
 pub const MAX_DECLARE_CHAPTERS: usize = 100_000;
 pub const MAX_CHAPTER_CONTENT_BYTES: usize = 2 * 1024 * 1024;
+/// Whole book files from `get-book-file` are capped at this size (the
+/// http size cap usually kicks in first; this guards non-fetched files).
+pub const MAX_BOOK_FILE_BYTES: usize = 256 * 1024 * 1024;
 
 /// The epoch pump fires every `EPOCH_PUMP_MS`; a guest that keeps running
 /// past its per-call epoch deadline gets trapped.
@@ -66,6 +73,8 @@ struct HostState {
     name: String,
     /// Validated configuration values, in `config-schema` field order.
     config: Vec<ConfigValue>,
+    /// Outbound HTTP policy (allow list, caps) — shared by all plugins.
+    policy: Arc<FetchPolicy>,
 }
 
 impl bookshelf::plugin::store::Host for HostState {
@@ -87,6 +96,61 @@ impl bookshelf::plugin::config::Host for HostState {
     }
 }
 
+impl bookshelf::plugin::http::Host for HostState {
+    /// The only way a plugin touches the outside world. The full policy
+    /// (allow list, SSRF checks incl. redirect hops, timeout/size caps,
+    /// stripped logging) lives in `http_fetch::fetch`; the server calls
+    /// plugins on blocking threads, so a slow source never stalls a tokio
+    /// worker.
+    fn fetch(
+        &mut self,
+        request: bookshelf::plugin::http::Request,
+    ) -> std::result::Result<bookshelf::plugin::http::Response, bookshelf::plugin::http::FetchError>
+    {
+        let req = http_fetch::FetchRequest {
+            method: request.method,
+            url: request.url,
+            headers: request
+                .headers
+                .into_iter()
+                .map(|h| (h.name, h.value))
+                .collect(),
+            body: request.body,
+            timeout_ms: request.timeout_ms,
+        };
+        match http_fetch::fetch(&self.policy, req) {
+            Ok(resp) => Ok(bookshelf::plugin::http::Response {
+                status: resp.status,
+                headers: resp
+                    .headers
+                    .into_iter()
+                    .map(|(name, value)| bookshelf::plugin::http::Header { name, value })
+                    .collect(),
+                body: resp.body,
+                final_url: resp.final_url,
+            }),
+            Err(e) => Err(match e {
+                http_fetch::FetchError::InvalidUrl(m) => {
+                    bookshelf::plugin::http::FetchError::InvalidUrl(m)
+                }
+                http_fetch::FetchError::Denied(m) => bookshelf::plugin::http::FetchError::Denied(m),
+                http_fetch::FetchError::RedirectLimit(n) => {
+                    bookshelf::plugin::http::FetchError::RedirectLimit(n)
+                }
+                http_fetch::FetchError::Timeout(ms) => {
+                    bookshelf::plugin::http::FetchError::Timeout(ms)
+                }
+                http_fetch::FetchError::SizeLimit(n) => {
+                    bookshelf::plugin::http::FetchError::SizeLimit(n)
+                }
+                http_fetch::FetchError::Transport(m) => {
+                    bookshelf::plugin::http::FetchError::Transport(m)
+                }
+            }),
+        }
+    }
+}
+
 /// One compiled wasm component (per wasm file, shared by all instances).
 pub struct WasmPlugin {
     /// Basename of the wasm file, e.g. `"wiki.wasm"` (instance rows refer
@@ -95,11 +159,19 @@ pub struct WasmPlugin {
     engine: Engine,
     component: Component,
     linker: Linker<HostState>,
+    /// Outbound HTTP policy of the `http.fetch` import (allow list,
+    /// timeout/size caps). Shared by every instance of this file.
+    policy: Arc<FetchPolicy>,
 }
 
 impl WasmPlugin {
-    /// Compile a component from raw wasm bytes.
-    pub fn load(file: impl Into<String>, wasm: Vec<u8>) -> anyhow::Result<Self> {
+    /// Compile a component from raw wasm bytes. `policy` governs the
+    /// `http.fetch` import of every instance of this file.
+    pub fn load(
+        file: impl Into<String>,
+        wasm: Vec<u8>,
+        policy: Arc<FetchPolicy>,
+    ) -> anyhow::Result<Self> {
         let file = file.into();
         let mut config = Config::new();
         config.wasm_component_model(true);
@@ -116,6 +188,7 @@ impl WasmPlugin {
             engine,
             component,
             linker,
+            policy,
         })
         .inspect(|plugin| plugin.start_epoch_pump())
     }
@@ -147,6 +220,7 @@ impl WasmPlugin {
             HostState {
                 name: self.file.clone(),
                 config: config.to_vec(),
+                policy: self.policy.clone(),
             },
         );
         // Epoch deadline: calls shorter than one pump interval are never
@@ -269,6 +343,33 @@ impl WasmPlugin {
         })?;
         Ok(book.map(SourceBook::from))
     }
+
+    /// Fetch a whole book file (`book-file` capability). `None` = the
+    /// source has no file for this book (chapter mode). Bytes are capped
+    /// at [`MAX_BOOK_FILE_BYTES`].
+    pub fn get_book_file(
+        &self,
+        config: &[ConfigValue],
+        book_id: &str,
+    ) -> Result<Option<SourceBookFile>> {
+        let file = self.call(config, |store, b| b.call_get_book_file(store, book_id))?;
+        match file {
+            Some(f) => {
+                if f.bytes.len() > MAX_BOOK_FILE_BYTES {
+                    return Err(Error::Plugin(format!(
+                        "`{}` book file {book_id} exceeds the {} byte cap",
+                        self.file, MAX_BOOK_FILE_BYTES
+                    )));
+                }
+                Ok(Some(SourceBookFile {
+                    filename: f.filename,
+                    mime: f.mime,
+                    bytes: f.bytes,
+                }))
+            }
+            None => Ok(None),
+        }
+    }
 }
 
 impl From<BookEntry> for SourceBook {
@@ -288,7 +389,8 @@ impl From<BookEntry> for SourceBook {
 /// Loads every `*.wasm` component in `dir`, skipping invalid files with a
 /// warning so a bad plugin never prevents the server from starting.
 /// The returned map is keyed by file basename (e.g. `"hello.wasm"`).
-pub fn load_dir(dir: &Path) -> anyhow::Result<Vec<Arc<WasmPlugin>>> {
+/// `policy` governs the `http.fetch` import of every plugin.
+pub fn load_dir(dir: &Path, policy: Arc<FetchPolicy>) -> anyhow::Result<Vec<Arc<WasmPlugin>>> {
     let mut plugins = Vec::new();
     if !dir.is_dir() {
         return Ok(plugins);
@@ -305,7 +407,7 @@ pub fn load_dir(dir: &Path) -> anyhow::Result<Vec<Arc<WasmPlugin>>> {
             .unwrap_or("plugin.wasm")
             .to_string();
         let wasm = std::fs::read(&path)?;
-        match WasmPlugin::load(file.clone(), wasm) {
+        match WasmPlugin::load(file.clone(), wasm, policy.clone()) {
             Ok(plugin) => {
                 info!(file = %file, "loaded wasm plugin");
                 plugins.push(Arc::new(plugin));

@@ -1,18 +1,20 @@
-// bookshelf plugin interface v2 (dev phase: no backward compatibility).
+// bookshelf plugin interface v3 (dev phase: no backward compatibility).
 //
-// See docs/plugin-v2-design.md for the full design. Key differences vs v1:
-//   - declarative catalogs: `declare` (small, eager) or `search-books`/
-//     `get-book` (large, lazy, paginated) instead of an unparameterized
-//     `list-books` scan;
-//   - per-instance configuration described by `config-schema` and injected
-//     by the host on every call via the `config::configure` import
-//     (statelessness is preserved: stores are per-call);
-//   - metadata and chapter content sources can be separate: `book-entry`
-//     carries a `content-source` pointer to another plugin instance;
-//   - every export is required (wit-parser 0.254 has no `optional-export`;
+// See docs/plugin-v2-design.md and docs/plugin-http-api-design.md for the
+// full design. Key differences vs v2:
+//   - new `http` import: a controlled outbound HTTP channel, the ONLY way
+//     a plugin can reach the outside world (no wasi); every request runs
+//     under host policy (allow-list, SSRF checks, timeout/size caps,
+//     redirect limit, secret-free logging);
+//   - `get-book-file`: whole book files (epub/txt downloads) flow through
+//     the host's existing upload parser, so file-mode books get chapters,
+//     hierarchical TOC and sanitized HTML like uploads (capability
+//     `"book-file"`);
+//   - every export is still required (wit-parser has no `optional-export`;
 //     unsupported features are declared via `capabilities()` and return
 //     `none`/empty).
-package bookshelf:plugin@0.2.0;
+
+package bookshelf:plugin@0.3.0;
 
 /// Shared types between bookshelf and plugins.
 interface types {
@@ -56,6 +58,21 @@ interface types {
         /// source; the host relies on pagination, not on this number).
         total: u64,
         items: list<book-entry>,
+    }
+
+    /// A whole book as the source stores it (epub/txt download).
+    ///
+    /// The host parses `bytes` with the same pipeline as uploads
+    /// (chapters, hierarchical TOC, sanitized HTML), so file-mode books
+    /// are stored like local files — the plugin is not consulted for
+    /// content afterwards.
+    record book-file {
+        /// Original download name, e.g. `"mystery-ep1.epub"`. The
+        /// extension selects the parser.
+        filename: string,
+        /// `"application/epub+zip"` | `"text/plain"` | `"text/plain; charset=utf-8"` | ...
+        mime: string,
+        bytes: list<u8>,
     }
 }
 
@@ -112,6 +129,69 @@ interface config {
     configure: func() -> list<config-value>;
 }
 
+/// Outbound HTTP (see docs/plugin-http-api-design.md §3.1).
+///
+/// This is the only network access a plugin gets. The host enforces an
+/// allow-list of hosts (empty = every `fetch` call is denied), blocks
+/// private/loopback addresses at resolve time (unless the host itself is
+/// allow-listed) — including after every redirect hop — and caps timeout,
+/// response size and redirect count. The plugin decides what an
+/// application-level status (404, ...) means: `fetch` only fails on
+/// transport-level problems.
+interface http {
+    /// One HTTP header (name/value pair).
+    record header {
+        name: string,
+        value: string,
+    }
+
+    /// A request the plugin wants the host to perform.
+    record request {
+        /// "GET", "POST", ... (host normalizes case).
+        method: string,
+        /// Absolute http(s) URL.
+        url: string,
+        /// Plugin-controlled headers. The host sends exactly these (plus
+        /// the ones it manages itself) — nothing ambient, no cookies.
+        headers: list<header>,
+        body: option<list<u8>>,
+        /// Desired timeout; the host enforces
+        /// `min(requested, BOOKSHELF_PLUGIN_FETCH_TIMEOUT_MS)`.
+        timeout-ms: option<u64>,
+    }
+
+    /// The response as received. `status` is always the raw HTTP status —
+    /// including 4xx/5xx, which are *not* errors.
+    record response {
+        status: u16,
+        headers: list<header>,
+        body: list<u8>,
+        /// URL after redirects (host-validated hops).
+        final-url: string,
+    }
+
+    /// Transport-level outcome. Application-level statuses (404, ...) are
+    /// *not* errors — the plugin inspects `response.status`.
+    variant fetch-error {
+        /// Permanent: URL parse/protocol problem.
+        invalid-url(string),
+        /// Permanent: host policy rejected the URL/scheme/address.
+        denied(string),
+        /// Permanent: too many redirect hops (host cap).
+        redirect-limit(u32),
+        /// Transient: took longer than the (capped) timeout.
+        timeout(u64),
+        /// Permanent: response exceeded the size cap (no partial data).
+        size-limit(u64),
+        /// Transient-if-connect: DNS/TLS/connection problem.
+        transport(string),
+    }
+
+    /// Perform one HTTP request. Only `url`, `method` and the given
+    /// `headers`/`body` are sent; the host never adds credentials.
+    fetch: func(request: request) -> result<response, fetch-error>;
+}
+
 /// World implemented by bookshelf plugins.
 ///
 /// A plugin is a stateless component that offers metadata (and optionally
@@ -123,11 +203,12 @@ world bookshelf-plugin {
     import types;
     import store;
     import config;
+    import http;
 
     // Types used by this world's exports come from the imported `types`
     // interface; WIT requires an explicit `use` to bring them into the
     // world scope.
-    use types.{book-entry, chapter, declared-book, search-result};
+    use types.{book-entry, chapter, declared-book, search-result, book-file};
     use config.{config-field, config-value};
 
     /// Human-readable name of this plugin (same for all instances).
@@ -138,17 +219,22 @@ world bookshelf-plugin {
     export config-schema: func() -> list<config-field>;
 
     /// Catalog access patterns implemented by this plugin: a subset of
-    /// ["declare", "search", "lookup", "identify", "content"].
+    /// ["declare", "search", "lookup", "identify", "content", "book-file"].
     ///
     /// Host policy:
-    ///   - `declare` -> the catalog is fully synced at startup / on sync;
-    ///   - `search`  -> the catalog is browsed with `search-books`;
-    ///   - `lookup`  -> single books can be fetched with `get-book`
+    ///   - `declare`  -> the catalog is fully synced at startup / on sync;
+    ///   - `search`   -> the catalog is browsed with `search-books`;
+    ///   - `lookup`   -> single books can be fetched with `get-book`
     ///     (materialize-on-demand, refresh);
-    ///   - `identify`-> the source takes part in upload identification;
-    ///   - `content` -> the source provides `chapter-titles` and
-    ///     `get-chapter`.
-    /// Metadata-only plugins declare everything except `content`.
+    ///   - `identify` -> the source takes part in upload identification;
+    ///   - `content`  -> the source provides `chapter-titles` and
+    ///     `get-chapter` (chapter mode);
+    ///   - `book-file`-> the source provides whole book files via
+    ///     `get-book-file` (file mode). When both `content` and
+    ///     `book-file` are declared, file mode wins and chapter mode is
+    ///     the fallback when `get-book-file` returns `none`.
+    /// Metadata-only plugins declare everything except `content`/
+    /// `book-file`.
     export capabilities: func() -> list<string>;
 
     /// Full static catalog, when it is small enough to enumerate eagerly
@@ -179,4 +265,11 @@ world bookshelf-plugin {
     /// plugin does not recognize the file. The server asks every enabled
     /// instance in creation order; the first match supplies the metadata.
     export identify-upload: func(filename: string, file-hash: string) -> option<book-entry>;
+
+    /// Fetch a whole book file (epub/txt download, `book-file` capability).
+    /// `none` = not available as a file (fall back to chapter mode).
+    /// Permanent `fetch` errors should surface as `none` too (the guest
+    /// logs the underlying error; the host logs and falls back to chapter
+    /// mode as well).
+    export get-book-file: func(book-id: string) -> option<book-file>;
 }

@@ -274,6 +274,11 @@ impl Guest for HelloPlugin {
             None
         }
     }
+
+    fn get_book_file(_book_id: String) -> Option<BookFile> {
+        // No `book-file` capability: the host never calls this. Stub.
+        None
+    }
 }
 
 export!(HelloPlugin);

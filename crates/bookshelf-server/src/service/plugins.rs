@@ -363,11 +363,15 @@ impl PluginService {
     /// Run `f` against an instance's wasm with its stored config injected.
     /// `require_enabled` gates sync/browse/materialize/identify; reading
     /// already-materialized chapters of a disabled instance stays allowed.
-    async fn call<T>(
+    ///
+    /// The wasm call (and any `http.fetch` it makes) executes on a
+    /// `spawn_blocking` thread, so a slow plugin/source never stalls a
+    /// tokio worker.
+    async fn call<T: Send + 'static>(
         &self,
         id: &str,
         require_enabled: bool,
-        f: impl FnOnce(&WasmPlugin, &[ConfigValue]) -> Result<T, CoreError>,
+        f: impl FnOnce(&WasmPlugin, &[ConfigValue]) -> Result<T, CoreError> + Send + 'static,
     ) -> Result<T, ApiError> {
         let row = self
             .row(id)
@@ -382,7 +386,8 @@ impl PluginService {
             ApiError::bad_request(format!("wasm file `{}` is not loaded", row.wasm_file))
         })?;
         let values = values_from_config(&wasm.schema, &row.config);
-        f(&wasm.wasm, &values).map_err(ApiError::from)
+        let plugin = wasm.wasm.clone();
+        run_wasm(plugin, values, f).await
     }
 
     /// Declared catalogs of every enabled `declare`-capable instance
@@ -401,11 +406,11 @@ impl PluginService {
             }
             self.requires_cap(&wasm, "declare")?;
             let values = values_from_config(&wasm.schema, &row.config);
-            let declared = wasm
-                .wasm
-                .declare(&values)
-                .map_err(ApiError::from)?
-                .unwrap_or_default();
+            let declared = run_wasm(wasm.wasm.clone(), values, |wasm, values| {
+                wasm.declare(values)
+            })
+            .await?
+            .unwrap_or_default();
             out.push(DeclaredCatalog {
                 instance: row.id,
                 books: declared
@@ -442,11 +447,11 @@ impl PluginService {
             }
             self.requires_cap(&wasm, "declare")?;
             let values = values_from_config(&wasm.schema, &row.config);
-            let declared = wasm
-                .wasm
-                .declare(&values)
-                .map_err(ApiError::from)?
-                .unwrap_or_default();
+            let declared = run_wasm(wasm.wasm.clone(), values, |wasm, values| {
+                wasm.declare(values)
+            })
+            .await?
+            .unwrap_or_default();
             return Ok(Some(DeclaredCatalog {
                 instance: row.id,
                 books: declared
@@ -476,22 +481,27 @@ impl PluginService {
         offset: u32,
         limit: u32,
     ) -> Result<SearchResult, ApiError> {
-        self.call(id, true, |wasm, values| {
-            wasm.search_books(values, query, offset, limit)
+        let query = query.to_string();
+        self.call(id, true, move |wasm, values| {
+            wasm.search_books(values, &query, offset, limit)
         })
         .await
     }
 
     /// Single book by id (requires `lookup`).
     pub async fn get_book(&self, id: &str, book_id: &str) -> Result<Option<BookEntry>, ApiError> {
-        self.call(id, true, |wasm, values| wasm.get_book(values, book_id))
-            .await
+        let book_id = book_id.to_string();
+        self.call(id, true, move |wasm, values| {
+            wasm.get_book(values, &book_id)
+        })
+        .await
     }
 
     /// Chapter titles (requires `content`; allowed for disabled instances).
     pub async fn chapter_titles(&self, id: &str, book_id: &str) -> Result<Vec<String>, ApiError> {
-        self.call(id, false, |wasm, values| {
-            wasm.chapter_titles(values, book_id)
+        let book_id = book_id.to_string();
+        self.call(id, false, move |wasm, values| {
+            wasm.chapter_titles(values, &book_id)
         })
         .await
     }
@@ -503,8 +513,9 @@ impl PluginService {
         book_id: &str,
         index: u32,
     ) -> Result<Option<SourceChapter>, ApiError> {
-        self.call(id, false, |wasm, values| {
-            wasm.get_chapter(values, book_id, index)
+        let book_id = book_id.to_string();
+        self.call(id, false, move |wasm, values| {
+            wasm.get_chapter(values, &book_id, index)
         })
         .await
     }
@@ -527,10 +538,12 @@ impl PluginService {
                 continue;
             }
             let values = values_from_config(&wasm.schema, &row.config);
-            if let Some(book) = wasm
-                .wasm
-                .identify_upload(&values, filename, file_hash)
-                .map_err(ApiError::from)?
+            let filename = filename.to_string();
+            let file_hash = file_hash.to_string();
+            if let Some(book) = run_wasm(wasm.wasm.clone(), values, move |wasm, values| {
+                wasm.identify_upload(values, &filename, &file_hash)
+            })
+            .await?
             {
                 return Ok(Some((row.id, book)));
             }
@@ -564,13 +577,15 @@ impl PluginService {
         })?;
         if wasm.capabilities.iter().any(|c| c == "lookup") {
             let values = values_from_config(&wasm.schema, &row.config);
-            let found = wasm
-                .wasm
-                .get_book(&values, book_id)
-                .map_err(ApiError::from)?;
+            let book_id = book_id.to_string();
+            let book_id_2 = book_id.clone();
+            let found = run_wasm(wasm.wasm.clone(), values, move |wasm, values| {
+                wasm.get_book(values, &book_id)
+            })
+            .await?;
             if found.is_none() {
                 return Err(ApiError::bad_request(format!(
-                    "content source `{source}` does not offer book `{book_id}`"
+                    "content source `{source}` does not offer book `{book_id_2}`"
                 )));
             }
         }
@@ -582,4 +597,19 @@ impl From<ConfigErrors> for ApiError {
     fn from(e: ConfigErrors) -> Self {
         ApiError::ConfigErrors(e)
     }
+}
+
+/// Run a sync call into a compiled plugin on a blocking thread, so a slow
+/// plugin (e.g. one waiting on `http.fetch`) never stalls a tokio worker.
+/// The plugin's epoch deadline still traps runaway guest code; a fetch
+/// blocked on the network outlives the deadline but never a worker.
+async fn run_wasm<T: Send + 'static>(
+    wasm: Arc<WasmPlugin>,
+    values: Vec<ConfigValue>,
+    f: impl FnOnce(&WasmPlugin, &[ConfigValue]) -> Result<T, CoreError> + Send + 'static,
+) -> Result<T, ApiError> {
+    let inner: Result<T, CoreError> = tokio::task::spawn_blocking(move || f(&wasm, &values))
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("plugin call panicked: {e}")))?;
+    inner.map_err(ApiError::from)
 }

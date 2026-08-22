@@ -239,6 +239,10 @@ impl Guest for ReaderPlugin {
     fn identify_upload(_filename: String, _file_hash: String) -> Option<BookEntry> {
         None // no `identify` capability; host never calls this
     }
+
+    fn get_book_file(_book_id: String) -> Option<BookFile> {
+        None // no `book-file` capability; host never calls this
+    }
 }
 
 export!(ReaderPlugin);

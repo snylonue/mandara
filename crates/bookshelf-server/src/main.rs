@@ -16,7 +16,7 @@ use clap::Parser;
 use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
 
-use bookshelf_plugin::load_dir;
+use bookshelf_plugin::{load_dir, FetchPolicy};
 use service::plugins::PluginService;
 use state::AppState;
 
@@ -50,8 +50,27 @@ async fn main() -> anyhow::Result<()> {
     let pool = db::connect(&cfg).await?;
     db::seed_local_user(&pool, cfg.auth_enabled).await?;
 
+    // Outbound HTTP policy of every plugin's `fetch` import
+    // (BOOKSHELF_PLUGIN_FETCH_* env vars; empty allow list = all fetches
+    // denied). Plugin calls run on blocking threads, so a slow source
+    // never stalls a worker.
+    let fetch_policy = Arc::new(FetchPolicy::from_env());
+    if fetch_policy.allowed_hosts.is_empty() {
+        tracing::warn!(
+            "plugin fetch allow list is EMPTY: every plugin http.fetch call will be denied \
+             (set BOOKSHELF_PLUGIN_FETCH_ALLOWED_HOSTS)"
+        );
+    } else {
+        tracing::info!(
+            hosts = ?fetch_policy.allowed_hosts,
+            timeout_ms = fetch_policy.timeout_ms,
+            max_bytes = fetch_policy.max_bytes,
+            "plugin fetch policy"
+        );
+    }
+
     // Load wasm plugins (the wasmtime engine needs no async runtime).
-    let wasms = load_dir(&cfg.plugins_dir)?;
+    let wasms = load_dir(&cfg.plugins_dir, fetch_policy)?;
     tracing::info!(files = wasms.len(), "loaded wasm plugin files");
 
     let plugins = Arc::new(PluginService::new(pool.clone(), wasms));

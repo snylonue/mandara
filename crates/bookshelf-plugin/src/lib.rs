@@ -7,10 +7,12 @@
 //! how to write and build a plugin.
 
 pub mod host;
+pub mod http_fetch;
 
 pub use host::{
     load_dir, validate_config, values_from_config, BookEntry, ConfigErrors, ConfigField,
     ConfigFieldError, ConfigKind, ConfigValue, DeclaredBook, SearchResult, WasmPlugin,
-    MAX_CHAPTER_CONTENT_BYTES, MAX_DECLARE_BOOKS, MAX_DECLARE_CHAPTERS, MAX_SEARCH_LIMIT,
-    MAX_SEARCH_OFFSET,
+    MAX_BOOK_FILE_BYTES, MAX_CHAPTER_CONTENT_BYTES, MAX_DECLARE_BOOKS, MAX_DECLARE_CHAPTERS,
+    MAX_SEARCH_LIMIT, MAX_SEARCH_OFFSET,
 };
+pub use http_fetch::{FetchError, FetchPolicy, FetchRequest, FetchResponse, MAX_REDIRECTS};

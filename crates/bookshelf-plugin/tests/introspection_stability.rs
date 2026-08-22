@@ -6,7 +6,12 @@ fn introspection_is_stable_under_epoch_pump() {
         "../../plugins-built/reader.wasm",
     ] {
         let wasm = std::fs::read(file).expect("read");
-        let plugin = bookshelf_plugin::WasmPlugin::load("t.wasm", wasm).expect("load");
+        let plugin = bookshelf_plugin::WasmPlugin::load(
+            "t.wasm",
+            wasm,
+            std::sync::Arc::new(bookshelf_plugin::FetchPolicy::default()),
+        )
+        .expect("load");
         let mut fails = 0;
         let mut last = String::new();
         for i in 0..30 {

@@ -11,11 +11,19 @@ use bookshelf_plugin::host::{
     validate_config, values_from_config, ConfigErrors, ConfigField, ConfigKind, ConfigValue,
     WasmPlugin, MAX_SEARCH_LIMIT,
 };
+use bookshelf_plugin::FetchPolicy;
 
 const FIXTURE: &[u8] = include_bytes!("fixtures/hello.wasm");
 
 fn load() -> Arc<WasmPlugin> {
-    Arc::new(WasmPlugin::load("hello.wasm", FIXTURE.to_vec()).expect("fixture loads"))
+    Arc::new(
+        WasmPlugin::load(
+            "hello.wasm",
+            FIXTURE.to_vec(),
+            Arc::new(FetchPolicy::default()),
+        )
+        .expect("fixture loads"),
+    )
 }
 
 #[test]

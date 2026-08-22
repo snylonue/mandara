@@ -27,3 +27,17 @@ pub struct SourceChapter {
     pub title: String,
     pub content: String,
 }
+
+/// A whole book file as a plugin source stores it (epub/txt download,
+/// `get-book-file`). The server parses it with the upload pipeline and
+/// stores it like a local file — afterwards the plugin is not consulted
+/// for content.
+#[derive(Debug, Clone)]
+pub struct SourceBookFile {
+    /// Original download name; the extension selects the parser.
+    pub filename: String,
+    /// MIME type as reported by the source.
+    pub mime: String,
+    /// File bytes (epub or txt).
+    pub bytes: Vec<u8>,
+}
