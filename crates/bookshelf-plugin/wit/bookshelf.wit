@@ -1,4 +1,18 @@
-package bookshelf:plugin@0.1.0;
+// bookshelf plugin interface v2 (dev phase: no backward compatibility).
+//
+// See docs/plugin-v2-design.md for the full design. Key differences vs v1:
+//   - declarative catalogs: `declare` (small, eager) or `search-books`/
+//     `get-book` (large, lazy, paginated) instead of an unparameterized
+//     `list-books` scan;
+//   - per-instance configuration described by `config-schema` and injected
+//     by the host on every call via the `config::configure` import
+//     (statelessness is preserved: stores are per-call);
+//   - metadata and chapter content sources can be separate: `book-entry`
+//     carries a `content-source` pointer to another plugin instance;
+//   - every export is required (wit-parser 0.254 has no `optional-export`;
+//     unsupported features are declared via `capabilities()` and return
+//     `none`/empty).
+package bookshelf:plugin@0.2.0;
 
 /// Shared types between bookshelf and plugins.
 interface types {
@@ -10,43 +24,148 @@ interface types {
         authors: list<string>,
         description: option<string>,
         cover-url: option<string>,
+        /// Chapters come from another plugin instance when set.
+        ///
+        /// Metadata-only plugins set this to the id of a content plugin
+        /// instance; content plugins leave it `none` (the book's content
+        /// comes from this instance itself). Must be an instance id known
+        /// to the host, or the book's chapters stay unavailable.
+        content-source: option<string>,
+        /// Book id inside the content source. Defaults to `id` when `none`.
+        content-id: option<string>,
     }
 
-    /// A single chapter of a book. `content` is plain text.
+    /// A single chapter of a book.
     record chapter {
         title: string,
+        /// Empty string = title-only placeholder (body fetched lazily via
+        /// `get-chapter`); non-empty = can be materialized eagerly.
         content: string,
+    }
+
+    /// One book of a `declare` catalog: metadata plus (optionally eager)
+    /// chapter bodies.
+    record declared-book {
+        book: book-entry,
+        chapters: list<chapter>,
+    }
+
+    /// Paginated catalog search result.
+    record search-result {
+        /// Source-side total number of matches (may be capped by the
+        /// source; the host relies on pagination, not on this number).
+        total: u64,
+        items: list<book-entry>,
     }
 }
 
 /// Functions provided by the host (the bookshelf server).
 interface store {
-    /// Append a line to the server log, tagged with the plugin name.
+    /// Append a line to the server log, tagged with the instance id.
     log: func(message: string);
+}
+
+/// Configuration channel.
+///
+/// The host renders an admin form from `config-schema`, validates submitted
+/// values, stores the validated JSON, and injects the values at the start
+/// of every call. Plugins pull them with `configure`; stores are per-call,
+/// so nothing persists in the guest.
+interface config {
+    /// One field of the configuration schema.
+    record config-field {
+        /// Stable key; the value is stored in JSON under this key.
+        key: string,
+        /// zh-CN display label rendered by the admin form.
+        label: string,
+        kind: config-kind,
+        /// Serialized default value (JSON), e.g. `"10"` or `"false"`.
+        default: option<string>,
+        required: bool,
+        hint: option<string>,
+    }
+
+    /// Field kinds. `enum` options are rendered as a select and the
+    /// config value is the option index; `list-of-string` is a
+    /// newline/comma separated text area in the UI.
+    /// (`string` is a WIT keyword, hence the `text` case name.)
+    variant config-kind {
+        text,
+        number,
+        boolean,
+        enum-options(list<string>),
+        list-of-string,
+    }
+
+    /// A validated configuration value, in `config-schema` field order.
+    variant config-value {
+        text(string),
+        number(f64),
+        boolean(bool),
+        enum-index(u32),
+        string-list(list<string>),
+    }
+
+    /// Fetch the configuration injected by the host for this call.
+    /// Returns the values in the same order as `config-schema` fields.
+    /// Plugins call this at the start of every export implementation.
+    configure: func() -> list<config-value>;
 }
 
 /// World implemented by bookshelf plugins.
 ///
-/// A plugin is a component that offers a catalog of books. The server
-/// periodically lists books, stores their metadata in the central library,
-/// and materializes chapters into the library on first read.
+/// A plugin is a stateless component that offers metadata (and optionally
+/// content) for books. The server registers *instances* of a plugin (one
+/// wasm file can back several instances with different configurations),
+/// validates configuration against `config-schema`, and materializes
+/// books/chapters into the central library.
 world bookshelf-plugin {
     import types;
     import store;
+    import config;
 
     // Types used by this world's exports come from the imported `types`
     // interface; WIT requires an explicit `use` to bring them into the
     // world scope.
-    use types.{book-entry, chapter};
+    use types.{book-entry, chapter, declared-book, search-result};
+    use config.{config-field, config-value};
 
-    /// Human-readable name of this plugin.
+    /// Human-readable name of this plugin (same for all instances).
     export name: func() -> string;
 
-    /// List all books offered by this plugin.
-    export list-books: func() -> list<book-entry>;
+    /// Configuration schema; the host renders an admin form from it and
+    /// validates submitted values against it.
+    export config-schema: func() -> list<config-field>;
 
-    /// Chapter titles of `book-id`, in reading order. Indices returned here
-    /// are the same indices passed to `get-chapter`.
+    /// Catalog access patterns implemented by this plugin: a subset of
+    /// ["declare", "search", "lookup", "identify", "content"].
+    ///
+    /// Host policy:
+    ///   - `declare` -> the catalog is fully synced at startup / on sync;
+    ///   - `search`  -> the catalog is browsed with `search-books`;
+    ///   - `lookup`  -> single books can be fetched with `get-book`
+    ///     (materialize-on-demand, refresh);
+    ///   - `identify`-> the source takes part in upload identification;
+    ///   - `content` -> the source provides `chapter-titles` and
+    ///     `get-chapter`.
+    /// Metadata-only plugins declare everything except `content`.
+    export capabilities: func() -> list<string>;
+
+    /// Full static catalog, when it is small enough to enumerate eagerly
+    /// (host cap: a few thousand books). `none` when the source is large
+    /// or has no books; use `search-books`/`get-book` instead.
+    export declare: func() -> option<list<declared-book>>;
+
+    /// Paginated catalog search (large sources). `query` may be empty to
+    /// page through everything; the host clamps `limit`/`offset`.
+    export search-books: func(query: string, offset: u32, limit: u32) -> search-result;
+
+    /// Single book by id (materialize-on-demand, refresh). `none` = not
+    /// found.
+    export get-book: func(book-id: string) -> option<book-entry>;
+
+    /// Chapter titles of `book-id`, in reading order. Indices returned
+    /// here are the same indices passed to `get-chapter`.
     export chapter-titles: func(book-id: string) -> list<string>;
 
     /// Fetch one chapter of `book-id` by index. `none` means not found.
@@ -56,8 +175,8 @@ world bookshelf-plugin {
     ///
     /// `filename` is the original upload name, `file-hash` the sha-256 hex
     /// digest of the file bytes. Return the matching `book-entry` (usually
-    /// with an `id` already offered in `list-books`) or `none` when this
-    /// plugin does not recognize the file. The server asks every loaded
-    /// plugin in order; the first match supplies the metadata.
+    /// with an `id` already offered by this source) or `none` when this
+    /// plugin does not recognize the file. The server asks every enabled
+    /// instance in creation order; the first match supplies the metadata.
     export identify-upload: func(filename: string, file-hash: string) -> option<book-entry>;
 }

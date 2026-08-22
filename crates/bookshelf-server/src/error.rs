@@ -13,10 +13,14 @@ pub enum ApiError {
     Forbidden,
     NotFound(String),
     Conflict(String),
-    /// Deleting a metadata entry while it still owns files. Carries the
-    /// file ids so clients can delete them explicitly first (metadata and
-    /// file deletion are deliberately distinct operations).
+    /// Deleting a metadata entry / plugin instance while it still owns
+    /// files. Carries the file ids so clients can delete them explicitly
+    /// first (metadata and file deletion are deliberately distinct
+    /// operations).
     ConflictWithFiles(Vec<String>),
+    /// Structured configuration validation errors (field-by-field, for
+    /// inline admin-form display).
+    ConfigErrors(bookshelf_plugin::ConfigErrors),
     Internal(anyhow::Error),
 }
 
@@ -38,15 +42,22 @@ impl IntoResponse for ApiError {
             ApiError::NotFound(m) => (StatusCode::NOT_FOUND, m),
             ApiError::Conflict(m) => (StatusCode::CONFLICT, m),
             ApiError::ConflictWithFiles(files) => {
-                let msg = format!(
-                    "book still has {} file(s); delete the files first",
-                    files.len()
-                );
+                let msg = format!("still has {} file(s); delete the files first", files.len());
                 return (
                     StatusCode::CONFLICT,
                     Json(serde_json::json!({
                         "error": msg,
                         "files": files,
+                    })),
+                )
+                    .into_response();
+            }
+            ApiError::ConfigErrors(errors) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": "invalid plugin configuration",
+                        "errors": errors.0,
                     })),
                 )
                     .into_response();
@@ -72,8 +83,9 @@ impl std::fmt::Display for ApiError {
             ApiError::NotFound(m) => write!(f, "not found: {m}"),
             ApiError::Conflict(m) => write!(f, "conflict: {m}"),
             ApiError::ConflictWithFiles(files) => {
-                write!(f, "conflict: book still has {} file(s)", files.len())
+                write!(f, "conflict: still has {} file(s)", files.len())
             }
+            ApiError::ConfigErrors(errors) => write!(f, "invalid plugin configuration: {errors}"),
             ApiError::Internal(e) => write!(f, "internal error: {e:#}"),
         }
     }

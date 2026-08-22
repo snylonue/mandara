@@ -16,8 +16,8 @@ use clap::Parser;
 use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
 
-use bookshelf_core::source::BookSource;
-use bookshelf_plugin::{load_dir, PluginManager};
+use bookshelf_plugin::load_dir;
+use service::plugins::PluginService;
 use state::AppState;
 
 #[tokio::main]
@@ -51,17 +51,17 @@ async fn main() -> anyhow::Result<()> {
     db::seed_local_user(&pool, cfg.auth_enabled).await?;
 
     // Load wasm plugins (the wasmtime engine needs no async runtime).
-    let manager: PluginManager = load_dir(&cfg.plugins_dir)?;
-    let sources: Vec<Arc<dyn BookSource>> = manager
-        .plugins()
-        .iter()
-        .map(|p| p.clone() as Arc<dyn BookSource>)
-        .collect();
-    tracing::info!(plugins = sources.len(), "loaded plugin sources");
+    let wasms = load_dir(&cfg.plugins_dir)?;
+    tracing::info!(files = wasms.len(), "loaded wasm plugin files");
 
-    let library = service::Library::new(pool.clone(), sources.clone());
-    let synced = library.sync_plugins().await?;
-    tracing::info!(synced, "plugin catalog synced");
+    let plugins = Arc::new(PluginService::new(pool.clone(), wasms));
+    let library = service::Library::new(pool.clone(), plugins);
+    // Startup sync materializes the catalog of every enabled
+    // `declare`-capable instance; search/lookup-only instances stay lazy.
+    match library.sync_plugins().await {
+        Ok(synced) => tracing::info!(synced, "plugin catalog synced"),
+        Err(e) => tracing::warn!(error = %e, "startup plugin sync failed"),
+    }
 
     let auth = auth::AuthService::new(cfg.auth_enabled, cfg.allow_register, &cfg.jwt_secret);
     let state = Arc::new(AppState {

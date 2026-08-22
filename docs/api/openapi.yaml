@@ -119,24 +119,45 @@ paths:
   /api/plugins:
     get:
       tags: [plugins]
-      summary: List loaded wasm plugin sources
+      summary: List registered plugin instances (id, wasm file, name, capabilities)
       operationId: listPlugins
       security:
         - bearerAuth: []
       responses:
         "200":
-          description: Loaded plugin ids
+          description: Registered instances in creation order
           content:
             application/json:
               schema:
                 type: array
                 items:
-                  $ref: "#/components/schemas/PluginInfo"
+                  $ref: "#/components/schemas/PluginInstance"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/plugins/wasm-files:
+    get:
+      tags: [plugins]
+      summary: Basenames of the compiled wasm components loaded at startup (admin only)
+      operationId: wasmFiles
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Wasm file basenames, e.g. ["wiki.wasm", "reader.wasm"]
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: string
+        "403":
+          $ref: "#/components/responses/Forbidden"
 
   /api/plugins/sync:
     post:
       tags: [plugins]
-      summary: Re-sync all plugin catalogs into the library (admin only)
+      summary: Re-sync the catalogs of every enabled declare-capable instance (admin only)
       operationId: syncPlugins
       security:
         - bearerAuth: []
@@ -154,33 +175,243 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
 
-  /api/plugins/{id}/catalog:
-    get:
+  /api/plugins/instances:
+    post:
       tags: [plugins]
-      summary: Browse one plugin source's live catalog (for picking metadata)
-      operationId: pluginCatalog
+      summary: |
+        Register a plugin instance (admin only). `wasm_file` must be a
+        basename returned by GET /api/plugins/wasm-files; `config` is
+        validated against the plugin's config schema (defaults fill the
+        rest). An explicit `id` becomes the source id used in
+        `book_files.source` — stable ids let metadata plugins point their
+        `content-source` at a content plugin's instance. A declare-capable
+        instance is synced right away.
+      operationId: registerInstance
       security:
         - bearerAuth: []
-      parameters:
-        - name: id
-          in: path
-          required: true
-          description: Plugin source id
-          schema:
-            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [wasm_file]
+              properties:
+                id:
+                  type: string
+                  description: 'Explicit instance id (default: generated uuid)'
+                wasm_file:
+                  type: string
+                config:
+                  type: object
+                  description: Config values keyed by schema field keys
       responses:
-        "200":
-          description: Catalog entries, annotated with their library book id when already synced
+        "201":
+          description: The registered instance
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/PluginCatalogEntry"
+                $ref: "#/components/schemas/PluginInstance"
+        "400":
+          $ref: "#/components/responses/ValidationError"
         "403":
           $ref: "#/components/responses/Forbidden"
+
+  /api/plugins/instances/{id}:
+    delete:
+      tags: [plugins]
+      summary: Delete a plugin instance (admin only)
+      operationId: deleteInstance
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PluginId"
+      responses:
+        "204":
+          description: Instance deleted
         "404":
           $ref: "#/components/responses/NotFound"
+        "409":
+          description: Files still reference the instance (delete them first)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error, files]
+                properties:
+                  error:
+                    type: string
+                  files:
+                    type: array
+                    items:
+                      type: string
+
+  /api/plugins/instances/{id}/enabled:
+    put:
+      tags: [plugins]
+      summary: |
+        Enable or disable a plugin instance (admin only). Disabling stops
+        sync/browse/materialize; already materialized chapters stay
+        readable.
+      operationId: setInstanceEnabled
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PluginId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties:
+                enabled:
+                  type: boolean
+      responses:
+        "200":
+          description: The updated instance
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PluginInstance"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/plugins/{id}/config-schema:
+    get:
+      tags: [plugins]
+      summary: Config schema plus current values for the admin form (admin only)
+      operationId: pluginConfigSchema
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PluginId"
+      responses:
+        "200":
+          description: Schema fields and the stored (validated) config values
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigSchema"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/plugins/{id}/config:
+    put:
+      tags: [plugins]
+      summary: |
+        Validate and store an instance's configuration (admin only).
+        Unknown keys are rejected, required fields enforced, enum indices
+        range-checked; errors come back field-by-field for inline form
+        display. A declare-capable instance is re-synced after the change.
+      operationId: putPluginConfig
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PluginId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [config]
+              properties:
+                config:
+                  type: object
+                  description: Config values keyed by schema field keys
+      responses:
+        "200":
+          description: The updated instance
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PluginInstance"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/plugins/{id}/search:
+    get:
+      tags: [plugins]
+      summary: |
+        Paginated catalog search of a search-capable instance. The library
+        does not enumerate large sources; users pick books here and
+        materialize them one by one. Caps: limit 1..50, offset <= 10000.
+      operationId: searchPlugins
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PluginId"
+        - name: q
+          in: query
+          description: Free-text query (empty = page through everything)
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 20
+            maximum: 50
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 0
+            maximum: 10000
+      responses:
+        "200":
+          description: Search page, entries annotated with their library book id when already materialized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PluginSearchResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/plugins/{id}/books:
+    post:
+      tags: [plugins]
+      summary: |
+        Materialize exactly one book of a lookup-capable source into the
+        library: metadata + virtual file + chapter-title placeholders;
+        chapter bodies stay lazy until first read. The caller claims the
+        metadata (becomes its creator).
+      operationId: materializeBook
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PluginId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [book_id]
+              properties:
+                book_id:
+                  type: string
+                  description: Book id inside the source
+      responses:
+        "201":
+          description: The materialized book with its visible files
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BookDetail"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "400":
+          $ref: "#/components/responses/BadRequest"
 
   /api/books:
     get:
@@ -526,6 +757,48 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /api/files/{id}/content-source:
+    post:
+      tags: [files]
+      summary: |
+        Rebind a file's chapter source (owner/admin only; metadata/content
+        separation). The target instance must exist; when it has the
+        `lookup` capability the book must resolve via get-book. Existing
+        chapter bodies are cleared and re-materialized from the new source
+        on next read; title placeholders refresh from the new source.
+      operationId: setContentSource
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/FileId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content_source]
+              properties:
+                content_source:
+                  description: Target plugin instance id (must exist)
+                  type: string
+                content_external_id:
+                  description: 'Book id inside the content source (default: the file''s external_id)'
+                  type: string
+      responses:
+        "200":
+          description: The updated file
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FileMeta"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /api/files/{id}/sessions:
     get:
       tags: [sessions]
@@ -747,6 +1020,13 @@ components:
       description: Share token
       schema:
         type: string
+    PluginId:
+      name: id
+      in: path
+      required: true
+      description: Plugin instance id (source id)
+      schema:
+        type: string
 
   securitySchemes:
     bearerAuth:
@@ -755,6 +1035,20 @@ components:
       bearerFormat: JWT
 
   responses:
+    ValidationError:
+      description: Structured config validation errors (field-by-field for inline form display)
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error, errors]
+            properties:
+              error:
+                type: string
+              errors:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ConfigError"
     Error:
       description: Error response
       content:
@@ -887,6 +1181,8 @@ components:
         - book_id
         - source
         - external_id
+        - content_source
+        - content_external_id
         - format
         - label
         - visibility
@@ -904,6 +1200,17 @@ components:
         external_id:
           description: Id within the source (same as `id` for local files)
           type: string
+        content_source:
+          description: |
+            Instance id whose chapters back this file when different from
+            `source` (metadata/content source separation); null = `source`.
+          type: string
+          nullable: true
+        content_external_id:
+          description: |
+            Book id inside the content source; null = `external_id`.
+          type: string
+          nullable: true
         format:
           type: string
           enum: [epub, txt, plugin]
@@ -1230,27 +1537,86 @@ components:
           items:
             $ref: "#/components/schemas/TocNode"
 
-    PluginInfo:
+    PluginInstance:
+      description: One registered plugin instance (source id = `id`)
       type: object
-      required: [id]
+      required: [id, wasm_file, name, enabled, capabilities]
       properties:
         id:
+          description: Source id used in `book_files.source`
+          type: string
+        wasm_file:
+          description: Basename of the wasm component backing this instance
+          type: string
+        name:
+          description: Human-readable plugin name (from the plugin itself)
+          type: string
+        enabled:
+          type: boolean
+        capabilities:
+          description: 'Subset of [declare, search, lookup, identify, content]'
+          type: array
+          items:
+            type: string
+
+    ConfigField:
+      description: One field of a plugin's configuration schema
+      type: object
+      required: [key, label, kind, required]
+      properties:
+        key:
+          type: string
+        label:
+          description: zh-CN display label for the admin form
+          type: string
+        kind:
+          type: string
+          enum: [string, number, boolean, enum, list-of-string]
+        options:
+          description: Enum options (kind=enum); index is the stored value
+          type: array
+          items:
+            type: string
+        default:
+          description: Serialized default value (JSON)
+          type: string
+          nullable: true
+        required:
+          type: boolean
+        hint:
+          type: string
+          nullable: true
+
+    ConfigSchema:
+      description: Plugin config schema plus the stored values, for the admin form
+      type: object
+      required: [fields, config]
+      properties:
+        fields:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConfigField"
+        config:
+          description: Current validated values keyed by field key
+          type: object
+
+    ConfigError:
+      type: object
+      required: [field, message]
+      properties:
+        field:
+          type: string
+        message:
           type: string
 
-    PluginCatalogEntry:
-      description: |
-        One book of a plugin source's live catalog, as offered right now
-        (`GET /api/plugins/{id}/catalog`), annotated with the library
-        metadata entry it is already synced into.
+    PluginSearchItem:
+      description: One search hit, annotated with the library book it is already synced into
       type: object
-      required: [plugin, id, title, authors, book_id]
+      required: [id, title, authors, book_id]
       properties:
-        plugin:
-          type: string
-          description: Plugin source id
         id:
+          description: Book id inside the source
           type: string
-          description: Book id inside the plugin
         title:
           type: string
         authors:
@@ -1264,6 +1630,18 @@ components:
           type: string
           nullable: true
         book_id:
+          description: Library metadata entry already materialized for this book, if any
           type: string
           nullable: true
-          description: Library metadata entry the plugin book is already synced into, if any
+
+    PluginSearchResponse:
+      type: object
+      required: [total, items]
+      properties:
+        total:
+          description: Source-side total match count (may be capped by the source)
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/PluginSearchItem"

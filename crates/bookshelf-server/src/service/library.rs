@@ -1,10 +1,18 @@
 //! The library service: central storage for book metadata, files and
 //! chapters.
 //!
-//! Two-level model: `books` are pure metadata entries, `book_files` are the
-//! actual books (uploads or virtual plugin books). Files from every source
-//! are catalogued here; plugin chapters are materialized into the same
-//! tables on first access, so readers see one unified store.
+//! Two-level model: `books` are pure metadata entries, `book_files` are
+//! the actual books (uploads or virtual plugin books). Files from every
+//! source are catalogued here; plugin chapters are materialized into the
+//! same tables on first access, so readers see one unified store.
+//!
+//! Plugin system v2: sources are *instances* registered in
+//! `plugin_instances` (see [`PluginService`]). Catalog access is lazy —
+//! `declare`-capable instances sync their static catalog at startup,
+//! `search`-capable instances are browsed on demand and single books are
+//! materialized via `get-book`. A file's chapters may come from a
+//! different instance than its metadata (`content_source` /
+//! `content_external_id`, metadata/content separation).
 //!
 //! Visibility is per file: `private` = owner + admins only, `public` =
 //! visible to every logged-in user.
@@ -12,29 +20,29 @@
 use std::sync::Arc;
 
 use sqlx::SqlitePool;
-use tracing::info;
+use tracing::{info, warn};
 
-use bookshelf_core::error::Result as CoreResult;
 use bookshelf_core::model::{
     BookMeta, Chapter, ChapterFormat, ChapterMeta, FileMeta, TocNode, User, Visibility,
 };
-use bookshelf_core::source::{BookSource, SourceBook};
+use bookshelf_core::source::{SourceBook, SourceChapter};
 
 use crate::error::ApiError;
 use crate::rows::{BookRow, ChapterRow, ChapterTitleRow, FileRow};
+use crate::service::plugins::{DeclaredCatalog, PluginService};
 
 /// Where the metadata of an upload comes from.
 pub enum UploadMetadata {
     /// Attach the file to an existing metadata entry (its metadata wins).
     Attach { book_id: String },
-    /// Metadata taken from a plugin source. `book_id_in_source` must be an
-    /// id offered by that plugin's catalog.
+    /// Metadata taken from a plugin source by id. `book_id_in_source`
+    /// must be offered by that source's `get-book`.
     Plugin {
         source: String,
         book_id_in_source: String,
     },
-    /// Ask every loaded plugin to identify the file (first match wins),
-    /// falling back to metadata parsed from the file itself.
+    /// Ask every enabled plugin instance to identify the file (first
+    /// match wins), falling back to metadata parsed from the file itself.
     Auto,
 }
 
@@ -68,57 +76,152 @@ pub struct UploadInput<'a> {
 
 pub struct Library {
     db: SqlitePool,
-    sources: Vec<Arc<dyn BookSource>>,
+    plugins: Arc<PluginService>,
 }
 
 impl Library {
-    pub fn new(db: SqlitePool, sources: Vec<Arc<dyn BookSource>>) -> Self {
-        Library { db, sources }
+    pub fn new(db: SqlitePool, plugins: Arc<PluginService>) -> Self {
+        Library { db, plugins }
     }
 
-    // ---- sources ---------------------------------------------------------
-
-    pub fn plugin_ids(&self) -> Vec<String> {
-        self.sources.iter().map(|s| s.id().to_string()).collect()
+    /// The plugin instance service (instance management, config, calls).
+    pub fn plugins(&self) -> &PluginService {
+        &self.plugins
     }
 
-    /// Re-catalogue all plugin books into the library: metadata into
-    /// `books`, a virtual public file into `book_files`.
-    /// Returns the number of books upserted.
+    // ---- plugin sync -----------------------------------------------------
+
+    /// Re-catalogue every enabled `declare`-capable instance into the
+    /// library. Returns the number of books (re-)synced.
     pub async fn sync_plugins(&self) -> Result<usize, ApiError> {
         let mut total = 0;
-        for source in &self.sources {
-            let books = source.list_books().await?;
-            let count = books.len();
-            for book in &books {
-                let titles = source.chapter_titles(&book.id).await?;
-                self.ensure_plugin_book(source.id(), None, book, &titles)
-                    .await?;
-            }
-            info!(source = source.id(), books = count, "plugin catalog synced");
-            total += count;
+        for catalog in self.plugins.declared_catalogs().await? {
+            total += self.sync_catalog(&catalog).await?;
         }
         Ok(total)
     }
 
-    /// Find the metadata entry of a plugin book, creating it (plus the
-    /// plugin's virtual public file) when missing. Metadata keeps being
-    /// refreshed from the entry on every call.
+    /// Re-catalogue one instance (used after config changes / enable).
+    pub async fn sync_instance(&self, id: &str) -> Result<usize, ApiError> {
+        match self.plugins.declared_catalog(id).await? {
+            Some(catalog) => self.sync_catalog(&catalog).await,
+            None => Ok(0),
+        }
+    }
+
+    async fn sync_catalog(&self, catalog: &DeclaredCatalog) -> Result<usize, ApiError> {
+        let mut total = 0;
+        for book in &catalog.books {
+            let titles: Vec<String> = book.chapters.iter().map(|c| c.title.clone()).collect();
+            let (book_id, file_id) = self
+                .ensure_plugin_book(&catalog.instance, None, &book.book, &titles)
+                .await?;
+            // Eager bodies: only when this instance also provides the
+            // content (a `content-source` pointer defers to the target).
+            if book.book.content_source.is_none() {
+                self.upsert_chapters(&file_id, &book.chapters).await?;
+            }
+            info!(
+                source = %catalog.instance,
+                book = %book_id,
+                chapters = titles.len(),
+                "declared book synced"
+            );
+            total += 1;
+        }
+        Ok(total)
+    }
+
+    // ---- plugin catalog / materialization ----------------------------------
+
+    /// Search one instance's catalog (design R4: paginated, never fully
+    /// enumerated server-side). Each entry is annotated with the library
+    /// metadata entry it is already synced into (when it is).
+    pub async fn search_plugin(
+        &self,
+        instance: &str,
+        query: &str,
+        offset: u32,
+        limit: u32,
+    ) -> Result<(u64, Vec<(SourceBook, Option<String>)>), ApiError> {
+        let result = self
+            .plugins
+            .search_books(instance, query, offset, limit)
+            .await?;
+        let mut items = Vec::with_capacity(result.items.len());
+        for entry in result.items {
+            let book = SourceBook::from(entry);
+            let book_id: Option<String> = sqlx::query_scalar(
+                "SELECT book_id FROM book_files WHERE source = ? AND external_id = ?",
+            )
+            .bind(instance)
+            .bind(&book.id)
+            .fetch_optional(&self.db)
+            .await?;
+            items.push((book, book_id));
+        }
+        Ok((result.total, items))
+    }
+
+    /// Materialize exactly one book of a searchable source
+    /// (`get-book` + chapter-title placeholders; bodies stay lazy until
+    /// first read). The caller claims the metadata (becomes its creator),
+    /// like an upload identified as this plugin book.
+    pub async fn materialize_plugin_book(
+        &self,
+        user: &User,
+        instance: &str,
+        book_id_in_source: &str,
+    ) -> Result<(BookMeta, FileMeta), ApiError> {
+        let entry = self.plugins.get_book(instance, book_id_in_source).await?;
+        let entry = entry.ok_or_else(|| {
+            ApiError::NotFound(format!(
+                "source `{instance}` does not offer book `{book_id_in_source}`"
+            ))
+        })?;
+        let entry = SourceBook::from(entry);
+        // Titles (and bodies) come from the *content* instance.
+        let (content_inst, content_id) = self.plugins.content_target(instance, &entry);
+        let titles = self
+            .plugins
+            .chapter_titles(content_inst, content_id)
+            .await?;
+        let (book_id, _) = self
+            .ensure_plugin_book(instance, Some(&user.id), &entry, &titles)
+            .await?;
+        let file = self
+            .plugin_file(instance, &entry.id)
+            .await?
+            .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("plugin file vanished")))?;
+        // Title placeholders; bodies stay lazy (first read).
+        self.ensure_titles(&file).await?;
+        let book = self
+            .get_book(&book_id)
+            .await?
+            .ok_or_else(|| ApiError::not_found("book"))?;
+        Ok((book, file))
+    }
+
+    /// Create/update the metadata entry and virtual file of a plugin book.
+    /// Chapters/sessions don't exist yet; `titles` only fixes the
+    /// `chapter_count` (placeholder rows are ensured separately).
     ///
     /// `owner` claims the metadata when it has no creator yet (uploads
-    /// identified as this plugin book), and becomes the owner of a newly
-    /// created virtual file.
+    /// identified as this plugin book, or a user picking the book from
+    /// the source browser) and becomes the owner of a newly created
+    /// virtual file.
     async fn ensure_plugin_book(
         &self,
         source_id: &str,
         owner: Option<&str>,
         book: &SourceBook,
         titles: &[String],
-    ) -> Result<String, ApiError> {
+    ) -> Result<(String, String), ApiError> {
         let authors = serde_json::to_string(&book.authors).unwrap_or_else(|_| "[]".into());
 
-        // Reuse the metadata entry when this plugin file was synced before,
-        // otherwise create both the book metadata and its virtual file.
+        // Reuse the metadata entry when this plugin file was synced
+        // before, otherwise create both the book metadata and its virtual
+        // file.
         let existing: Option<(String,)> =
             sqlx::query_as("SELECT book_id FROM book_files WHERE source = ? AND external_id = ?")
                 .bind(source_id)
@@ -144,13 +247,15 @@ impl Library {
                 .execute(&mut *tx)
                 .await?;
                 sqlx::query(
-                    "INSERT INTO book_files (id, book_id, source, external_id, format, label, visibility, owner_id, chapter_count) \
-                     VALUES (?, ?, ?, ?, 'plugin', '', 'public', ?, ?)",
+                    "INSERT INTO book_files (id, book_id, source, external_id, content_source, content_external_id, format, label, visibility, owner_id, chapter_count) \
+                     VALUES (?, ?, ?, ?, ?, ?, 'plugin', '', 'public', ?, ?)",
                 )
                 .bind(uuid::Uuid::new_v4().simple().to_string())
                 .bind(&book_id)
                 .bind(source_id)
                 .bind(&book.id)
+                .bind(&book.content_source)
+                .bind(&book.content_id)
                 .bind(owner)
                 .bind(titles.len() as i64)
                 .execute(&mut *tx)
@@ -175,25 +280,79 @@ impl Library {
         .bind(&book_id)
         .execute(&self.db)
         .await?;
-        sqlx::query("UPDATE book_files SET chapter_count = ? WHERE source = ? AND external_id = ?")
-            .bind(titles.len() as i64)
-            .bind(source_id)
-            .bind(&book.id)
-            .execute(&self.db)
-            .await?;
-        Ok(book_id)
+        // Content indirection comes from the entry; the metadata instance
+        // owns the `books` row, the content instance the chapters.
+        sqlx::query(
+            "UPDATE book_files SET chapter_count = ?, content_source = ?, content_external_id = ? \
+             WHERE source = ? AND external_id = ?",
+        )
+        .bind(titles.len() as i64)
+        .bind(&book.content_source)
+        .bind(&book.content_id)
+        .bind(source_id)
+        .bind(&book.id)
+        .execute(&self.db)
+        .await?;
+
+        let file_id: String =
+            sqlx::query_scalar("SELECT id FROM book_files WHERE source = ? AND external_id = ?")
+                .bind(source_id)
+                .bind(&book.id)
+                .fetch_one(&self.db)
+                .await?;
+        Ok((book_id, file_id))
     }
 
-    pub fn source(&self, id: &str) -> Option<Arc<dyn BookSource>> {
-        self.sources.iter().find(|s| s.id() == id).cloned()
+    /// Store declared chapter rows (title + body, eager for non-empty
+    /// content). Bodies of chapters that are declared empty stay lazy.
+    async fn upsert_chapters(
+        &self,
+        file_id: &str,
+        chapters: &[SourceChapter],
+    ) -> Result<(), ApiError> {
+        let mut tx = self.db.begin().await?;
+        for (idx, chapter) in chapters.iter().enumerate() {
+            sqlx::query(
+                "INSERT INTO chapters (file_id, idx, title, format, content) VALUES (?, ?, ?, 'text', ?) \
+                 ON CONFLICT (file_id, idx) DO UPDATE SET \
+                   title = excluded.title, \
+                   content = CASE WHEN excluded.content = '' THEN chapters.content ELSE excluded.content END",
+            )
+            .bind(file_id)
+            .bind(idx as i64)
+            .bind(chapter.title.trim())
+            .bind(&chapter.content)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// The virtual file row of a plugin book.
+    async fn plugin_file(
+        &self,
+        source: &str,
+        external_id: &str,
+    ) -> Result<Option<FileMeta>, ApiError> {
+        let row: Option<FileRow> = sqlx::query_as(
+            "SELECT id, book_id, source, external_id, content_source, content_external_id, format, \
+             label, visibility, owner_id, chapter_count, created_at \
+             FROM book_files WHERE source = ? AND external_id = ?",
+        )
+        .bind(source)
+        .bind(external_id)
+        .fetch_optional(&self.db)
+        .await?;
+        row.map(FileRow::into_model).transpose()
     }
 
     // ---- uploads ---------------------------------------------------------
 
     /// Ingest an uploaded epub/txt file. The metadata comes from one of
-    /// [`UploadMetadata`]'s modes (`attach`/`plugin`/`auto`), possibly with
-    /// user `overrides` on top of whatever the file parser or plugin
-    /// produced. Returns the metadata entry and the stored file.
+    /// [`UploadMetadata`]'s modes (`attach`/`plugin`/`auto`), possibly
+    /// with user `overrides` on top of whatever the file parser or
+    /// plugin produced. Returns the metadata entry and the stored file.
     pub async fn upload_file(
         &self,
         user: &User,
@@ -218,19 +377,19 @@ impl Library {
                 book_id
             }
             // Metadata from a named plugin source (manual picker or
-            // explicit plugin reference).
+            // explicit plugin reference), resolved via `get-book`.
             UploadMetadata::Plugin {
                 source,
                 book_id_in_source,
             } => {
-                let book_entry = self.plugin_entry(&source, &book_id_in_source).await?;
-                let book_id = self
-                    .ensure_plugin_book(
-                        &source,
-                        Some(&user.id),
-                        &book_entry,
-                        &self.plugin_titles(&source, &book_id_in_source).await?,
-                    )
+                let book_entry = self.plugin_book_entry(&source, &book_id_in_source).await?;
+                let (content_inst, content_id) = self.plugins.content_target(&source, &book_entry);
+                let titles = self
+                    .plugins
+                    .chapter_titles(content_inst, content_id)
+                    .await?;
+                let (book_id, _) = self
+                    .ensure_plugin_book(&source, Some(&user.id), &book_entry, &titles)
                     .await?;
                 // User-provided fields correct the plugin metadata.
                 if !overrides.is_empty() {
@@ -249,22 +408,16 @@ impl Library {
             // otherwise create metadata parsed from the file.
             UploadMetadata::Auto => {
                 let hash = sha256_hex(upload.bytes);
-                let mut matched = None;
-                for source in &self.sources {
-                    if let Some(entry) = source.identify_upload(upload.filename, &hash).await? {
-                        matched = Some((source.id().to_string(), entry));
-                        break;
-                    }
-                }
-                match matched {
+                match self.plugins.identify_upload(upload.filename, &hash).await? {
                     Some((source, entry)) => {
-                        let book_id = self
-                            .ensure_plugin_book(
-                                &source,
-                                Some(&user.id),
-                                &entry,
-                                &self.plugin_titles(&source, &entry.id).await?,
-                            )
+                        let (content_inst, content_id) =
+                            self.plugins.content_target(&source, &entry);
+                        let titles = self
+                            .plugins
+                            .chapter_titles(content_inst, content_id)
+                            .await?;
+                        let (book_id, _) = self
+                            .ensure_plugin_book(&source, Some(&user.id), &entry, &titles)
                             .await?;
                         if !overrides.is_empty() {
                             self.update_book(
@@ -298,6 +451,14 @@ impl Library {
             .await?
             .ok_or_else(|| ApiError::not_found("book"))?;
         Ok((book, file))
+    }
+
+    /// Fetch one entry from a plugin source by id (`lookup` capability).
+    async fn plugin_book_entry(&self, source: &str, book_id: &str) -> Result<SourceBook, ApiError> {
+        let entry = self.plugins.get_book(source, book_id).await?;
+        entry
+            .map(SourceBook::from)
+            .ok_or_else(|| ApiError::bad_request(format!("plugin does not offer book `{book_id}`")))
     }
 
     /// Create a fresh metadata entry from the parsed file, applying user
@@ -395,26 +556,6 @@ impl Library {
             .ok_or_else(|| ApiError::not_found("file"))
     }
 
-    /// Fetch one entry from a plugin source's catalog.
-    async fn plugin_entry(&self, source: &str, book_id: &str) -> Result<SourceBook, ApiError> {
-        let source = self
-            .source(source)
-            .ok_or_else(|| ApiError::bad_request(format!("unknown plugin source `{source}`")))?;
-        let books = source.list_books().await?;
-        books
-            .into_iter()
-            .find(|b| b.id == book_id)
-            .ok_or_else(|| ApiError::bad_request(format!("plugin does not offer book `{book_id}`")))
-    }
-
-    /// Chapter titles of a plugin book (empty when the source errors).
-    async fn plugin_titles(&self, source: &str, book_id: &str) -> Result<Vec<String>, ApiError> {
-        match self.source(source) {
-            Some(s) => Ok(s.chapter_titles(book_id).await.unwrap_or_default()),
-            None => Ok(Vec::new()),
-        }
-    }
-
     // ---- books -----------------------------------------------------------
 
     /// List metadata entries that own at least one file the user can see,
@@ -493,8 +634,10 @@ impl Library {
             .ok_or_else(|| ApiError::not_found("book"))
     }
 
-    /// Re-pull metadata from every plugin source backing this book
-    /// (metadata update from plugin sources). The creator of the metadata
+    /// Re-pull metadata from the plugin source(s) backing this book via
+    /// `get-book` (design: refresh never scans a catalog). Title
+    /// placeholders come from the *content* instance; materialized
+    /// chapter bodies are never overwritten. The creator of the metadata
     /// or an admin may refresh.
     pub async fn refresh_book(&self, user: &User, book_id: &str) -> Result<BookMeta, ApiError> {
         let book = self
@@ -521,19 +664,25 @@ impl Library {
         }
 
         for (file_id, source_id, external_id) in &plugin_files {
-            let source = self.source(source_id).ok_or_else(|| {
-                ApiError::bad_request(format!("plugin source `{source_id}` is not loaded"))
+            let entry = self.plugins.get_book(source_id, external_id).await?;
+            let entry = entry.ok_or_else(|| {
+                ApiError::NotFound(format!(
+                    "source `{source_id}` no longer offers book `{external_id}`"
+                ))
             })?;
-            let entries = source.list_books().await?;
-            let entry = entries
-                .iter()
-                .find(|b| &b.id == external_id)
-                .ok_or_else(|| {
-                    ApiError::NotFound(format!(
-                        "source `{source_id}` no longer offers book `{external_id}`"
-                    ))
-                })?;
-            let titles = source.chapter_titles(external_id).await.unwrap_or_default();
+            let entry = SourceBook::from(entry);
+
+            // Metadata always from the metadata instance; titles from the
+            // content instance.
+            let (content_inst, content_id) = self.plugins.content_target(source_id, &entry);
+            let titles = self
+                .plugins
+                .chapter_titles(content_inst, content_id)
+                .await
+                .unwrap_or_else(|e| {
+                    warn!(source = %content_inst, book = %content_id, "chapter titles unavailable: {e}");
+                    Vec::new()
+                });
 
             let authors = serde_json::to_string(&entry.authors).unwrap_or_else(|_| "[]".into());
             sqlx::query(
@@ -547,59 +696,26 @@ impl Library {
             .bind(book_id)
             .execute(&self.db)
             .await?;
-            sqlx::query("UPDATE book_files SET chapter_count = ? WHERE id = ?")
-                .bind(titles.len() as i64)
-                .bind(file_id)
-                .execute(&self.db)
-                .await?;
+            sqlx::query(
+                "UPDATE book_files SET chapter_count = ?, content_source = ?, content_external_id = ? \
+                 WHERE id = ?",
+            )
+            .bind(titles.len() as i64)
+            .bind(&entry.content_source)
+            .bind(&entry.content_id)
+            .bind(file_id)
+            .execute(&self.db)
+            .await?;
 
             // Refresh the chapter-title placeholder rows (never overwrite
             // materialized chapter content).
-            let mut tx = self.db.begin().await?;
-            for (idx, title) in titles.iter().enumerate() {
-                sqlx::query(
-                    "INSERT INTO chapters (file_id, idx, title, format, content) \
-                     VALUES (?, ?, ?, 'text', '') \
-                     ON CONFLICT (file_id, idx) DO UPDATE SET title = excluded.title \
-                     WHERE chapters.content = ''",
-                )
-                .bind(file_id)
-                .bind(idx as i64)
-                .bind(title.trim())
-                .execute(&mut *tx)
-                .await?;
-            }
-            tx.commit().await?;
+            self.upsert_placeholder_titles(file_id, &titles).await?;
             info!(book = %book_id, source = %source_id, "book metadata refreshed from plugin source");
         }
 
         self.get_book(book_id)
             .await?
             .ok_or_else(|| ApiError::not_found("book"))
-    }
-
-    /// The catalog a plugin source offers right now, each entry annotated
-    /// with the metadata entry it is already synced into (if any).
-    pub async fn plugin_catalog(
-        &self,
-        plugin_id: &str,
-    ) -> Result<Vec<(SourceBook, Option<String>)>, ApiError> {
-        let source = self
-            .source(plugin_id)
-            .ok_or_else(|| ApiError::not_found("plugin"))?;
-        let books = source.list_books().await?;
-        let mut out = Vec::with_capacity(books.len());
-        for book in &books {
-            let book_id: Option<String> = sqlx::query_scalar(
-                "SELECT book_id FROM book_files WHERE source = ? AND external_id = ?",
-            )
-            .bind(plugin_id)
-            .bind(&book.id)
-            .fetch_optional(&self.db)
-            .await?;
-            out.push((book.clone(), book_id));
-        }
-        Ok(out)
     }
 
     /// Delete a metadata entry. File deletion is deliberately a separate
@@ -633,7 +749,7 @@ impl Library {
     ) -> Result<Vec<FileMeta>, ApiError> {
         let is_admin = user.role == bookshelf_core::model::Role::Admin;
         let mut q = sqlx::QueryBuilder::new(
-            "SELECT id, book_id, source, external_id, format, label, visibility, owner_id, \
+            "SELECT id, book_id, source, external_id, content_source, content_external_id, format, label, visibility, owner_id, \
              chapter_count, created_at FROM book_files WHERE book_id = ",
         );
         q.push_bind(book_id);
@@ -649,7 +765,7 @@ impl Library {
 
     pub async fn get_file(&self, id: &str) -> Result<Option<FileMeta>, ApiError> {
         let row: Option<FileRow> = sqlx::query_as(
-            "SELECT id, book_id, source, external_id, format, label, visibility, owner_id, \
+            "SELECT id, book_id, source, external_id, content_source, content_external_id, format, label, visibility, owner_id, \
              chapter_count, created_at FROM book_files WHERE id = ?",
         )
         .bind(id)
@@ -675,6 +791,46 @@ impl Library {
         self.get_file(id)
             .await?
             .ok_or_else(|| ApiError::not_found("file"))
+    }
+
+    /// Rebind a file's chapter source (metadata/content separation). The
+    /// target instance must exist; when it has the `lookup` capability
+    /// the book must resolve via `get-book`. Materialized chapter bodies
+    /// are cleared so the next read re-materializes from the new source.
+    pub async fn set_content_source(
+        &self,
+        file_id: &str,
+        content_source: &str,
+        content_external_id: Option<String>,
+    ) -> Result<FileMeta, ApiError> {
+        let file = self
+            .get_file(file_id)
+            .await?
+            .ok_or_else(|| ApiError::not_found("file"))?;
+        let content_external_id = content_external_id.unwrap_or_else(|| file.external_id.clone());
+        self.plugins
+            .check_content_target(content_source, &content_external_id)
+            .await?;
+        sqlx::query(
+            "UPDATE book_files SET content_source = ?, content_external_id = ? WHERE id = ?",
+        )
+        .bind(content_source)
+        .bind(&content_external_id)
+        .bind(file_id)
+        .execute(&self.db)
+        .await?;
+        // Bodies from the previous source must not leak through; keep the
+        // title rows as placeholders for the new source.
+        sqlx::query("UPDATE chapters SET content = '' WHERE file_id = ?")
+            .bind(file_id)
+            .execute(&self.db)
+            .await?;
+        let file = self
+            .get_file(file_id)
+            .await?
+            .ok_or_else(|| ApiError::not_found("file"))?;
+        self.ensure_titles(&file).await?;
+        Ok(file)
     }
 
     pub async fn delete_file(&self, id: &str) -> Result<(), ApiError> {
@@ -728,8 +884,8 @@ impl Library {
             .collect())
     }
 
-    /// Fetch a chapter, materializing it from its plugin source on first
-    /// access.
+    /// Fetch a chapter, materializing it from its content source on first
+    /// access (or after a rebind cleared the bodies).
     pub async fn get_chapter(
         &self,
         file: &FileMeta,
@@ -755,29 +911,23 @@ impl Library {
         }
 
         // Not stored yet (or placeholder): lazily materialize from the
-        // plugin source.
-        let Some(source) = self.source(&file.source) else {
+        // file's content source.
+        let (source_id, external_id) = file_content_target(file);
+        if source_id == "local" {
             return Ok(None);
-        };
-        self.materialize_from_source(source, &file.external_id, &file.id, idx)
-            .await
-    }
-
-    async fn materialize_from_source(
-        &self,
-        source: Arc<dyn BookSource>,
-        external_id: &str,
-        file_id: &str,
-        idx: u32,
-    ) -> Result<Option<Chapter>, ApiError> {
-        let Some(chapter) = source.get_chapter(external_id, idx).await? else {
+        }
+        let Some(chapter) = self
+            .plugins
+            .get_chapter(source_id, external_id, idx)
+            .await?
+        else {
             return Ok(None);
         };
         sqlx::query(
             "INSERT INTO chapters (file_id, idx, title, format, content) VALUES (?, ?, ?, 'text', ?) \
              ON CONFLICT (file_id, idx) DO UPDATE SET title = excluded.title, content = excluded.content",
         )
-        .bind(file_id)
+        .bind(&file.id)
         .bind(idx as i64)
         .bind(&chapter.title)
         .bind(&chapter.content)
@@ -791,39 +941,81 @@ impl Library {
         }))
     }
 
-    /// Ensure the chapter title rows of a plugin file exist (so that
-    /// `chapter_titles` works for books never read yet).
-    pub async fn ensure_titles(&self, file: &FileMeta) -> Result<(), ApiError> {
-        if file.source == "local" || file.chapter_count == 0 {
-            return Ok(());
-        }
-        let stored: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM chapters WHERE file_id = ?")
-            .bind(&file.id)
-            .fetch_one(&self.db)
+    /// Upsert title rows, never overwriting materialized bodies.
+    async fn upsert_placeholder_titles(
+        &self,
+        file_id: &str,
+        titles: &[String],
+    ) -> Result<(), ApiError> {
+        let mut tx = self.db.begin().await?;
+        for (idx, title) in titles.iter().enumerate() {
+            sqlx::query(
+                "INSERT INTO chapters (file_id, idx, title, format, content) \
+                 VALUES (?, ?, ?, 'text', '') \
+                 ON CONFLICT (file_id, idx) DO UPDATE SET title = excluded.title \
+                 WHERE chapters.content = ''",
+            )
+            .bind(file_id)
+            .bind(idx as i64)
+            .bind(title.trim())
+            .execute(&mut *tx)
             .await?;
-        if stored > 0 {
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Ensure the chapter title rows of a plugin file exist (so that
+    /// `chapter_titles` works for books never read yet). Titles come from
+    /// the file's *content* instance.
+    pub async fn ensure_titles(&self, file: &FileMeta) -> Result<(), ApiError> {
+        if file.chapter_count == 0 {
             return Ok(());
         }
-        if let Some(source) = self.source(&file.source) {
-            let titles: CoreResult<Vec<String>> = source.chapter_titles(&file.external_id).await;
-            if let Ok(titles) = titles {
-                let mut tx = self.db.begin().await?;
-                for (idx, title) in titles.into_iter().enumerate() {
-                    sqlx::query(
-                        "INSERT OR IGNORE INTO chapters (file_id, idx, title, format, content) \
-                         VALUES (?, ?, ?, 'text', '')",
-                    )
-                    .bind(&file.id)
-                    .bind(idx as i64)
-                    .bind(title.trim())
-                    .execute(&mut *tx)
-                    .await?;
-                }
-                tx.commit().await?;
-            }
+        let (source_id, external_id) = file_content_target(file);
+        if source_id == "local" {
+            return Ok(());
+        }
+        let titles = self
+            .plugins
+            .chapter_titles(source_id, external_id)
+            .await
+            .unwrap_or_else(|e| {
+                warn!(source = %source_id, book = %external_id, "chapter titles unavailable: {e}");
+                Vec::new()
+            });
+        if titles.is_empty() {
+            return Ok(());
+        }
+        self.upsert_placeholder_titles(&file.id, &titles).await?;
+        // Placeholder rows beyond the new title set are stale (previous
+        // content source, or a chapter count that shrank); drop the
+        // empty ones. Materialized bodies stay untouched.
+        sqlx::query("DELETE FROM chapters WHERE file_id = ? AND content = '' AND idx >= ?")
+            .bind(&file.id)
+            .bind(titles.len() as i64)
+            .execute(&self.db)
+            .await?;
+        if titles.len() != file.chapter_count as usize {
+            sqlx::query("UPDATE book_files SET chapter_count = ? WHERE id = ?")
+                .bind(titles.len() as i64)
+                .bind(&file.id)
+                .execute(&self.db)
+                .await?;
         }
         Ok(())
     }
+}
+
+/// Effective (instance, book id) for chapter reads of a file: the file's
+/// content columns when set, otherwise its own source/external id.
+fn file_content_target(file: &FileMeta) -> (&str, &str) {
+    (
+        file.content_source.as_deref().unwrap_or(&file.source),
+        file.content_external_id
+            .as_deref()
+            .unwrap_or(&file.external_id),
+    )
 }
 
 fn detect_format(filename: &str) -> &'static str {

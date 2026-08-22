@@ -97,6 +97,11 @@ pub struct FileMeta {
     pub source: String,
     /// Id of the book inside its source (for local files, same as `id`).
     pub external_id: String,
+    /// When set, chapters come from another plugin instance instead of
+    /// `source` (metadata/content source separation). NULL = same as
+    /// `source` / `external_id`.
+    pub content_source: Option<String>,
+    pub content_external_id: Option<String>,
     /// `"epub"` | `"txt"` for uploads, `"plugin"` for plugin books.
     pub format: String,
     /// Short human label for this edition.

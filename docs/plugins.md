@@ -1,154 +1,161 @@
-# Plugin authoring guide
+# Plugin authoring guide (v2)
 
 Bookshelf's wasm plugin system lets users provide custom book and metadata
 sources. Plugins run as **WebAssembly components** inside the host sandbox
-(wasmtime): they can only call the host's `store::log` and have no access to
-the host filesystem or network (host-provided network APIs can be added to
-the WIT later if needed).
+(wasmtime): they can only call the host's `store::log` and
+`config::configure` — no host filesystem, no network.
 
-Plugins are loaded from `data/plugins/*.wasm` at startup:
+See `docs/plugin-v2-design.md` for the full design (status: implemented).
+This guide is for plugin authors.
 
-1. On startup (and on `POST /api/plugins/sync`), `list-books` +
-   `chapter-titles` are called to sync the catalog into the central store:
-   one metadata entry (`books`) + one virtual public file (`book_files`) per
-   plugin book.
-2. When a reader first requests a chapter, `get-chapter` is called and the
-   content is **materialized** into the central database — afterwards the
-   plugin book behaves like any uploaded file (it stays readable even if the
-   plugin file is removed).
-3. When a user uploads a file with automatic metadata, plugins are asked to
-   identify it (`identify-upload`); the first match supplies the metadata
-   (see below). Metadata backed by a plugin source can be refreshed
-   per-book via `POST /api/books/{id}/refresh`.
+## Concepts
+
+- **Wasm file** (`data/plugins/*.wasm`) — the compiled plugin code. The
+  server compiles every file at startup and exposes it for registration.
+- **Instance** — one registered configuration of a wasm file, with its own
+  id (the source id in `book_files.source`), validated config, and enable
+  flag. One wasm file can back several instances (e.g. one "web source"
+  plugin pointed at two sites). Instances are registered via the admin UI
+  or `POST /api/plugins/instances`; instance ids default to a uuid, or an
+  admin-chosen stable id (needed when metadata plugins point at content
+  plugins).
+- **Capabilities** — `capabilities()` declares which catalog patterns the
+  plugin implements (see below). The host keys all policy off this list.
+- **Statelessness** — a fresh store per call; config is injected at the
+  start of every call via `config::configure()`. Never keep state in the
+  guest.
+
+## Lifecycle
+
+- Startup: wasm files compiled; instances loaded from `plugin_instances`.
+- `declare`-capable instances are **fully synced** at startup and on
+  `POST /api/plugins/sync` (metadata + title rows; eager bodies for
+  non-empty `content`).
+- `search`/`lookup`-capable instances are **lazy**: nothing is
+  materialized until a user picks a book in the source browser
+  (`POST /api/plugins/{id}/books` → `get-book` + title placeholders).
+- Chapter bodies materialize into the central DB on first read; afterwards
+  the book behaves like any uploaded file (readable even if the plugin
+  file is removed).
+- `identify`-capable instances are asked to recognize uploaded files
+  (`identify-upload`, first match wins, in instance creation order).
+- `POST /api/books/{id}/refresh` re-pulls **metadata only** via
+  `get-book` (never a catalog scan); title placeholders come from the
+  content instance; materialized chapter bodies are never overwritten.
 
 ## Interface (WIT)
 
 Interface file: `crates/bookshelf-plugin/wit/bookshelf.wit`, world
-`bookshelf:plugin/bookshelf-plugin`:
+`bookshelf:plugin/bookshelf-plugin@0.2.0`. Every export is **required**
+(the WIT parser has no optional exports) — unsupported features return
+`none`/empty and are declared via `capabilities()`:
 
 ```wit
 interface types {
     record book-entry {
-        id: string,                // stable id within the plugin
+        id: string,
         title: string,
         authors: list<string>,
         description: option<string>,
         cover-url: option<string>,
+        // metadata/content separation (R5):
+        content-source: option<string>,  // instance id providing the chapters
+        content-id: option<string>,      // book id inside that instance
     }
-    record chapter { title: string, content: string }  // content is plain text
+    record chapter { title: string, content: string }  // empty content = lazy body
+    record declared-book { book: book-entry, chapters: list<chapter> }
+    record search-result { total: u64, items: list<book-entry> }
 }
 
-interface store {
-    log: func(message: string);    // host-provided logging
-}
+interface store { log: func(message: string); }
 
-world bookshelf-plugin {
-    import types;
-    import store;
-    use types.{book-entry, chapter};
-
-    export name: func() -> string;
-    export list-books: func() -> list<book-entry>;
-    export chapter-titles: func(book-id: string) -> list<string>;
-    export get-chapter: func(book-id: string, index: u32) -> option<chapter>;
-    // optional book identification for uploaded files
-    export identify-upload: func(filename: string, file-hash: string) -> option<book-entry>;
+interface config {
+    record config-field { key, label, kind, default, required, hint }
+    variant config-kind { text, number, boolean, enum-options(list<string>), list-of-string }
+    variant config-value { text(string), number(f64), boolean(bool), enum-index(u32), string-list(list<string>) }
+    configure: func() -> list<config-value>;   // host-provided
 }
 ```
 
-## Identifying uploaded files (`identify-upload`)
+World exports:
 
-When a user uploads a file with automatic metadata, the server asks every
-loaded plugin (in load order) to identify it:
+| Export | Required by | Purpose |
+|---|---|---|
+| `name()` | always | Human-readable name |
+| `config-schema()` | always | Config fields the host renders as an admin form |
+| `capabilities()` | always | `["declare","search","lookup","identify","content"]` subset |
+| `declare()` | always | Small static catalog (`None` for large sources) |
+| `search-books(query, offset, limit)` | `search` | Paginated catalog browsing |
+| `get-book(book-id)` | `lookup` | Single book (materialize on demand, refresh) |
+| `chapter-titles(book-id)` | `content` | Titles in reading order |
+| `get-chapter(book-id, index)` | `content` | One chapter body |
+| `identify-upload(filename, file-hash)` | `identify` | Upload recognition |
+
+Host caps: `search-books` limit ≤ 50 / offset ≤ 10 000 (400 beyond);
+`declare` ≤ 10 000 books / 100 000 chapters (error beyond, warn past 90%);
+chapter content ≤ 2 MiB per call. Runaway plugins are trapped by the epoch
+deadline (a call running for more than a few 200 ms pump intervals is
+interrupted — keep catalog/chapter generation fast, or split it across
+calls).
+
+## Configuration
+
+`config-schema()` returns the fields; values live in JSON keyed by field
+key. The host validates (unknown keys rejected, `required` enforced, enum
+indices range-checked), stores the validated JSON, and **injects the
+values at the start of every call** — call `config::configure()` first in
+your exports and map the returned list back by schema order:
 
 ```rust
-fn identify_upload(filename: String, file_hash: String) -> Option<BookEntry> {
-    // filename: original upload name; file_hash: sha-256 hex digest
-    // Return Some(book-entry) to claim the file, None to ignore it.
+const FIELDS: [&str; 2] = ["site-name", "page-size"];
+
+fn site_name() -> String {
+    let idx = FIELDS.iter().position(|k| *k == "site-name").unwrap();
+    match bookshelf::plugin::config::configure().get(idx) {
+        Some(ConfigValue::Text(s)) if !s.is_empty() => s.clone(),
+        _ => "默认站点".into(),
+    }
 }
 ```
 
-The first `Some` wins: the plugin's `book-entry` becomes the upload's
-metadata (the upload is attached to the identified book's metadata entry,
-creating it from the plugin catalog first if needed). Identify by whatever
-you can — filename patterns, content hashes you know, ... — but return
-`None` unless you are confident, since a wrong match hijacks the upload's
-metadata.
+Defaults are serialized JSON (`"8"`, `"false"`, `"\"x\""`); a text field
+whose default is not valid JSON is treated as the literal string.
 
-With the upload attached to a plugin-backed metadata entry, metadata can be
-refreshed from the plugin source later (`POST /api/books/{id}/refresh`).
+## Metadata / content separation (R5)
 
-## Writing a plugin
+A metadata-only plugin (e.g. a wiki) returns `book-entry`s with
+`content-source`/`content-id` pointing at a content plugin's **instance
+id** — register the content plugin with a stable id for this to be
+predictable. Materializing such a book stores its metadata from the wiki
+and pulls titles/bodies from the reader instance on demand. Reader-side,
+users can also rebind a file's content source manually
+(`POST /api/files/{id}/content-source`, owner/admin; validates the target
+and, when it has `lookup`, the book id).
 
-See the in-repo example `plugins/hello-plugin/`. Skeleton:
+## Example plugins
 
-```toml
-# Cargo.toml
-[lib]
-crate-type = ["cdylib"]
+- `plugins/hello-plugin/` — small `declare` + `identify` + `content`
+  plugin; config-driven (site name, content variant, verbose logging, a
+  deliberate infinite-loop switch for testing the epoch timeout).
+- `plugins/wiki-plugin/` — metadata only: `search` + `lookup`, no
+  `declare`, no `content`; every entry points `content-source: "reader"`.
+- `plugins/reader-plugin/` — reading-site source: `search` + `lookup` +
+  `content`; serves titles and bodies for `r-N` books.
 
-[dependencies]
-wit-bindgen = "0.60"
-```
-
-```rust
-// src/lib.rs
-wit_bindgen::generate!({
-    world: "bookshelf-plugin",
-    path: "../../crates/bookshelf-plugin/wit",
-});
-
-struct MyPlugin;
-
-impl Guest for MyPlugin {
-    fn name() -> String { "my-source".into() }
-    fn list_books() -> Vec<BookEntry> { /* return the catalog */ }
-    fn chapter_titles(book_id: String) -> Vec<String> { /* return titles */ }
-    fn get_chapter(book_id: String, index: u32) -> Option<Chapter> { /* return content */ }
-}
-
-export!(MyPlugin);
-```
-
-> `Guest`, `BookEntry`, `Chapter` and `export!` are all generated by
-> `generate!` at the invocation site.
-
-## Building (nix environment)
+## Building
 
 ```sh
-nix develop                          # devShell provides wasm targets + wasm-tools
-
-cargo build -p hello-plugin --release --target wasm32-unknown-unknown
-wasm-tools component new \
-    target/wasm32-unknown-unknown/release/hello_plugin.wasm \
-    -o my-plugin.wasm
-
-# deploy: copy into the plugins dir, then restart (or re-sync via the API)
-cp my-plugin.wasm data/plugins/
+./scripts/build-plugins.sh hello wiki reader   # -> plugins-built/*.wasm
+cp plugins-built/*.wasm data/plugins/
 ```
 
-Notes:
+The guest crates use `wit-bindgen = "0.60"` with
+`wit_bindgen::generate!({ world: "bookshelf-plugin", path: "../../crates/bookshelf-plugin/wit" })`
+and `export!(PluginName)`. The generated core module embeds a
+`component-type` section, so `wasm-tools component new` lifts it into a
+component without adapters (the world imports no wasi interfaces).
 
-- The example builds for `wasm32-unknown-unknown`: a pure-compute module.
-  The world imports no wasi interfaces, so the wit-bindgen core module comes
-  with an embedded `component-type` custom section and `wasm-tools component
-  new` can lift it into a component without adapters.
-- Avoid `std::fs` / `std::net` / `println!` in plugins (unavailable on
-  `wasm32-unknown-unknown`, or they introduce wasi imports that require an
-  adapter).
-- The devShell toolchain also ships `wasm32-wasip1` / `wasm32-wasip2`; a
-  plugin that genuinely needs wasi (e.g. network) can switch to wasip2 +
-  `wasm-tools component new` and the host links `wasmtime-wasi` p2 (not yet
-  wired into the host; future work).
-- Audit: plugins are arbitrary code. wasmtime provides a memory-safe
-  sandbox, but a plugin can still consume host CPU — only load trusted
-  `*.wasm` files.
-
-## Debugging
-
-- Call `log("...")` inside a plugin; the host prints
-  `INFO plugin: ...` to the server log.
-- Plugins that fail to load are skipped with `WARN skipping plugin: ...`
-  (they never prevent the server from starting).
-- `wasm-tools component wit my-plugin.wasm` shows which interfaces a
-  component implements.
+The host unit tests embed `plugins-built/hello.wasm` as a fixture — after
+changing the WIT or the hello guest, rebuild with
+`./scripts/build-plugins.sh hello` to refresh
+`crates/bookshelf-plugin/tests/fixtures/hello.wasm`.

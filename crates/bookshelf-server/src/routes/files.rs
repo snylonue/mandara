@@ -109,3 +109,37 @@ pub async fn delete_file(
     st.library.delete_file(&id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
+
+// POST /api/files/{id}/content-source -------------------------------------------
+//
+// Rebind the file's chapter source (metadata/content separation, design
+// R5): switch a book's chapters to another plugin instance. The target
+// instance must exist; when it has the `lookup` capability the book must
+// resolve via `get-book`. Materialized bodies are cleared so the next read
+// re-materializes from the new source.
+
+#[derive(Deserialize)]
+pub struct ContentSourceRequest {
+    pub content_source: String,
+    /// Book id inside the content source; defaults to the file's
+    /// `external_id`.
+    pub content_external_id: Option<String>,
+}
+
+pub async fn set_content_source(
+    State(st): State<St>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(req): Json<ContentSourceRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let user = current_user(&st, &headers).await?;
+    let file = load_visible_file(&st, &user, &id).await?;
+    if !can_manage_file(&user, &file) {
+        return Err(ApiError::Forbidden);
+    }
+    let updated = st
+        .library
+        .set_content_source(&id, &req.content_source, req.content_external_id)
+        .await?;
+    Ok(Json(updated))
+}

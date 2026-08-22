@@ -19,10 +19,10 @@ test:
 fmt:
     cargo fmt --all
 
-# Build the example wasm plugin -> plugins-built/hello.wasm
-# Deploy: cp plugins-built/hello.wasm data/plugins/
+# Build the demo wasm plugins -> plugins-built/{hello,wiki,reader}.wasm
+# Deploy: cp plugins-built/*.wasm data/plugins/
 plugin-build:
-    ./scripts/build-plugin-hello.sh
+    ./scripts/build-plugins.sh
 
 # Build the frontend into frontend/dist (served by the backend)
 web-build:

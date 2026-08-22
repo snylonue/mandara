@@ -1,58 +1,29 @@
-//! The `BookSource` trait: the seam used by the wasm plugin system.
+//! Book entries as advertised by plugin sources.
 //!
-//! Books provided by a source are *catalogued* into the central library
-//! (unified metadata storage in SQLite) and their chapters are materialized
-//! into the same store on first access.
+//! These are pure data structures: the metadata a plugin source offers and
+//! the chapters it returns. The server materializes them into the central
+//! library (unified metadata storage in SQLite) on sync / on demand.
 
-use async_trait::async_trait;
-
-use crate::error::Result;
-
-/// A book as advertised by a source.
+/// A book as advertised by a plugin source.
 #[derive(Debug, Clone)]
 pub struct SourceBook {
-    /// Stable id of the book *within the plugin*.
+    /// Stable id of the book *within the plugin instance*.
     pub id: String,
     pub title: String,
     pub authors: Vec<String>,
     pub description: Option<String>,
     pub cover_url: Option<String>,
+    /// When set, the book's chapters come from another plugin instance
+    /// (metadata/content source separation). `None` = this instance also
+    /// provides the content.
+    pub content_source: Option<String>,
+    /// Book id inside the content source. `None` = same as `id`.
+    pub content_id: Option<String>,
 }
 
-/// A chapter as returned by a source.
+/// A chapter as returned by a plugin source.
 #[derive(Debug, Clone)]
 pub struct SourceChapter {
     pub title: String,
     pub content: String,
-}
-
-/// A pluggable provider of books and their content.
-///
-/// The server keeps a list of `BookSource`s: the built-in `"local"` source
-/// (uploaded epub/txt files, stored fully in the database) plus one source
-/// per loaded wasm plugin.
-#[async_trait]
-pub trait BookSource: Send + Sync {
-    /// Stable identifier of this source (used in the `books.source` column).
-    fn id(&self) -> &str;
-
-    /// List all books offered by this source.
-    async fn list_books(&self) -> Result<Vec<SourceBook>>;
-
-    /// Chapter titles of a book, in reading order.
-    /// Indices returned here are the same indices passed to `get_chapter`.
-    async fn chapter_titles(&self, book_id: &str) -> Result<Vec<String>>;
-
-    /// Fetch one chapter. `None` means the book/id does not exist.
-    async fn get_chapter(&self, book_id: &str, index: u32) -> Result<Option<SourceChapter>>;
-
-    /// Try to identify the book behind an uploaded file. `filename` is the
-    /// original upload name, `file_hash` the sha-256 hex digest of the file
-    /// bytes. Returns `Ok(None)` when the source does not recognize the
-    /// file; the server asks every source in order and uses the first
-    /// match as metadata for the upload.
-    async fn identify_upload(&self, filename: &str, file_hash: &str) -> Result<Option<SourceBook>> {
-        let _ = (filename, file_hash);
-        Ok(None)
-    }
 }

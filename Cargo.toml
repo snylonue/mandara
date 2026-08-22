@@ -1,6 +1,8 @@
 [workspace]
 resolver = "2"
 members = [
+    "plugins/wiki-plugin",
+    "plugins/reader-plugin",
     "crates/bookshelf-core",
     "crates/bookshelf-formats",
     "crates/bookshelf-plugin",
@@ -16,6 +18,12 @@ repository = "https://github.com/example/bookshelf"
 
 # the wasm plugin (cdylib) is built size-optimized.
 [profile.release.package.hello-plugin]
+opt-level = "s"
+
+[profile.release.package.wiki-plugin]
+opt-level = "s"
+
+[profile.release.package.reader-plugin]
 opt-level = "s"
 
 [workspace.dependencies]

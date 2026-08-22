@@ -78,7 +78,23 @@ pub fn router(state: St) -> Router {
         .route("/api/auth/me", get(auth::me))
         .route("/api/plugins", get(plugins::list_plugins))
         .route("/api/plugins/sync", post(plugins::sync_plugins))
-        .route("/api/plugins/{id}/catalog", get(plugins::plugin_catalog))
+        .route("/api/plugins/wasm-files", get(plugins::wasm_files))
+        .route("/api/plugins/instances", post(plugins::register_instance))
+        .route(
+            "/api/plugins/instances/{id}",
+            delete(delete(plugins::delete_instance)),
+        )
+        .route(
+            "/api/plugins/instances/{id}/enabled",
+            put(plugins::set_instance_enabled),
+        )
+        .route(
+            "/api/plugins/{id}/config-schema",
+            get(plugins::plugin_config_schema),
+        )
+        .route("/api/plugins/{id}/config", put(plugins::put_plugin_config))
+        .route("/api/plugins/{id}/search", get(plugins::search_plugins))
+        .route("/api/plugins/{id}/books", post(plugins::materialize_book))
         .route(
             "/api/books",
             get(books::list_books).post(books::upload_book),
@@ -98,6 +114,10 @@ pub fn router(state: St) -> Router {
                 .delete(delete(files::delete_file)),
         )
         .route("/api/files/{id}/chapters/{idx}", get(files::get_chapter))
+        .route(
+            "/api/files/{id}/content-source",
+            post(files::set_content_source),
+        )
         .route(
             "/api/files/{id}/sessions",
             get(sessions::list_sessions).post(sessions::create_session),
