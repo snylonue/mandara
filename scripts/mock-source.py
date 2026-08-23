@@ -57,7 +57,18 @@ READER_BOOKS = [
     ("r-6", "时间旅人的信", ["迟舟"], "寄信人来自明天。", ["第一章 明天寄来的明信片", "第二章 错序的邮票", "第三章 末班邮箱"]),
     ("r-7", "深海广播", ["韩潮"], "马里亚纳海沟下的电台信号。", ["第一章 波长 31.4", "第二章 鲸歌应答"]),
     ("r-8", "第七封印物语", ["陆离"], "第七道封印之后，世界安静得不像话。", ["第一章 石门的刻痕", "第二章 无名的守印人", "第三章 封印之下"]),
+    # r-9: multi-volume demo (series split via book-entry.volumes)
+    ("r-9", "星海拾遗·外传", ["洛离"], "两卷合一的多卷示例书（series split 演示）。", ["第一章 相遇", "第二章 洄游", "第三章 觉醒", "第四章 归航"]),
 ]
+
+# Declared volume structure of multi-volume books (WIT volume-info): the
+# flat chapter list of r-9 is the concatenation of these two 卷.
+READER_VOLUMES = {
+    "r-9": [
+        {"title": "第一卷 相遇", "chapter-count": 2},
+        {"title": "第二卷 觉醒", "chapter-count": 2},
+    ],
+}
 
 
 def chapter_text(book_id: str, title: str) -> str:
@@ -84,7 +95,7 @@ def wiki_entry(book, site: str):
 
 def reader_entry(book):
     rid, title, authors, desc, _chapters = book
-    return {
+    entry = {
         "id": rid,
         "title": title,
         "authors": authors,
@@ -93,6 +104,12 @@ def reader_entry(book):
         "content_source": None,
         "content_id": None,
     }
+    # Multi-volume books declare their 卷 structure (WIT volume-info);
+    # the host splits acquisition into one book per volume.
+    volumes = READER_VOLUMES.get(rid)
+    if volumes is not None:
+        entry["volumes"] = volumes
+    return entry
 
 
 # ---------------------------------------------------------------------------

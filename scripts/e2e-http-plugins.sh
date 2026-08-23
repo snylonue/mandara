@@ -125,7 +125,9 @@ start_server "127.0.0.1:${PORT}"
 
 # --- register sources -----------------------------------------------------
 api POST /api/plugins/instances '{"id":"wiki","wasm_file":"wiki.wasm"}' > /dev/null
-api POST /api/plugins/instances '{"id":"reader","wasm_file":"reader.wasm"}' > /dev/null
+# reader: raise the chapter cap so the multi-volume demo book (r-9, 4
+# chapters) is served whole — the default max-chapters=3 would cut 卷 2.
+api POST /api/plugins/instances '{"id":"reader","wasm_file":"reader.wasm","config":{"max-chapters":10}}' > /dev/null
 pass "registered wiki + reader instances"
 
 # --- chapter mode: browse + materialize through the HTTP source ----------
@@ -133,7 +135,7 @@ TOTAL=$(api GET "/api/plugins/wiki/search?limit=3" | jq_field "d['total']")
 [ "$TOTAL" = "8" ] || fail "wiki search total=$TOTAL (expected 8)"
 pass "wiki search: $TOTAL books served over HTTP"
 
-BOOK=$(acquire wiki w-1 | jq_field "d['book']['id']")
+BOOK=$(acquire wiki w-1 | jq_field "d['books'][0]['book']['id']")
 FILE=$(api GET "/api/books/$BOOK" | jq_field "d['files'][0]['id']")
 COUNT=$(api GET "/api/books/$BOOK" | jq_field "d['files'][0]['chapter_count']")
 [ "$COUNT" = "3" ] || fail "w-1 chapter_count=$COUNT (expected 3)"
@@ -150,7 +152,7 @@ CS=$(api GET "/api/books/$BOOK" | jq_field "d['files'][0]['content_source']")
 pass "content indirection wiki -> reader intact"
 
 # independent materialize through the reader instance
-COUNT2=$(acquire reader r-1 | jq_field "d['files'][0]['chapter_count']")
+COUNT2=$(acquire reader r-1 | jq_field "d['books'][0]['files'][0]['chapter_count']")
 [ "$COUNT2" = "3" ] || fail "r-1 chapter_count=$COUNT2"
 pass "materialized r-1 directly via reader"
 
@@ -160,7 +162,7 @@ api GET "/api/files/$FILE/chapters/0" | grep -q "mock-source.py" || fail "refres
 pass "refresh: metadata from source, bodies untouched"
 
 # --- file mode: get-book-file -> epub through the upload parser ----------
-BFILE=$(acquire reader r-2 | jq_field "d['files'][0]['id']")
+BFILE=$(acquire reader r-2 | jq_field "d['books'][0]['files'][0]['id']")
 api GET "/api/files/$BFILE" > /tmp/e2e-file.json
 BFMT=$(python3 -c "import json; d=json.load(open('/tmp/e2e-file.json')); print(d['file']['format'])")
 [ "$BFMT" = "epub" ] || fail "file-mode format=$BFMT (expected epub)"
@@ -188,20 +190,20 @@ printf '第一章 测试章节\n正文内容一行\n' > /tmp/e2e-upload.txt
 
 # file + auto: a plain upload parses its own metadata
 UP=$(api_form /api/books "file=@/tmp/e2e-upload.txt" "visibility=public")
-UPBOOK=$(echo "$UP" | jq_field "d['book']['id']")
-UPC=$(echo "$UP" | jq_field "d['files'][0]['chapter_count']")
+UPBOOK=$(echo "$UP" | jq_field "d['books'][0]['book']['id']")
+UPC=$(echo "$UP" | jq_field "d['books'][0]['files'][0]['chapter_count']")
 [ "$UPC" -ge 1 ] 2>/dev/null || fail "file+auto chapter_count=$UPC"
 pass "file+auto: uploaded txt parsed into a new metadata entry"
 
 # file + attach: a second file joins the same metadata entry
 UP2=$(api_form /api/books "file=@/tmp/e2e-upload.txt" "book_id=$UPBOOK" "visibility=public")
-[ "$(echo "$UP2" | jq_field "d['book']['id']")" = "$UPBOOK" ] || fail "file+attach book mismatch"
+[ "$(echo "$UP2" | jq_field "d['books'][0]['book']['id']")" = "$UPBOOK" ] || fail "file+attach book mismatch"
 pass "file+attach: second file attached under the same metadata"
 
 # plugin + attach: plugin content joins an existing metadata entry
 UP3=$(api_form /api/books "plugin_source=wiki" "plugin_book_id=w-2" "book_id=$UPBOOK" "visibility=public")
-[ "$(echo "$UP3" | jq_field "d['book']['id']")" = "$UPBOOK" ] || fail "plugin+attach book mismatch"
-W3C=$(echo "$UP3" | jq_field "d['files'][0]['chapter_count']")
+[ "$(echo "$UP3" | jq_field "d['books'][0]['book']['id']")" = "$UPBOOK" ] || fail "plugin+attach book mismatch"
+W3C=$(echo "$UP3" | jq_field "d['books'][0]['files'][0]['chapter_count']")
 [ "$W3C" = "3" ] || fail "plugin+attach chapter_count=$W3C (expected 3: reader r-2 content)"
 pass "plugin+attach: wiki w-2 content attached under existing metadata"
 
@@ -213,11 +215,56 @@ pass "plugin+overrides: plugin entry overridden with a manual title"
 # one plugin book = one library entry: attaching it under another entry
 # must conflict
 UP4=$(api_form /api/books "file=@/tmp/e2e-upload.txt" "visibility=public")
-UPBOOK4=$(echo "$UP4" | jq_field "d['book']['id']")
+UPBOOK4=$(echo "$UP4" | jq_field "d['books'][0]['book']['id']")
 if api_form /api/books "plugin_source=wiki" "plugin_book_id=w-2" "book_id=$UPBOOK4" "visibility=public" > /dev/null 2>&1; then
     fail "re-attaching an already materialized plugin book should 409"
 fi
 pass "plugin+attach conflict: w-2 already materialized under another entry -> 409"
+
+# --- multi-volume split + series (docs/series-design.md) ----------------
+# reader r-9 declares 2 volumes (2 + 2 chapters): acquisition must create
+# one series + one book per 卷, each with its own file, and lazy chapter
+# pulls must shift by the volume's flat offset.
+SPLIT=$(acquire reader r-9)
+SERIES_ID=$(echo "$SPLIT" | jq_field "d['series']['id']")
+[ -n "$SERIES_ID" ] || fail "multi-volume acquisition produced no series"
+NVOL=$(echo "$SPLIT" | jq_field "len(d['books'])")
+[ "$NVOL" = "2" ] || fail "split volume count=$NVOL (expected 2)"
+V1=$(echo "$SPLIT" | jq_field "d['books'][0]['book']['volume_no']")
+V2=$(echo "$SPLIT" | jq_field "d['books'][1]['book']['volume_no']")
+[ "$V1" = "1" ] && [ "$V2" = "2" ] || fail "volume numbers $V1/$V2 (expected 1/2)"
+SV1=$(echo "$SPLIT" | jq_field "len(d['books'][0]['files'])")
+[ "$SV1" = "1" ] || fail "each volume must own exactly one file"
+C1=$(echo "$SPLIT" | jq_field "d['books'][0]['files'][0]['chapter_count']")
+C2=$(echo "$SPLIT" | jq_field "d['books'][1]['files'][0]['chapter_count']")
+[ "$C1" = "2" ] && [ "$C2" = "2" ] || fail "per-volume chapter counts $C1/$C2 (expected 2/2)"
+F2=$(echo "$SPLIT" | jq_field "d['books'][1]['files'][0]['id']")
+OFF2=$(echo "$SPLIT" | jq_field "d['books'][1]['files'][0]['volume_offset']")
+[ "$OFF2" = "2" ] || fail "volume 2 flat offset=$OFF2 (expected 2)"
+# offset mapping: volume 2's chapter 0 is the source's flat chapter 3
+api GET "/api/files/$F2/chapters/0" | grep -q "第三章 觉醒" || fail "vol2 ch0 should be the source's 第三章 觉醒"
+api GET "/api/files/$F2/chapters/1" | grep -q "第四章 归航" || fail "vol2 ch1 should be the source's 第四章 归航"
+pass "split: series + 2 books, per-volume files with correct offsets and lazy chapters"
+# one plugin book = one series: re-acquiring conflicts
+if acquire reader r-9 > /dev/null 2>&1; then
+    fail "re-acquiring an already split book should 409"
+fi
+pass "split conflict: re-acquire r-9 -> 409"
+# series endpoints: list, detail (volume titles), volume file labels
+api GET /api/series | grep -q "$SERIES_ID" || fail "created series not listed in /api/series"
+api GET "/api/series/$SERIES_ID" | grep -q "第一卷 相遇" || fail "series detail misses the volume-title label"
+api GET "/api/files/$F2" | grep -q "第二卷 觉醒" || fail "volume 2 file label should carry its volume title"
+pass "series list/detail + volume labels"
+# manual series management (uploads): create, assign with a volume number,
+# reorder via PUT members, unassign, delete
+MS=$(api POST /api/series '{"title":"测试系列","authors":["某作者"]}')
+MS_ID=$(echo "$MS" | jq_field "d['id']")
+api PATCH "/api/books/$UPBOOK" "{\"series_id\":\"$MS_ID\",\"volume_no\":1}" > /dev/null || fail "manual series assignment"
+api GET "/api/series/$MS_ID" | grep -q "$UPBOOK" || fail "assigned book not a member of the series"
+api PUT "/api/series/$MS_ID/members" '{"book_ids":[]}' > /dev/null || fail "clear members via PUT"
+api PATCH "/api/books/$UPBOOK" '{"series_id":null}' > /dev/null || fail "unassign via PATCH null"
+api DELETE "/api/series/$MS_ID" > /dev/null || fail "delete series"
+pass "manual series: create / assign / empty members / unassign / delete"
 
 rm -f /tmp/e2e-upload.txt
 
