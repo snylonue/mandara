@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use bookshelf_core::model::{BookMeta, FileMeta, SeriesMeta, Visibility};
 
 use crate::error::ApiError;
+use crate::routes::series::SeriesBrief;
 use crate::routes::{ListParams, St, current_user};
 use crate::service::library::{AcquireContent, AcquireMetadata, MetadataOverrides};
 
@@ -38,7 +39,7 @@ pub struct BookListEntry {
 /// element unless the acquisition split volumes.
 #[derive(Serialize)]
 pub struct AcquireResult {
-    pub series: Option<SeriesMeta>,
+    pub series: Option<SeriesBrief>,
     pub books: Vec<BookDetail>,
 }
 
@@ -275,10 +276,15 @@ pub async fn upload_book(
             &label,
         )
         .await?;
+    // `series` is a full brief (with the member count) per the contract.
+    let series = match outcome.series {
+        Some(s) => Some(SeriesBrief::from_meta(&st, s).await?),
+        None => None,
+    };
     Ok((
         StatusCode::CREATED,
         Json(AcquireResult {
-            series: outcome.series,
+            series,
             books: outcome
                 .books
                 .into_iter()

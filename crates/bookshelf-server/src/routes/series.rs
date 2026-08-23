@@ -30,7 +30,7 @@ pub struct SeriesBrief {
 }
 
 impl SeriesBrief {
-    async fn from_meta(st: &St, series: SeriesMeta) -> Result<SeriesBrief, ApiError> {
+    pub(crate) async fn from_meta(st: &St, series: SeriesMeta) -> Result<SeriesBrief, ApiError> {
         let volume_count = st.library.series_volume_count(&series.id).await?;
         Ok(SeriesBrief {
             id: series.id,
