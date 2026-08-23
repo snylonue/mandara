@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import {
+  ReaderSettingsPanel,
+  useReaderSettings,
+} from "./ReaderSettings";
 import type { Chapter, ChapterMeta, Position, TocNode } from "../types";
 
 interface ReaderProps {
@@ -15,6 +20,8 @@ interface ReaderProps {
   toc?: TocNode[];
   /** Disable prev/next persistence and session UI (public share view). */
   readOnly?: boolean;
+  /** Where the top-bar 返回 points (book detail page); hidden when absent. */
+  backHref?: string;
 }
 
 export function Reader({
@@ -25,9 +32,12 @@ export function Reader({
   initialPosition,
   onProgress,
   readOnly,
+  backHref,
 }: ReaderProps) {
   const { t } = useTranslation();
+  const [settings, setSettings] = useReaderSettings();
   const [tocOpen, setTocOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [idx, setIdx] = useState(() =>
     Math.min(initialPosition?.chapter_idx ?? 0, Math.max(chapters.length - 1, 0)),
   );
@@ -118,39 +128,91 @@ export function Reader({
   }, []);
 
   const cur = chapters.find((c) => c.idx === idx);
+  const next = chapters.find((c) => c.idx === idx + 1);
   const progress = chapters.length > 0 ? ((idx + fraction) / chapters.length) * 100 : 0;
 
+  // Keep the highlighted chapter visible when the drawer opens or the
+  // chapter changes while it is open.
+  useEffect(() => {
+    if (!tocOpen) return;
+    requestAnimationFrame(() => {
+      document
+        .querySelector(".toc-drawer .toc-link.current")
+        ?.scrollIntoView({ block: "center" });
+    });
+  }, [tocOpen, idx]);
+
   return (
-    <div className="reader">
-      <div className="reader-top">
-        <div className="reader-title">
-          {title} <span className="reader-sub">{cur?.title ?? ""}</span>
+    <div className="reader" data-theme={settings.theme}>
+      {/* fixed top bar: 目录 / 返回 · book title · chapter title · percent · 设置 */}
+      <header className="reader-topbar">
+        <div className="reader-topbar-side">
+          {(toc ?? []).length > 0 && (
+            <button className="sm" onClick={() => setTocOpen(true)}>
+              {t("reader.toc")}
+            </button>
+          )}
+          {backHref && (
+            <Link className="link-btn" to={backHref}>
+              {t("common.backToDetail")}
+            </Link>
+          )}
         </div>
-        <div className="reader-controls">
+        <div className="reader-topbar-center">
+          <span className="reader-topbar-book">{title}</span>
+          <span className="reader-topbar-chapter">
+            {cur?.title ?? ""}
+            {!readOnly && ` · ${Math.round(progress)}%`}
+          </span>
+        </div>
+        <div className="reader-topbar-side reader-topbar-end">
           <button
-            className={tocOpen ? "active" : undefined}
-            onClick={() => setTocOpen((v) => !v)}
-            aria-expanded={tocOpen}
+            className={`sm${settingsOpen ? " active" : ""}`}
+            onClick={() => setSettingsOpen((v) => !v)}
+            aria-expanded={settingsOpen}
           >
-            {t("reader.toc")}
-          </button>
-          <button onClick={() => goto(idx - 1)} disabled={idx <= 0}>
-            {t("reader.prev")}
-          </button>
-          <button onClick={() => goto(idx + 1)} disabled={idx >= chapters.length - 1}>
-            {t("reader.next")}
+            Aa
           </button>
         </div>
-      </div>
-      {tocOpen && (toc ?? []).length > 0 && (
-        <nav className="toc-panel" aria-label={t("reader.toc")}>
-          <TocTree nodes={toc!} current={idx} onSelect={goto} onClose={() => setTocOpen(false)} />
-        </nav>
+        {settingsOpen && (
+          <ReaderSettingsPanel
+            settings={settings}
+            onChange={setSettings}
+            onClose={() => setSettingsOpen(false)}
+          />
+        )}
+      </header>
+
+      {/* left slide-in table of contents */}
+      {tocOpen && (
+        <>
+          <div className="toc-drawer-backdrop" onClick={() => setTocOpen(false)} />
+          <nav className="toc-drawer" aria-label={t("reader.toc")}>
+            <div className="toc-drawer-head">
+              <h2>{t("reader.toc")}</h2>
+              <button className="ghost sm" onClick={() => setTocOpen(false)} aria-label={t("common.close")}>
+                ✕
+              </button>
+            </div>
+            <div className="toc-drawer-body">
+              <TocTree nodes={toc!} current={idx} onSelect={goto} onClose={() => setTocOpen(false)} />
+            </div>
+          </nav>
+        </>
       )}
+
       <div className="progress-bar">
         <div className="progress-fill" style={{ width: `${progress}%` }} />
       </div>
-      <article className="reader-content">
+
+      <article
+        className={`reader-body font-${settings.font}`}
+        style={{
+          fontSize: `${settings.fontSize}px`,
+          lineHeight: settings.lineHeight,
+          maxWidth: `${settings.widthEm}em`,
+        }}
+      >
         {loading && <p className="hint">{t("common.loading")}</p>}
         {chapter &&
           (chapter.format === "html" ? (
@@ -163,19 +225,24 @@ export function Reader({
             <p className="chapter-text">{chapter.content}</p>
           ))}
       </article>
+
+      {/* single prev/next control set — large buttons with chapter preview */}
       <div className="reader-bottom">
-        <button onClick={() => goto(idx - 1)} disabled={idx <= 0 || readOnly}>
-          {t("reader.prev")}
+        <button
+          className="reader-nav-btn"
+          onClick={() => goto(idx - 1)}
+          disabled={idx <= 0}
+        >
+          <small>{t("reader.prev")}</small>
+          <span>{chapters.find((c) => c.idx === idx - 1)?.title ?? ""}</span>
         </button>
-        <span className="hint">
-          {t("reader.chapterOf", {
-            current: idx + 1,
-            total: chapters.length,
-            percent: Math.round(progress),
-          })}
-        </span>
-        <button onClick={() => goto(idx + 1)} disabled={idx >= chapters.length - 1 || readOnly}>
-          {t("reader.next")}
+        <button
+          className="reader-nav-btn next"
+          onClick={() => goto(idx + 1)}
+          disabled={idx >= chapters.length - 1 || readOnly}
+        >
+          <small>{t("reader.next")}</small>
+          <span>{next?.title ?? ""}</span>
         </button>
       </div>
     </div>

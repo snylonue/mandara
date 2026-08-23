@@ -127,7 +127,20 @@
     "defaultSessionLabel": "平板",
     "createFailed": "创建失败",
     "sessionLabel": "会话",
-    "toc": "目录"
+    "toc": "目录",
+    "settings": "阅读设置",
+    "fontSize": "字号",
+    "lineHeight": "行距",
+    "fontFamily": "字体",
+    "fontSerif": "宋体",
+    "fontSans": "黑体",
+    "width": "版面宽度",
+    "widthNarrow": "窄",
+    "widthWide": "宽",
+    "theme": "主题",
+    "theme_dark": "夜间",
+    "theme_sepia": "羊皮纸",
+    "theme_light": "白昼"
   },
   "share": {
     "invalidTitle": "链接不可用",

@@ -561,46 +561,179 @@ textarea::placeholder {
 
 /* ---- reader ---- */
 .reader {
-  max-width: 780px;
+  --nav-h: 53px;
   margin: 0 auto;
 }
 
-.reader-top {
-  margin-bottom: 10px;
-}
-
-.reader-title {
-  font-size: 20px;
-  font-weight: 700;
-  margin-bottom: 10px;
-}
-
-.reader-sub {
-  color: var(--muted);
-  font-size: 15px;
-  font-weight: 400;
-}
-
-.reader-controls {
+/* Fixed top bar under the app nav:
+   目录 / 返回 · book title · chapter · percent · 设置 */
+.reader-topbar {
+  position: sticky;
+  top: var(--nav-h);
+  z-index: 40;
   display: flex;
-  gap: 10px;
   align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  padding: var(--space-2) 0;
+  min-height: 44px;
 }
 
-.reader-controls select {
+.reader-topbar-side {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
   flex: 1;
   min-width: 0;
 }
 
-/* Hierarchical TOC panel (tree per the ebook's nav/NCX). */
-.toc-panel {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--panel);
-  max-height: 60vh;
+.reader-topbar-end {
+  justify-content: flex-end;
+}
+
+.reader-topbar-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+  min-width: 0;
+  text-align: center;
+}
+
+.reader-topbar-book {
+  font-weight: 700;
+  color: var(--text-strong);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.reader-topbar-chapter {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+/* Left slide-in TOC drawer. */
+.toc-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  background: rgba(5, 8, 14, 0.6);
+}
+
+.toc-drawer {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  z-index: 121;
+  width: min(360px, 86vw);
+  background: var(--surface-raised);
+  border-right: 1px solid var(--border-strong);
+  box-shadow: 8px 0 32px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  animation: drawer-in 0.18s ease-out;
+}
+
+@keyframes drawer-in {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: none;
+  }
+}
+
+.toc-drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.toc-drawer-head h2 {
+  margin: 0;
+}
+
+.toc-drawer-body {
+  flex: 1;
   overflow-y: auto;
-  padding: 8px 10px;
-  margin: 10px 0;
+  padding: var(--space-2) var(--space-3) var(--space-4);
+}
+
+/* Reading settings popover. */
+.reader-settings {
+  position: absolute;
+  top: calc(100% + var(--space-2));
+  right: 0;
+  z-index: 50;
+  width: min(320px, 92vw);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.reader-settings-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+.reader-setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.reader-setting-label {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+}
+
+.reader-setting-value {
+  font-size: var(--fs-sm);
+  min-width: 4ch;
+  text-align: center;
+}
+
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.seg button {
+  border: none;
+  border-radius: 0;
+}
+
+.seg button + button {
+  border-left: 1px solid var(--border);
+}
+
+.seg button.active,
+button.active {
+  background: var(--accent);
+  color: #fff;
 }
 
 .toc-list,
@@ -648,12 +781,13 @@ textarea::placeholder {
 }
 
 .toc-link:hover {
-  background: var(--border);
+  background: var(--bg2);
 }
 
 .toc-link.current {
   color: var(--accent);
   font-weight: 700;
+  background: rgba(91, 140, 255, 0.12);
 }
 
 .toc-group {
@@ -663,11 +797,6 @@ textarea::placeholder {
   color: var(--muted);
   padding: 4px 2px;
   letter-spacing: 0.05em;
-}
-
-.reader-controls button.active {
-  background: var(--accent);
-  color: #fff;
 }
 
 .progress-bar {
@@ -684,33 +813,60 @@ textarea::placeholder {
   transition: width 0.3s;
 }
 
-.reader-content {
+/* Reading column — theme / font / width come from the settings panel
+   (inline style) plus the data-theme attribute on .reader. */
+.reader-body {
+  --fg: var(--text);
+  --reader-border: var(--border);
+  --reader-muted: var(--muted);
   min-height: 40vh;
+  margin: 0 auto;
+  padding: var(--space-4) var(--space-4) var(--space-5);
+  color: var(--fg);
+  border-radius: var(--radius);
+  transition: background-color 0.2s, color 0.2s;
+}
+
+.reader-body[data-theme="sepia"],
+.reader[data-theme="sepia"] .reader-body {
+  --fg: #43382a;
+  --reader-border: #d8c9a8;
+  --reader-muted: #8a7a5f;
+  background: #f4ecd8;
+}
+
+.reader-body[data-theme="light"],
+.reader[data-theme="light"] .reader-body {
+  --fg: #333942;
+  --reader-border: #dde1e8;
+  --reader-muted: #6b7280;
+  background: #fbfbfd;
+}
+
+.reader-body.font-serif {
+  font-family: "Noto Serif SC", "Songti SC", "SimSun", serif;
+}
+
+.reader-body.font-sans {
+  font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
 }
 
 .chapter-text {
   white-space: pre-wrap;
-  font-family: "Noto Serif SC", "Songti SC", "SimSun", serif;
-  font-size: 17px;
-  line-height: 2.1;
   letter-spacing: 0.02em;
   margin: 0;
 }
 
 /* Sanitized EPUB XHTML (see backend epub parser). */
 .epub-content {
-  font-family: "Noto Serif SC", "Songti SC", "SimSun", serif;
-  font-size: 17px;
-  line-height: 2.1;
   letter-spacing: 0.02em;
-  color: var(--text);
   word-wrap: break-word;
   overflow-wrap: anywhere;
 }
 
 .epub-content p,
 .epub-content div {
-  margin: 0 0 0.9em;
+  margin: 0 0 0.8em;
   text-align: justify;
 }
 
@@ -727,7 +883,6 @@ textarea::placeholder {
 
 .epub-content h1 {
   font-size: 1.5em;
-  text-align: center;
 }
 
 .epub-content h2 {
@@ -759,13 +914,13 @@ textarea::placeholder {
 .epub-content blockquote {
   margin: 1em 0;
   padding: 0.2em 1.2em;
-  border-left: 3px solid var(--border);
-  color: var(--muted);
+  border-left: 3px solid var(--reader-border);
+  color: var(--reader-muted);
 }
 
 .epub-content pre {
-  background: var(--panel);
-  border: 1px solid var(--border);
+  background: rgba(127, 127, 127, 0.08);
+  border: 1px solid var(--reader-border);
   border-radius: 6px;
   padding: 0.8em 1em;
   overflow-x: auto;
@@ -791,12 +946,12 @@ textarea::placeholder {
 
 .epub-content th,
 .epub-content td {
-  border: 1px solid var(--border);
+  border: 1px solid var(--reader-border);
   padding: 0.4em 0.8em;
 }
 
 .epub-content th {
-  background: var(--panel);
+  background: rgba(127, 127, 127, 0.08);
 }
 
 .epub-content ruby {
@@ -805,12 +960,12 @@ textarea::placeholder {
 
 .epub-content rt {
   font-size: 0.6em;
-  color: var(--muted);
+  color: var(--reader-muted);
 }
 
 .epub-content hr {
   border: none;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--reader-border);
   margin: 1.6em auto;
   width: 60%;
 }
@@ -823,17 +978,48 @@ textarea::placeholder {
 
 .epub-content figcaption {
   font-size: 0.85em;
-  color: var(--muted);
+  color: var(--reader-muted);
   margin-top: 0.3em;
 }
 
+/* Large bottom prev/next with chapter-title preview. */
 .reader-bottom {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-top: 40px;
-  border-top: 1px solid var(--border);
-  padding-top: 16px;
+  gap: var(--space-3);
+  margin-top: var(--space-5);
+}
+
+.reader-nav-btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+  text-align: left;
+  padding: var(--space-3) var(--space-4);
+}
+
+.reader-nav-btn.next {
+  align-items: flex-end;
+  text-align: right;
+}
+
+.reader-nav-btn small {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+.reader-nav-btn span {
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.reader-nav-btn:hover:not(:disabled) small {
+  color: var(--accent2);
 }
 
 .reader-session-bar {

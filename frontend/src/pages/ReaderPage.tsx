@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { Reader } from "../components/Reader";
@@ -112,6 +112,7 @@ export function ReaderPage() {
         title={book.title}
         chapters={chapters}
         toc={detail.toc}
+        backHref={`/book/${book.id}`}
         loadChapter={async (idx) => {
           const c = await api<Chapter>(`/files/${id}/chapters/${idx}`);
           return c;
@@ -119,9 +120,6 @@ export function ReaderPage() {
         initialPosition={initialPosition}
         onProgress={save}
       />
-      <p className="hint center">
-        <Link to={`/book/${book.id}`}>{t("common.backToDetail")}</Link>
-      </p>
     </div>
   );
 }
