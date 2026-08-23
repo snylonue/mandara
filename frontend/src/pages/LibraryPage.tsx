@@ -13,6 +13,7 @@ import {
 import type {
   BookDetail,
   BookListEntry,
+  BookMeta,
   PluginInstance,
   Visibility,
 } from "../types";
@@ -22,6 +23,29 @@ import {
   IconPrivate,
   IconPublic,
 } from "../components/icons";
+
+/** Cover image: stored bytes first (404 → fallbacks), then remote URL. */
+function BookCover({ book }: { book: BookMeta }) {
+  const [storedFailed, setStoredFailed] = useState(false);
+  if (!storedFailed) {
+    return (
+      <img
+        src={`/api/books/${book.id}/cover`}
+        alt=""
+        loading="lazy"
+        onError={() => setStoredFailed(true)}
+      />
+    );
+  }
+  if (book.cover_url) {
+    return <img src={book.cover_url} alt="" loading="lazy" />;
+  }
+  return (
+    <div className="book-cover-fallback">
+      <span>{book.title.trim().charAt(0) || "书"}</span>
+    </div>
+  );
+}
 
 function BookCard({ entry }: { entry: BookListEntry }) {
   const { t } = useTranslation();
@@ -35,13 +59,7 @@ function BookCard({ entry }: { entry: BookListEntry }) {
   return (
     <Link className="book-card" to={`/book/${book.id}`}>
       <div className="book-cover">
-        {book.cover_url ? (
-          <img src={book.cover_url} alt="" loading="lazy" />
-        ) : (
-          <div className="book-cover-fallback">
-            <span>{book.title.trim().charAt(0) || "书"}</span>
-          </div>
-        )}
+        <BookCover book={book} />
         <div className="book-badges">
           <span
             className={`badge-icon ${anyPublic ? "badge-public" : "badge-private"}`}

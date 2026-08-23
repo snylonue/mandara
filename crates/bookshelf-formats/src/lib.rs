@@ -18,10 +18,20 @@ pub struct ParsedBook {
     pub authors: Vec<String>,
     pub description: Option<String>,
     pub cover_url: Option<String>,
+    /// Cover image extracted from the source file (epub only), stored by
+    /// the server and served via `GET /api/books/{id}/cover`.
+    pub cover: Option<CoverImage>,
     pub chapters: Vec<ParsedChapter>,
     /// Hierarchical table of contents per the ebook's nav/NCX. `idx`
     /// references entries of `chapters`; pure group nodes have `None`.
     pub toc: Vec<TocNode>,
+}
+
+/// Cover image bytes with their content type (e.g. `image/jpeg`).
+#[derive(Debug, Clone)]
+pub struct CoverImage {
+    pub bytes: Vec<u8>,
+    pub mime: String,
 }
 
 /// One chapter of a parsed book.

@@ -602,6 +602,30 @@ paths:
                     items:
                       type: string
 
+  /api/books/{id}/cover:
+    get:
+      tags: [books]
+      summary: |
+        Serve the stored cover image bytes (extracted from an uploaded
+        epub). Unauthenticated on purpose: `<img>` elements cannot send
+        the Authorization header, and book ids are unguessable uuids
+        (same capability-like model as share tokens). Books without a
+        stored cover answer 404 so callers fall back to a placeholder.
+      operationId: getBookCover
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/BookId"
+      responses:
+        "200":
+          description: The cover image bytes
+          content:
+            image/*:
+              schema:
+                type: string
+                format: binary
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /api/books/{id}/refresh:
     post:
       tags: [books]

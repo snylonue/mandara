@@ -321,6 +321,29 @@ export interface paths {
         patch: operations["patchBook"];
         trace?: never;
     };
+    "/api/books/{id}/cover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Serve the stored cover image bytes (extracted from an uploaded
+         *     epub). Unauthenticated on purpose: `<img>` elements cannot send
+         *     the Authorization header, and book ids are unguessable uuids
+         *     (same capability-like model as share tokens). Books without a
+         *     stored cover answer 404 so callers fall back to a placeholder.
+         */
+        get: operations["getBookCover"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/books/{id}/refresh": {
         parameters: {
             query?: never;
@@ -1412,6 +1435,30 @@ export interface operations {
                 };
             };
             403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    getBookCover: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Book (metadata) id */
+                id: components["parameters"]["BookId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The cover image bytes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/*": string;
+                };
+            };
             404: components["responses"]["NotFound"];
         };
     };

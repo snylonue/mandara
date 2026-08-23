@@ -107,6 +107,7 @@ pub fn router(state: St) -> Router {
         )
         .route("/api/books/{id}/files", post(books::attach_file))
         .route("/api/books/{id}/refresh", post(books::refresh_book))
+        .route("/api/books/{id}/cover", get(books::get_book_cover))
         .route(
             "/api/files/{id}",
             get(files::get_file)

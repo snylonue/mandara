@@ -43,6 +43,7 @@ pub fn parse(bytes: &[u8], filename: &str) -> Result<ParsedBook> {
         authors: Vec::new(),
         description: None,
         cover_url: None,
+        cover: None, // plain text has no cover
         chapters,
         toc,
     })

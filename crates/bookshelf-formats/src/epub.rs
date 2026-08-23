@@ -31,7 +31,7 @@ use epub::doc::{EpubDoc, NavPoint};
 use scraper::node::Node;
 use scraper::{ElementRef, Html, Selector};
 
-use crate::{ParsedBook, ParsedChapter};
+use crate::{CoverImage, ParsedBook, ParsedChapter};
 
 /// XHTML / HTML content types accepted as spine documents.
 const XHTML_MIMES: [&str; 2] = ["application/xhtml+xml", "text/html"];
@@ -235,11 +235,18 @@ fn parse_path(path: &Path) -> Result<ParsedBook> {
             .collect();
     }
 
+    // Cover image: EPUB3 `cover-image` property, EPUB2 `<meta name="cover">`.
+    let cover = doc
+        .get_cover()
+        .filter(|(bytes, _)| !bytes.is_empty())
+        .map(|(bytes, mime)| CoverImage { bytes, mime });
+
     Ok(ParsedBook {
         title,
         authors,
         description,
-        cover_url: None, // cover extraction (bytes) is not stored yet
+        cover_url: None,
+        cover,
         chapters,
         toc,
     })
@@ -834,6 +841,11 @@ mod tests {
                 manifest.push_str(&format!(
                     r#"<item id="nav" href="{toc_file}" media-type="application/xhtml+xml" properties="nav"/>"#
                 ));
+                // EPUB 3 cover: exactly one manifest item carries the
+                // `cover-image` property.
+                manifest.push_str(
+                    r#"<item id="cover-image" href="images/pic.png" media-type="image/png" properties="cover-image"/>"#,
+                );
             } else {
                 manifest.push_str(&format!(
                     r#"<item id="ncx" href="{toc_file}" media-type="application/x-dtbncx+xml"/>"#
@@ -1320,5 +1332,18 @@ mod tests {
     fn rejects_non_epub() {
         let err = parse(b"not a zip").unwrap_err();
         assert!(matches!(err, Error::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn extracts_epub3_cover_image() {
+        let bytes = build_epub(&Fixture {
+            version: "3.0",
+            spine: vec![("ch1.xhtml".into(), true)],
+            toc: vec![e("第一章", "ch1.xhtml", vec![])],
+        });
+        let book = parse(&bytes).unwrap();
+        let cover = book.cover.expect("epub3 cover-image property");
+        assert_eq!(cover.mime, "image/png");
+        assert_eq!(cover.bytes, PNG_1PX);
     }
 }

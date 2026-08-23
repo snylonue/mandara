@@ -463,6 +463,11 @@ impl Library {
                 if self.files_of_book(&book_id, user).await?.is_empty() {
                     return Err(ApiError::Forbidden);
                 }
+                // The attached edition may be the first one carrying a
+                // real cover — fill it in when the entry has none yet.
+                if let Some(cover) = &parsed.cover {
+                    self.store_cover_if_missing(&book_id, cover).await?;
+                }
                 book_id
             }
             // Metadata from a named plugin source (manual picker or
@@ -564,8 +569,8 @@ impl Library {
             None => serde_json::to_string(&parsed.authors).unwrap_or_else(|_| "[]".into()),
         };
         sqlx::query(
-            "INSERT INTO books (id, title, authors, description, cover_url, created_by) \
-             VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO books (id, title, authors, description, cover_url, cover, cover_mime, created_by) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&book_id)
         .bind(
@@ -587,10 +592,44 @@ impl Library {
                 .clone()
                 .or_else(|| parsed.cover_url.clone()),
         )
+        .bind(parsed.cover.as_ref().map(|c| c.bytes.clone()))
+        .bind(parsed.cover.as_ref().map(|c| c.mime.clone()))
         .bind(owner_id)
         .execute(&self.db)
         .await?;
         Ok(book_id)
+    }
+
+    /// Store cover bytes on the metadata entry when it has none yet
+    /// (attach-mode uploads; creation always overwrites via INSERT).
+    async fn store_cover_if_missing(
+        &self,
+        book_id: &str,
+        cover: &bookshelf_formats::CoverImage,
+    ) -> Result<(), ApiError> {
+        sqlx::query(
+            "UPDATE books SET cover = ?, cover_mime = ? \
+             WHERE id = ? AND cover IS NULL",
+        )
+        .bind(&cover.bytes)
+        .bind(&cover.mime)
+        .bind(book_id)
+        .execute(&self.db)
+        .await?;
+        Ok(())
+    }
+
+    /// The stored cover image of a metadata entry (bytes, mime), if any.
+    pub async fn get_cover(&self, book_id: &str) -> Result<Option<(Vec<u8>, String)>, ApiError> {
+        let row: Option<(Option<Vec<u8>>, Option<String>)> =
+            sqlx::query_as("SELECT cover, cover_mime FROM books WHERE id = ?")
+                .bind(book_id)
+                .fetch_optional(&self.db)
+                .await?;
+        Ok(row.and_then(|(bytes, mime)| match (bytes, mime) {
+            (Some(bytes), Some(mime)) if !bytes.is_empty() => Some((bytes, mime)),
+            _ => None,
+        }))
     }
 
     /// Store an uploaded file (chapters + TOC) under the given metadata

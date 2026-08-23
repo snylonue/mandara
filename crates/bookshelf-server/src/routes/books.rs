@@ -4,7 +4,7 @@
 
 use axum::Json;
 use axum::extract::{Multipart, Path, Query, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 
@@ -288,6 +288,24 @@ pub async fn get_book(
 fn can_manage_metadata(user: &bookshelf_core::model::User, book: &BookMeta) -> bool {
     user.role == bookshelf_core::model::Role::Admin
         || book.created_by.as_deref() == Some(user.id.as_str())
+}
+
+// GET /api/books/{id}/cover --------------------------------------------------
+//
+// Serves the stored cover image bytes. Deliberately unauthenticated:
+// `<img>` tags cannot send the Authorization header, and book ids are
+// unguessable uuids (same capability-like model as share tokens). A book
+// without a stored cover answers 404 so callers fall back to a placeholder.
+pub async fn get_book_cover(
+    State(st): State<St>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let (bytes, mime) = st
+        .library
+        .get_cover(&id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("cover"))?;
+    Ok(([(header::CONTENT_TYPE, mime)], bytes))
 }
 
 // PATCH /api/books/{id} ------------------------------------------------------
