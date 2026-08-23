@@ -1125,26 +1125,25 @@ impl Library {
         let pattern = format!("%{}%", query.unwrap_or("").trim());
         let is_admin = user.role == bookshelf_core::model::Role::Admin;
 
-        let mut q = sqlx::QueryBuilder::new(
+        // Static SQL with parameterized switches (no dynamic assembly):
+        // `source` filters only when non-null; the visibility clause is
+        // bypassed for admins via an always-true bound flag. Series first
+        // (in volume order), then standalone books, newest first.
+        let rows: Vec<BookRow> = sqlx::query_as(
             "SELECT DISTINCT b.id, b.title, b.authors, b.description, b.cover_url, b.created_by, \
              b.created_at, b.series_id, b.volume_no FROM books b JOIN book_files f ON f.book_id = b.id \
-             WHERE b.title LIKE ",
-        );
-        q.push_bind(pattern);
-        if let Some(src) = source {
-            q.push(" AND f.source = ").push_bind(src);
-        }
-        // Series first (in volume order), then standalone books, newest first.
-        let order =
-            " ORDER BY (b.series_id IS NOT NULL) DESC, b.series_id, b.volume_no, b.created_at DESC";
-        if is_admin {
-            q.push(order);
-        } else {
-            q.push(" AND (f.visibility = 'public' OR f.owner_id = ")
-                .push_bind(&user.id)
-                .push(order);
-        }
-        let rows: Vec<BookRow> = q.build_query_as().fetch_all(&self.db).await?;
+             WHERE b.title LIKE ? \
+             AND (f.source = ? OR ? IS NULL) \
+             AND (? OR f.visibility = 'public' OR f.owner_id = ?) \
+             ORDER BY (b.series_id IS NOT NULL) DESC, b.series_id, b.volume_no, b.created_at DESC",
+        )
+        .bind(pattern)
+        .bind(source)
+        .bind(source)
+        .bind(is_admin)
+        .bind(&user.id)
+        .fetch_all(&self.db)
+        .await?;
 
         let mut books = Vec::new();
         for row in rows {
@@ -1637,18 +1636,18 @@ impl Library {
         user: &User,
     ) -> Result<Vec<FileMeta>, ApiError> {
         let is_admin = user.role == bookshelf_core::model::Role::Admin;
-        let mut q = sqlx::QueryBuilder::new(
+        // Static SQL; the visibility clause is bypassed for admins via an
+        // always-true bound flag.
+        let rows: Vec<FileRow> = sqlx::query_as(
             "SELECT id, book_id, source, external_id, content_source, content_external_id, format, label, visibility, owner_id, \
-             chapter_count, created_at, volume_no, volume_offset FROM book_files WHERE book_id = ",
-        );
-        q.push_bind(book_id);
-        if !is_admin {
-            q.push(" AND (visibility = 'public' OR owner_id = ")
-                .push_bind(&user.id)
-                .push(")");
-        }
-        q.push(" ORDER BY created_at DESC");
-        let rows: Vec<FileRow> = q.build_query_as().fetch_all(&self.db).await?;
+             chapter_count, created_at, volume_no, volume_offset FROM book_files WHERE book_id = ? \
+             AND (? OR visibility = 'public' OR owner_id = ?) ORDER BY created_at DESC",
+        )
+        .bind(book_id)
+        .bind(is_admin)
+        .bind(&user.id)
+        .fetch_all(&self.db)
+        .await?;
         rows.into_iter().map(FileRow::into_model).collect()
     }
 
