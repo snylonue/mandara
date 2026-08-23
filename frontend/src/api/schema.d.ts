@@ -738,6 +738,18 @@ export interface components {
             enabled: boolean;
             /** @description Subset of [declare, search, lookup, identify, content, book-file]. book-file instances materialize whole book files through the upload parser (file mode wins over chapter mode). */
             capabilities: string[];
+            /**
+             * @description Interaction hints declared by the plugin (`source-info` export):
+             *     how the frontend should present this source when acquiring
+             *     books. `kind` = "search" | "manual-id" | "browse" | ""
+             *     (empty = derive from capabilities).
+             */
+            source_info: {
+                kind: string;
+                id_kind: string;
+                id_hint?: string | null;
+                search_hint?: string | null;
+            };
         };
         /** @description One field of a plugin's configuration schema */
         ConfigField: {

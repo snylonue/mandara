@@ -78,6 +78,17 @@ impl Guest for HelloPlugin {
         "hello".to_string()
     }
 
+    fn source_info() -> SourceInfo {
+        // A small declared catalog, fully synced at startup; nothing to
+        // pick in a source browser.
+        SourceInfo {
+            kind: "browse".into(),
+            id_kind: "free".into(),
+            id_hint: None,
+            search_hint: None,
+        }
+    }
+
     /// Schema of per-instance configuration. The host renders this schema
     /// as an admin form and injects the values at the start of every call.
     fn config_schema() -> Vec<ConfigField> {

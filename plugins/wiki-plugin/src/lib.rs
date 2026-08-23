@@ -145,6 +145,16 @@ impl Guest for WikiPlugin {
         "wiki".into()
     }
 
+    fn source_info() -> SourceInfo {
+        // Searchable metadata-only source (content comes from reader).
+        SourceInfo {
+            kind: "search".into(),
+            id_kind: "free".into(),
+            id_hint: None,
+            search_hint: Some("搜索书名 / 作者…".into()),
+        }
+    }
+
     fn config_schema() -> Vec<ConfigField> {
         vec![
             ConfigField {

@@ -254,6 +254,12 @@ impl WasmPlugin {
         self.call(&[], |store, b| b.call_name(store))
     }
 
+    /// Interaction hints for the frontend (one call at load time, like
+    /// `capabilities`).
+    pub fn source_info(&self) -> Result<SourceInfo> {
+        self.call(&[], |store, b| b.call_source_info(store))
+    }
+
     /// Configuration schema (checked with the empty config; used against
     /// every instance of this wasm file).
     pub fn config_schema(&self) -> Result<Vec<ConfigField>> {

@@ -26,8 +26,8 @@ use sqlx::SqlitePool;
 use bookshelf_core::error::Error as CoreError;
 use bookshelf_core::source::{SourceBook, SourceBookFile, SourceChapter};
 use bookshelf_plugin::{
-    BookEntry, ConfigErrors, ConfigField, ConfigKind, ConfigValue, SearchResult, WasmPlugin,
-    validate_config, values_from_config,
+    BookEntry, ConfigErrors, ConfigField, ConfigKind, ConfigValue, SearchResult, SourceInfo,
+    WasmPlugin, validate_config, values_from_config,
 };
 
 use crate::error::ApiError;
@@ -41,6 +41,8 @@ struct WasmInfo {
     capabilities: Vec<String>,
     /// Configuration schema (validation + value conversion).
     schema: Vec<ConfigField>,
+    /// Interaction hints for the frontend (`source-info` export).
+    source_info: SourceInfo,
 }
 
 /// One row of `plugin_instances`.
@@ -61,6 +63,32 @@ pub struct InstanceInfo {
     pub name: String,
     pub enabled: bool,
     pub capabilities: Vec<String>,
+    /// Frontend interaction hints (`source-info`), serialized for the UI.
+    pub source_info: SourceInfoView,
+}
+
+/// A serializable view of the WIT `source-info` record.
+#[derive(Debug, Clone, Serialize)]
+pub struct SourceInfoView {
+    /// `"search"` | `"manual-id"` | `"browse"` | `""` = capability default.
+    pub kind: String,
+    /// `"numeric"` | `"slug"` | `"uuid"` | `"free"` …
+    pub id_kind: String,
+    /// zh-CN hint for the manual id entry box.
+    pub id_hint: Option<String>,
+    /// zh-CN placeholder for the search box.
+    pub search_hint: Option<String>,
+}
+
+impl From<&SourceInfo> for SourceInfoView {
+    fn from(s: &SourceInfo) -> Self {
+        SourceInfoView {
+            kind: s.kind.clone(),
+            id_kind: s.id_kind.clone(),
+            id_hint: s.id_hint.clone(),
+            search_hint: s.search_hint.clone(),
+        }
+    }
 }
 
 /// A serializable view of one `config-field` (the bindgen type itself is
@@ -105,24 +133,37 @@ impl PluginService {
     pub fn new(db: SqlitePool, wasms: Vec<Arc<WasmPlugin>>) -> Self {
         let mut wasm_by_file = HashMap::new();
         for wasm in wasms {
-            let (name, capabilities, schema) =
-                match (wasm.name(), wasm.capabilities(), wasm.config_schema()) {
-                    (Ok(name), Ok(capabilities), Ok(schema)) => (name, capabilities, schema),
-                    (name, capabilities, schema) => {
-                        tracing::warn!(
-                            file = wasm.file(),
-                            name_err = name.is_err(),
-                            caps_err = capabilities.is_err(),
-                            schema_err = schema.is_err(),
-                            "could not introspect plugin; treating it as capability-less"
-                        );
-                        (
-                            name.unwrap_or_else(|_| wasm.file().to_string()),
-                            capabilities.unwrap_or_default(),
-                            schema.unwrap_or_default(),
-                        )
-                    }
-                };
+            let (name, capabilities, schema, source_info) = match (
+                wasm.name(),
+                wasm.capabilities(),
+                wasm.config_schema(),
+                wasm.source_info(),
+            ) {
+                (Ok(name), Ok(capabilities), Ok(schema), Ok(source_info)) => {
+                    (name, capabilities, schema, source_info)
+                }
+                (name, capabilities, schema, source_info) => {
+                    tracing::warn!(
+                        file = wasm.file(),
+                        name_err = name.is_err(),
+                        caps_err = capabilities.is_err(),
+                        schema_err = schema.is_err(),
+                        srcinfo_err = source_info.is_err(),
+                        "could not introspect plugin; treating it as capability-less"
+                    );
+                    (
+                        name.unwrap_or_else(|_| wasm.file().to_string()),
+                        capabilities.unwrap_or_default(),
+                        schema.unwrap_or_default(),
+                        source_info.unwrap_or_else(|_| SourceInfo {
+                            kind: String::new(),
+                            id_kind: String::new(),
+                            id_hint: None,
+                            search_hint: None,
+                        }),
+                    )
+                }
+            };
             wasm_by_file.insert(
                 wasm.file().to_string(),
                 Arc::new(WasmInfo {
@@ -130,6 +171,7 @@ impl PluginService {
                     name,
                     capabilities,
                     schema,
+                    source_info,
                 }),
             );
         }
@@ -194,7 +236,19 @@ impl PluginService {
                 .map(|w| w.name.clone())
                 .unwrap_or_else(|| row.wasm_file.clone()),
             enabled: row.enabled,
-            capabilities: wasm.map(|w| w.capabilities.clone()).unwrap_or_default(),
+            capabilities: wasm
+                .as_ref()
+                .map(|w| w.capabilities.clone())
+                .unwrap_or_default(),
+            source_info: wasm
+                .as_ref()
+                .map(|w| SourceInfoView::from(&w.source_info))
+                .unwrap_or_else(|| SourceInfoView {
+                    kind: String::new(),
+                    id_kind: String::new(),
+                    id_hint: None,
+                    search_hint: None,
+                }),
         }
     }
 

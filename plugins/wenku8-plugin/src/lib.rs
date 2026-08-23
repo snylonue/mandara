@@ -828,6 +828,17 @@ impl Guest for Wenku8Plugin {
         "wenku8".into()
     }
 
+    fn source_info() -> SourceInfo {
+        // No search (login-walled): users acquire books by entering the
+        // numeric book id directly.
+        SourceInfo {
+            kind: "manual-id".into(),
+            id_kind: "numeric".into(),
+            id_hint: Some("wenku8 数字书号（如 3617）".into()),
+            search_hint: None,
+        }
+    }
+
     fn config_schema() -> Vec<ConfigField> {
         vec![
             ConfigField {

@@ -1542,7 +1542,7 @@ components:
     PluginInstance:
       description: One registered plugin instance (source id = `id`)
       type: object
-      required: [id, wasm_file, name, enabled, capabilities]
+      required: [id, wasm_file, name, enabled, capabilities, source_info]
       properties:
         id:
           description: Source id used in `book_files.source`
@@ -1563,6 +1563,25 @@ components:
           type: array
           items:
             type: string
+        source_info:
+          description: |
+            Interaction hints declared by the plugin (`source-info` export):
+            how the frontend should present this source when acquiring
+            books. `kind` = "search" | "manual-id" | "browse" | ""
+            (empty = derive from capabilities).
+          type: object
+          required: [kind, id_kind]
+          properties:
+            kind:
+              type: string
+            id_kind:
+              type: string
+            id_hint:
+              type: string
+              nullable: true
+            search_hint:
+              type: string
+              nullable: true
 
     ConfigField:
       description: One field of a plugin's configuration schema

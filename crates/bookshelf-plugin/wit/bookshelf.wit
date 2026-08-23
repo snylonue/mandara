@@ -1,4 +1,9 @@
-// bookshelf plugin interface v3 (dev phase: no backward compatibility).
+// bookshelf plugin interface v4 (dev phase: no backward compatibility).
+//
+// v4 adds `source-info`: the plugin declares how the frontend should
+// present it when a user acquires books (interaction kind + id/search
+// hints), so UIs do not need to hardcode one plugin's shape (e.g. wenku8's
+// login-walled search / numeric book ids).
 //
 // See docs/plugin-v2-design.md and docs/plugin-http-api-design.md for the
 // full design. Key differences vs v2:
@@ -10,11 +15,12 @@
 //     the host's existing upload parser, so file-mode books get chapters,
 //     hierarchical TOC and sanitized HTML like uploads (capability
 //     `"book-file"`);
+//   - `source-info` (v4): per-plugin interaction hints;
 //   - every export is still required (wit-parser has no `optional-export`;
 //     unsupported features are declared via `capabilities()` and return
 //     `none`/empty).
 
-package bookshelf:plugin@0.3.0;
+package bookshelf:plugin@0.4.0;
 
 /// Shared types between bookshelf and plugins.
 interface types {
@@ -73,6 +79,32 @@ interface types {
         /// `"application/epub+zip"` | `"text/plain"` | `"text/plain; charset=utf-8"` | ...
         mime: string,
         bytes: list<u8>,
+    }
+
+    /// How the frontend should present this plugin source when a user
+    /// acquires books from it (获取书籍). Advisory: the UI falls back to
+    /// the capabilities-derived default when the declared kind is
+    /// unsupported (e.g. a future kind a new frontend does not know yet).
+    record source-info {
+        /// Interaction kind used to acquire books:
+        ///   - `"search"`    — the catalog is browsed with a query box
+        ///     (`search-books`; requires the `search` capability);
+        ///   - `"manual-id"` — no search; users enter a book id directly
+        ///     (requires `lookup`; wenku8-style sources);
+        ///   - `"browse"`    — a declared category tree (`declare`;
+        ///     reserved for future frontends).
+        /// The capability default when `""`/unknown: `search` →
+        /// `"search"`, `lookup`-only → `"manual-id"`, `declare`-only →
+        /// `"browse"`.
+        kind: string,
+        /// What a manual book id looks like, e.g. `"numeric"`,
+        /// `"slug"`, `"uuid"`. Not enforced; only shapes UI hints.
+        id-kind: string,
+        /// zh-CN hint for the manual id entry, e.g.
+        /// `"wenku8 数字书号（如 3617）"`.
+        id-hint: option<string>,
+        /// zh-CN placeholder for the search box, e.g. `"搜索书名 / 作者"`.
+        search-hint: option<string>,
     }
 }
 
@@ -208,11 +240,16 @@ world bookshelf-plugin {
     // Types used by this world's exports come from the imported `types`
     // interface; WIT requires an explicit `use` to bring them into the
     // world scope.
-    use types.{book-entry, chapter, declared-book, search-result, book-file};
+    use types.{book-entry, chapter, declared-book, search-result, book-file, source-info};
     use config.{config-field, config-value};
 
     /// Human-readable name of this plugin (same for all instances).
     export name: func() -> string;
+
+    /// How users acquire books from this plugin (interaction kind +
+    /// hints). The host exposes it via `GET /api/plugins` so the UI can
+    /// render the right picker without hardcoding a specific source.
+    export source-info: func() -> source-info;
 
     /// Configuration schema; the host renders an admin form from it and
     /// validates submitted values against it.
