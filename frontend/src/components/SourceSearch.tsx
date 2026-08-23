@@ -54,11 +54,12 @@ export function SourceSearchPane({
   const [loading, setLoading] = useState(false);
   const [picking, setPicking] = useState<string | null>(null);
   const [pickError, setPickError] = useState<string | null>(null);
+  const [manual, setManual] = useState("");
   const seq = useRef(0);
 
   // A selected instance without the `search` capability cannot be
-  // browsed (e.g. wenku8: login-walled search); only the manual-id entry
-  // of the host dialog applies to it.
+  // browsed (e.g. wenku8: login-walled search); its books are picked by
+  // manually entering a book id instead.
   const selected = options.find((i) => i.id === sel);
   const canSearch = Boolean(selected?.capabilities.includes("search"));
 
@@ -99,6 +100,15 @@ export function SourceSearchPane({
   const total = result?.total ?? 0;
   const shown = result?.items.length ?? 0;
 
+  function pick(item: PluginSearchItem) {
+    if (!selected) return;
+    setPickError(null);
+    setPicking(item.id);
+    Promise.resolve(onPick({ instance: selected, item }))
+      .catch((e) => setPickError(e instanceof ApiError ? e.message : String(e)))
+      .finally(() => setPicking(null));
+  }
+
   return (
     <div className="source-search">
       <div className="row">
@@ -118,7 +128,6 @@ export function SourceSearchPane({
             onChange={(e) => setQ(e.target.value)}
           />
         )}
-        {sel && !canSearch && <span className="hint">{t("plugin.noSearch")}</span>}
       </div>
 
       {error && <div className="error">{error}</div>}
@@ -126,8 +135,33 @@ export function SourceSearchPane({
       {!loading && !error && canSearch && sel && result && result.items.length === 0 && (
         <p className="hint">{t("plugin.noResults")}</p>
       )}
-      {!loading && !error && !canSearch && !result && (
-        <p className="hint">—</p>
+      {!loading && !error && !canSearch && sel && selected && (
+        <div className="field">
+          <p className="hint">{t("plugin.noSearch")}</p>
+          <input
+            placeholder={t("plugin.manualIdPlaceholder")}
+            value={manual}
+            onChange={(e) => setManual(e.target.value)}
+          />
+          {manual.trim() && (
+            <button
+              className="link-btn"
+              disabled={picking !== null}
+              onClick={() =>
+                pick({
+                  id: manual.trim(),
+                  title: manual.trim(),
+                  authors: [],
+                  description: null,
+                  cover_url: null,
+                  book_id: null,
+                })
+              }
+            >
+              {picking !== null ? t("common.loading") : t("plugin.useManualId")}
+            </button>
+          )}
+        </div>
       )}
       <ul className="source-results">
         {result?.items.map((item) => (
@@ -144,17 +178,7 @@ export function SourceSearchPane({
             <button
               className="link-btn"
               disabled={picking !== null}
-              onClick={() => {
-                setPickError(null);
-                setPicking(item.id);
-                Promise.resolve(
-                  onPick({ instance: options.find((i) => i.id === sel)!, item }),
-                )
-                  .catch((e) =>
-                    setPickError(e instanceof ApiError ? e.message : String(e)),
-                  )
-                  .finally(() => setPicking(null));
-              }}
+              onClick={() => pick(item)}
             >
               {picking === item.id ? t("common.loading") : (pickLabel?.(item) ?? t("plugin.addToShelf"))}
             </button>
@@ -186,74 +210,31 @@ export function SourceBrowserDialog({
   onPick,
   title,
   pickLabel,
-  allowManualId = false,
 }: {
   open: boolean;
   onClose: () => void;
   instances: PluginInstance[];
   filter: (i: PluginInstance) => boolean;
-  onPick: (pick: SourcePick, manualIdValue?: string) => Promise<void> | void;
+  onPick: (pick: SourcePick) => Promise<void> | void;
   title: string;
   pickLabel?: (item: PluginSearchItem) => string;
-  allowManualId?: boolean;
 }) {
-  const { t } = useTranslation();
   const [pickError, setPickError] = useState<string | null>(null);
-  const [manual, setManual] = useState("");
-  const [manualPickLoading, setManualPickLoading] = useState(false);
 
   if (!open) return null;
-  const pick = (instance: PluginInstance, item: PluginSearchItem, manualId?: string) => {
-    setPickError(null);
-    if (manualId) setManualPickLoading(true);
-    Promise.resolve(onPick({ instance, item }, manualId))
-      .catch((e) => setPickError(e instanceof ApiError ? e.message : String(e)))
-      .finally(() => setManualPickLoading(false));
-  };
   return (
     <Modal open onClose={onClose} title={title} wide>
       <SourceSearchPane
         instances={instances}
         filter={filter}
         pickLabel={pickLabel}
-        onPick={(p) => pick(p.instance, p.item)}
+        onPick={(p) => {
+          setPickError(null);
+          Promise.resolve(onPick(p))
+            .catch((e) => setPickError(e instanceof ApiError ? e.message : String(e)))
+            .finally(() => undefined);
+        }}
       />
-      {allowManualId && (
-        <div className="field">
-          <label className="hint">
-            {t("plugin.manualId")}
-            <input
-              placeholder={t("plugin.manualIdPlaceholder")}
-              value={manual}
-              onChange={(e) => setManual(e.target.value)}
-            />
-          </label>
-          {manual.trim() && instances.length > 0 && (
-            <button
-              className="link-btn"
-              disabled={manualPickLoading}
-              onClick={() => {
-                const instance = instances.find(filter);
-                if (!instance) return;
-                pick(
-                  instance,
-                  {
-                    id: manual.trim(),
-                    title: manual.trim(),
-                    authors: [],
-                    description: null,
-                    cover_url: null,
-                    book_id: null,
-                  },
-                  manual.trim(),
-                );
-              }}
-            >
-              {manualPickLoading ? t("common.loading") : t("plugin.useManualId")}
-            </button>
-          )}
-        </div>
-      )}
       {pickError && <div className="error">{pickError}</div>}
     </Modal>
   );
