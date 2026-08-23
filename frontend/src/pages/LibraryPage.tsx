@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { useAuth } from "../auth";
+import { BookCover } from "../components/BookCover";
 import { AddBookDialog } from "../components/AddBookDialog";
 import { useToast } from "../components/toast";
 import { usePluginInstances } from "../components/SourceSearch";
@@ -15,27 +16,6 @@ import {
 } from "../components/icons";
 
 /** Cover image: stored bytes first (404 → fallbacks), then remote URL. */
-function BookCover({ book }: { book: BookMeta }) {
-  const [storedFailed, setStoredFailed] = useState(false);
-  if (!storedFailed) {
-    return (
-      <img
-        src={`/api/books/${book.id}/cover`}
-        alt=""
-        loading="lazy"
-        onError={() => setStoredFailed(true)}
-      />
-    );
-  }
-  if (book.cover_url) {
-    return <img src={book.cover_url} alt="" loading="lazy" />;
-  }
-  return (
-    <div className="book-cover-fallback">
-      <span>{book.title.trim().charAt(0) || "书"}</span>
-    </div>
-  );
-}
 
 function VolumeBadge({ book }: { book: BookMeta }) {
   return book.volume_no > 0 ? <span className="tag tag-volume">第{book.volume_no}卷</span> : null;
@@ -53,7 +33,7 @@ function BookCard({ entry }: { entry: BookListEntry }) {
   return (
     <Link className="book-card" to={`/book/${book.id}`}>
       <div className="book-cover">
-        <BookCover book={book} />
+        <BookCover bookId={book.id} title={book.title} coverUrl={book.cover_url} />
         <div className="book-badges">
           <VolumeBadge book={book} />
           <span
@@ -145,8 +125,7 @@ export function LibraryPage() {
           {t("library.addBook")}
         </button>
       </div>
-      {user?.role === "admin" && <p className="hint">{t("library.adminHint")}</p>}
-      <p className="hint">{t("library.metadataHint")}</p>
+      {user?.role === "admin" && <p className="hint admin-note">{t("library.adminHint")}</p>}
       {entries === null && (
         <div className="book-grid">
           {Array.from({ length: 8 }, (_, i) => (

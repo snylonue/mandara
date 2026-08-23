@@ -26,6 +26,8 @@
   --accent: #5b8cff;
   --accent2: #7aa2ff;
   --accent-hover: #709bff;
+  --glow: rgba(91, 140, 255, 0.1);
+  --nav-bg: rgba(23, 29, 41, 0.82);
   --danger: #e06c75;
   --danger-hover: #ea838b;
   --ok: #98c379;
@@ -67,6 +69,8 @@
   --accent: #3f6fe8;
   --accent2: #3059c8;
   --accent-hover: #5581ee;
+  --glow: rgba(63, 111, 232, 0.06);
+  --nav-bg: rgba(245, 246, 250, 0.85);
 }
 
 * {
@@ -79,7 +83,9 @@ html {
 
 body {
   margin: 0;
-  background: var(--bg);
+  background:
+    radial-gradient(1100px 420px at 50% -140px, var(--glow), transparent 70%),
+    var(--bg);
   color: var(--text);
   font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
   line-height: 1.6;
@@ -97,7 +103,9 @@ body {
   align-items: center;
   justify-content: space-between;
   padding: var(--space-3) var(--space-5);
-  background: var(--bg2);
+  background: var(--nav-bg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--border);
   position: sticky;
   top: 0;
@@ -467,6 +475,15 @@ button.ghost:hover:not(:disabled) {
   border-color: var(--border);
 }
 
+/* ghost button that reads as destructive (text-only danger) */
+button.ghost.danger-text {
+  color: var(--danger);
+}
+
+button.ghost.danger-text:hover:not(:disabled) {
+  border-color: var(--danger);
+}
+
 button.danger {
   background: rgba(224, 108, 117, 0.12);
   border-color: rgba(224, 108, 117, 0.5);
@@ -550,12 +567,25 @@ textarea::placeholder {
 /* ---- library ---- */
 .toolbar {
   display: flex;
-  gap: 12px;
-  margin-bottom: 20px;
+  gap: var(--space-3);
+  margin-bottom: var(--space-5);
 }
 
 .search {
   flex: 1;
+  border-radius: 999px;
+  padding: 9px 20px;
+  background: var(--card);
+}
+
+.toolbar > button {
+  border-radius: 999px;
+  padding: 9px 22px;
+}
+
+.admin-note {
+  margin: calc(-1 * var(--space-4)) 0 var(--space-4);
+  text-align: center;
 }
 
 .book-grid {
@@ -723,9 +753,298 @@ textarea::placeholder {
   padding: 1px 10px;
 }
 
-/* ---- book detail ---- */
+
+
+/* ---- book & series detail (hero layout) ---- */
 .description {
   color: var(--muted);
+}
+
+.page-back {
+  margin-bottom: var(--space-4);
+}
+
+.detail-hero {
+  display: flex;
+  gap: var(--space-5);
+  margin-bottom: var(--space-5);
+}
+
+.detail-cover {
+  width: 176px;
+  flex-shrink: 0;
+  aspect-ratio: 2 / 3;
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--bg2);
+  box-shadow:
+    0 16px 40px rgba(0, 0, 0, 0.45),
+    0 0 0 1px var(--border);
+}
+
+.detail-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.detail-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.detail-info h1 {
+  font-size: 28px;
+  line-height: 1.25;
+  margin: 0;
+}
+
+.detail-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  color: var(--muted);
+  font-size: var(--fs-md);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 6px;
+  background: rgba(91, 140, 255, 0.12);
+  border: 1px solid rgba(91, 140, 255, 0.35);
+  color: var(--accent2);
+  border-radius: 999px;
+  font-size: var(--fs-sm);
+  padding: 3px 12px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+a.chip:hover {
+  border-color: var(--accent);
+}
+
+.detail-desc {
+  color: var(--text);
+  opacity: 0.82;
+  margin: var(--space-1) 0 0;
+  font-size: var(--fs-md);
+  display: -webkit-box;
+  -webkit-line-clamp: 5;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.detail-desc.expanded {
+  display: block;
+}
+
+.detail-desc-toggle {
+  align-self: flex-start;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--accent2);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: auto;
+  padding-top: var(--space-3);
+}
+
+.detail-section {
+  margin-bottom: var(--space-5);
+}
+
+.detail-section > h2 {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: var(--space-3);
+}
+
+.detail-section > h2 .count {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  font-weight: 400;
+}
+
+/* one file edition row */
+.file-card {
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-3);
+  transition: border-color 0.15s;
+}
+
+.file-card:hover {
+  border-color: var(--border-strong);
+}
+
+.file-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.file-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.file-label {
+  font-weight: 600;
+  color: var(--text-strong);
+  text-decoration: none;
+  font-size: var(--fs-lg);
+}
+
+.file-label:hover {
+  color: var(--accent2);
+}
+
+.fmt-badge {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  border-radius: var(--radius-sm);
+  padding: 1px 7px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.fmt-epub {
+  color: var(--ok);
+  border-color: rgba(152, 195, 121, 0.4);
+  background: rgba(152, 195, 121, 0.08);
+}
+
+.file-sub {
+  margin-top: var(--space-1);
+}
+
+.row-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  white-space: nowrap;
+}
+
+/* compact action buttons usable on <button> and <a> */
+.mini-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 11px;
+  font-size: var(--fs-sm);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  cursor: pointer;
+  text-decoration: none;
+  transition: border-color 0.15s, color 0.15s, background-color 0.15s;
+}
+
+.mini-btn:hover {
+  border-color: var(--accent);
+  color: var(--text-strong);
+}
+
+.mini-btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.mini-btn.primary:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+  color: #fff;
+}
+
+.mini-btn.danger {
+  color: var(--danger);
+}
+
+.mini-btn.danger:hover {
+  border-color: var(--danger);
+  background: rgba(224, 108, 117, 0.1);
+}
+
+/* attach / share panels under a section heading */
+.panel-box {
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-3) var(--space-4);
+}
+
+.inline-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.inline-form > input[type="text"],
+.inline-form > input:not([type]) {
+  flex: 1;
+  min-width: 180px;
+}
+
+.share-box {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  background: var(--bg);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-3);
+  margin-top: var(--space-3);
+}
+
+.share-box code {
+  flex: 1;
+  min-width: 200px;
+  color: var(--accent2);
+  overflow-wrap: anywhere;
+  font-size: var(--fs-sm);
+}
+
+@media (max-width: 640px) {
+  .detail-hero {
+    flex-direction: column;
+  }
+
+  .detail-cover {
+    width: 144px;
+  }
 }
 
 .sessions {
@@ -744,10 +1063,6 @@ textarea::placeholder {
 .strong {
   font-weight: 600;
   color: var(--text);
-}
-
-.row-actions {
-  white-space: nowrap;
 }
 
 /* generic horizontal field row */
@@ -798,29 +1113,6 @@ textarea::placeholder {
 .file-picker:hover {
   border-color: var(--accent);
   color: var(--text);
-}
-
-.inline-form {
-  display: flex;
-  gap: 10px;
-  margin-top: 14px;
-}
-
-.share-box {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  background: var(--bg);
-  border: 1px dashed var(--border);
-  border-radius: var(--radius);
-  padding: 10px 14px;
-  margin-top: 12px;
-}
-
-.share-box code {
-  flex: 1;
-  color: var(--accent2);
-  overflow-wrap: anywhere;
 }
 
 .toc {

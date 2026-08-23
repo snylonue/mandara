@@ -3,7 +3,14 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { ApiError, api } from "../api";
 import { useAuth } from "../auth";
-import { IconArrowLeft } from "../components/icons";
+import { BookCover } from "../components/BookCover";
+import {
+  IconArrowLeft,
+  IconLayers,
+  IconRefresh,
+  IconShare,
+  IconTrash,
+} from "../components/icons";
 import { Modal } from "../components/Modal";
 import { useToast } from "../components/toast";
 import {
@@ -111,61 +118,55 @@ function FileSection({
   return (
     <div className="file-card">
       <div className="file-head">
-        <div>
-          <Link to={`/read/${file.id}`} className="strong">
+        <div className="file-title">
+          <Link to={`/read/${file.id}`} className="file-label">
             {file.label || file.format}
           </Link>
-          <span className="tag">{file.format}</span>
-          {file.source !== "local" && <span className="tag">{t("book.pluginTag")}</span>}
+          <span className={`fmt-badge fmt-${file.format}`}>{file.format}</span>
+          {file.source !== "local" && file.format !== "plugin" && (
+            <span className="tag" title={t("book.contentSourceLine", {
+              source: file.source,
+              content: file.content_source,
+              external: file.content_external_id ?? file.external_id,
+            })}>
+              {t("book.pluginTag")}
+            </span>
+          )}
           <span className={`tag ${file.visibility === "public" ? "tag-public" : ""}`}>
             {file.visibility === "public" ? t("book.publicTag") : t("book.privateTag")}
           </span>
         </div>
         <div className="row-actions">
           {readable && (
-            <Link className="link-btn" to={`/read/${file.id}`}>
+            <Link className="mini-btn primary" to={`/read/${file.id}`}>
               {t("book.read")}
             </Link>
           )}
-          {file.source === "local" && canManage && (
+          <button className="mini-btn" onClick={() => void onShare(file.id, "book")}>
+            {t("book.share")}
+          </button>
+          {canManage && file.source === "local" && (
             <>
-              <button className="link-btn" onClick={() => void toggleVisibility()}>
+              <button className="mini-btn" onClick={() => void toggleVisibility()}>
                 {file.visibility === "public" ? t("book.setPrivate") : t("book.setPublic")}
               </button>
-              <button
-                className="link-btn"
-                onClick={() => void onShare(file.id, "book")}
-              >
-                {t("book.share")}
-              </button>
-              <button className="link-btn danger" onClick={() => void deleteFile()}>
+              <button className="mini-btn danger" onClick={() => void deleteFile()}>
                 {t("book.delete")}
               </button>
             </>
           )}
-          {file.source !== "local" && canManage && (
-            <>
-              <button className="link-btn" onClick={() => setRebindOpen(true)}>
-                {t("book.changeContentSource")}
-              </button>
-              <button className="link-btn" onClick={() => void onShare(file.id, "book")}>
-                {t("book.share")}
-              </button>
-            </>
-          )}
-          {file.source === "local" && !canManage && (
-            <span className="hint">{t("book.othersUpload")}</span>
+          {canManage && file.source !== "local" && (
+            <button className="mini-btn" onClick={() => setRebindOpen(true)}>
+              {t("book.changeContentSource")}
+            </button>
           )}
         </div>
       </div>
-      <div className="file-meta hint">
-        {file.content_source
-          ? t("book.contentSourceLine", {
-              source: file.source,
-              content: file.content_source,
-              external: file.content_external_id ?? file.external_id,
-            })
-          : t("book.uploadedAt", { count: file.chapter_count, time: fmtTime(file.created_at) })}
+      {!canManage && file.source === "local" && (
+        <div className="hint file-sub">{t("book.othersUpload")}</div>
+      )}
+      <div className="hint file-sub">
+        {t("book.uploadedAt", { count: file.chapter_count, time: fmtTime(file.created_at) })}
       </div>
       <SourceBrowserDialog
         open={rebindOpen}
@@ -235,6 +236,7 @@ export function BookDetailPage() {
   const [attachVisibility, setAttachVisibility] = useState<Visibility>("public");
   const [attaching, setAttaching] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [descExpanded, setDescExpanded] = useState(false);
   const [fileCount409, setFileCount409] = useState<number | null>(null);
   const attachRef = { current: null as HTMLInputElement | null };
 
@@ -389,59 +391,111 @@ export function BookDetailPage() {
   const { book, files } = detail;
   const canManage = user !== null && (user.role === "admin" || book.created_by === user.id);
   const pluginBacked = files.some((f) => f.source !== "local");
+  const firstReadable = files.find((f) => f.chapter_count > 0);
+  const descLong = (book.description?.length ?? 0) > 120;
 
   return (
     <div className="book-detail">
-      <Link to="/" className="link-btn">
-        <IconArrowLeft size={14} /> {t("common.backToShelf")}
-      </Link>
-      <h1>{book.title}</h1>
-      <p className="hint">
-        {t("book.metaLine", {
-          authors: book.authors.join(" / ") || t("common.anonymous"),
-          count: files.length,
-        })}
-      </p>
-      {(detail.series || book.volume_no > 0) && (
-        <p className="hint">
-          {detail.series ? (
-            <Link className="strong" to={`/series/${detail.series.id}`}>
-              {t("book.seriesLine", {
-                title: detail.series.title,
-                volume: book.volume_no,
-              })}
-            </Link>
-          ) : (
-            <span className="tag tag-volume">第{book.volume_no}卷</span>
-          )}
-        </p>
-      )}
-      {book.description && <p className="description">{book.description}</p>}
+      <div className="page-back">
+        <Link to="/" className="link-btn">
+          <IconArrowLeft size={14} /> {t("common.backToShelf")}
+        </Link>
+      </div>
 
-      {canManage && (
-        <div className="row">
-          {pluginBacked && (
-            <button className="link-btn" onClick={() => void refreshFromSource()}>
-              {t("book.refreshFromSource")}
+      {/* hero: cover + metadata + actions */}
+      <div className="detail-hero">
+        <div className="detail-cover">
+          <BookCover bookId={book.id} title={book.title} coverUrl={book.cover_url} />
+        </div>
+        <div className="detail-info">
+          {(detail.series || book.volume_no > 0) && (
+            <div>
+              {detail.series ? (
+                <Link className="chip" to={`/series/${detail.series.id}`}>
+                  <IconLayers size={13} />
+                  {t("book.seriesLine", {
+                    title: detail.series.title,
+                    volume: book.volume_no,
+                  })}
+                </Link>
+              ) : (
+                <span className="chip">第{book.volume_no}卷</span>
+              )}
+            </div>
+          )}
+          <h1>{book.title}</h1>
+          <div className="detail-meta">
+            <span>{book.authors.join(" / ") || t("common.anonymous")}</span>
+            <span>·</span>
+            <span>{t("book.metaCount", { count: files.length })}</span>
+          </div>
+          {book.description && (
+            <p className={`detail-desc ${descExpanded ? "expanded" : ""}`}>
+              {book.description}
+            </p>
+          )}
+          {descLong && (
+            <button
+              className="detail-desc-toggle"
+              onClick={() => setDescExpanded((v) => !v)}
+            >
+              {descExpanded ? t("book.descCollapse") : t("book.descExpand")} ▾
             </button>
           )}
-          <button className="link-btn" onClick={() => void openSeriesDialog()}>
-            {t("book.manageSeries")}
-          </button>
+          <div className="detail-actions">
+            {firstReadable && (
+              <button
+                className="primary"
+                onClick={() => navigate(`/read/${firstReadable.id}`)}
+              >
+                {t("book.startReading")}
+              </button>
+            )}
+            {files[0] && (
+              <button className="ghost" onClick={() => void makeShare(files[0].id, "book")}>
+                <IconShare size={14} /> {t("book.shareBookShort")}
+              </button>
+            )}
+            {canManage && pluginBacked && (
+              <button className="ghost" disabled={deleting} onClick={() => void refreshFromSource()}>
+                <IconRefresh size={14} /> {t("book.refreshFromSource")}
+              </button>
+            )}
+            {canManage && (
+              <button className="ghost" onClick={() => void openSeriesDialog()}>
+                {t("book.manageSeries")}
+              </button>
+            )}
+            {canManage && (
+              <button
+                className="ghost danger-text"
+                disabled={deleting}
+                onClick={() => void deleteMetadata(false)}
+              >
+                <IconTrash size={14} /> {t("book.deleteMetadata")}
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+      {share && (
+        <div className="share-box">
+          <span className="tag">
+            {share.kind === "book" ? t("book.shareBookTag") : t("book.shareSessionTag")}
+            {t("book.shareTag")}
+          </span>
+          <code>{share.url}</code>
           <button
-            className="link-btn danger"
-            disabled={deleting}
-            onClick={() => void deleteMetadata(false)}
+            className="mini-btn"
+            onClick={() => void navigator.clipboard?.writeText(`${location.origin}${share.url}`)}
           >
-            {t("book.deleteMetadata")}
+            {t("book.copy")}
           </button>
         </div>
       )}
       {fileCount409 !== null && (
-        <div className="card">
-          <p className="hint">
-            {t("book.metadataHasFiles", { count: fileCount409 })}
-          </p>
+        <div className="error">
+          <p className="hint">{t("book.metadataHasFiles", { count: fileCount409 })}</p>
           <button
             className="danger"
             disabled={deleting}
@@ -452,9 +506,10 @@ export function BookDetailPage() {
         </div>
       )}
 
-      <section className="card">
-        <h2>{t("book.filesTitle", { count: files.length })}</h2>
-        <p className="hint">{t("book.filesHint")}</p>
+      <section className="detail-section">
+        <h2>
+          {t("book.filesTitle", { count: files.length })}
+        </h2>
         {files.map((f) => (
           <FileSection
             key={f.id}
@@ -466,62 +521,36 @@ export function BookDetailPage() {
         ))}
       </section>
 
-      <section className="card">
+      <section className="detail-section">
         <h2>{t("book.attachTitle")}</h2>
-        <div className="inline-form">
-          <input
-            placeholder={t("book.attachPlaceholder")}
-            value={attachLabel}
-            onChange={(e) => setAttachLabel(e.target.value)}
-          />
-          <select
-            value={attachVisibility}
-            onChange={(e) => setAttachVisibility(e.target.value as Visibility)}
-          >
-            <option value="private">{t("book.privateTag")}</option>
-            <option value="public">{t("book.publicTag")}</option>
-          </select>
-          <button className="primary" disabled={attaching} onClick={() => attachRef.current?.click()}>
-            {attaching ? t("library.uploading") : t("book.attach")}
-          </button>
-          <input
-            ref={(el) => {
-              attachRef.current = el;
-            }}
-            type="file"
-            accept=".epub,.txt,.text"
-            hidden
-            onChange={attach}
-          />
-        </div>
-      </section>
-
-      <section className="card">
-        <h2>{t("book.shareTitle")}</h2>
-        <div className="row">
-          <button
-            className="primary"
-            onClick={() => files[0] && void makeShare(files[0].id, "book")}
-          >
-            {t("book.shareBook")}
-          </button>
-          <span className="hint">{t("book.shareHint")}</span>
-        </div>
-        {share && (
-          <div className="share-box">
-            <span className="tag">
-              {share.kind === "book" ? t("book.shareBookTag") : t("book.shareSessionTag")}
-              {t("book.shareTag")}
-            </span>
-            <code>{share.url}</code>
-            <button
-              className="link-btn"
-              onClick={() => void navigator.clipboard?.writeText(`${location.origin}${share.url}`)}
+        <div className="panel-box">
+          <div className="inline-form">
+            <input
+              placeholder={t("book.attachPlaceholder")}
+              value={attachLabel}
+              onChange={(e) => setAttachLabel(e.target.value)}
+            />
+            <select
+              value={attachVisibility}
+              onChange={(e) => setAttachVisibility(e.target.value as Visibility)}
             >
-              {t("book.copy")}
+              <option value="private">{t("book.privateTag")}</option>
+              <option value="public">{t("book.publicTag")}</option>
+            </select>
+            <button className="primary" disabled={attaching} onClick={() => attachRef.current?.click()}>
+              {attaching ? t("library.uploading") : t("book.attach")}
             </button>
+            <input
+              ref={(el) => {
+                attachRef.current = el;
+              }}
+              type="file"
+              accept=".epub,.txt,.text"
+              hidden
+              onChange={attach}
+            />
           </div>
-        )}
+        </div>
       </section>
 
       {/* Series membership control (creator/admin of the book). */}

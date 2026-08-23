@@ -99,6 +99,15 @@ export function IconChevronRight({ size, className }: IconProps) {
   );
 }
 
+/** Chevron down. */
+export function IconChevronDown({ size, className }: IconProps) {
+  return (
+    <svg {...base(size)} className={className}>
+      <polyline points="6 9 12 15 18 9" />
+    </svg>
+  );
+}
+
 /** Chevron left with a wall — back. */
 export function IconArrowLeft({ size, className }: IconProps) {
   return (
@@ -125,6 +134,57 @@ export function IconPin({ size, className }: IconProps) {
     <svg {...base(size)} className={className}>
       <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z" />
       <circle cx="12" cy="10" r="3" />
+    </svg>
+  );
+}
+
+/** Share (arrow out of a tray). */
+export function IconShare({ size, className }: IconProps) {
+  return (
+    <svg {...base(size)} className={className}>
+      <path d="M4 12v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7" />
+      <polyline points="16 6 12 2 8 6" />
+      <line x1="12" x2="12" y1="2" y2="15" />
+    </svg>
+  );
+}
+
+/** Refresh (circular arrow). */
+export function IconRefresh({ size, className }: IconProps) {
+  return (
+    <svg {...base(size)} className={className}>
+      <polyline points="23 4 23 10 17 10" />
+      <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+    </svg>
+  );
+}
+
+/** Trash can — destructive actions. */
+export function IconTrash({ size, className }: IconProps) {
+  return (
+    <svg {...base(size)} className={className}>
+      <polyline points="3 6 5 6 21 6" />
+      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+    </svg>
+  );
+}
+
+/** Pencil — edit. */
+export function IconEdit({ size, className }: IconProps) {
+  return (
+    <svg {...base(size)} className={className}>
+      <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+    </svg>
+  );
+}
+
+/** Layers — multiple editions / volumes. */
+export function IconLayers({ size, className }: IconProps) {
+  return (
+    <svg {...base(size)} className={className}>
+      <polygon points="12 2 2 7 12 12 22 7 12 2" />
+      <polyline points="2 17 12 22 22 17" />
+      <polyline points="2 12 12 17 22 12" />
     </svg>
   );
 }
