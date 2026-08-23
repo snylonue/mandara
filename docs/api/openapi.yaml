@@ -451,10 +451,14 @@ paths:
     post:
       tags: [books]
       summary: |
-        Upload a book — one endpoint for all three metadata modes:
-        attach to existing metadata (`book_id`), metadata from a plugin
-        source (`plugin_source` + `plugin_book_id`), or auto (plugins are
-        asked to identify the file, falling back to parsing the file).
+        Add a book to the library — the single acquisition flow
+        (获取书籍 → 添加元数据). The content is either an uploaded
+        `file` or a plugin book (`plugin_source` + `plugin_book_id`
+        without a `file`; the plugin supplies the book file via
+        `get-book-file` when available, otherwise chapters materialize
+        lazily). The metadata entry is created automatically (parsed
+        from the file / the plugin's own entry), taken from a plugin
+        catalog, or attached to an existing entry (`book_id`).
         `title`/`authors`/`description`/`cover_url` override the produced
         metadata (manual mode; never applied when attaching).
       operationId: uploadBook
@@ -466,33 +470,39 @@ paths:
           multipart/form-data:
             schema:
               type: object
-              required: [file]
               properties:
                 file:
                   type: string
                   format: binary
-                  description: Epub or txt file
+                  description: |
+                    Epub or txt file — the content. Mutually exclusive
+                    with `plugin_source` + `plugin_book_id` (plugin
+                    content): exactly one content source is required.
+                    When given together with `plugin_source`, the file is
+                    the content and the plugin only supplies the metadata.
                 visibility:
                   type: string
                   enum: [private, public]
                   default: private
-                  description: Choose whether this upload is published
+                  description: Choose whether this file is published
                 label:
                   type: string
                   description: Short human label for this edition (e.g. "proofread")
                 book_id:
                   type: string
                   description: |
-                    Attach the file to this existing metadata entry instead
-                    of creating one. The caller must be able to see the
-                    book. Mutually exclusive with `plugin_source`.
+                    Attach the content to this existing metadata entry
+                    instead of creating one. The caller must be able to
+                    see the book. Mutually exclusive with the plugin
+                    metadata modes (a plugin book attached this way must
+                    not already be materialized under another entry).
                 plugin_source:
                   type: string
                   description: |
-                    Take the metadata from this plugin source's catalog
-                    (requires `plugin_book_id` too). The plugin book is
-                    synced into the library if needed and the upload is
-                    attached to its metadata entry.
+                    Together with `plugin_book_id`: the metadata comes
+                    from this plugin source's catalog. Without a `file`,
+                    the plugin is also the content source (the book is
+                    materialized into the library).
                 plugin_book_id:
                   type: string
                   description: Id of the book inside the plugin's catalog
@@ -521,6 +531,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
 
   /api/books/{id}:
     get:

@@ -31,19 +31,43 @@ use crate::error::ApiError;
 use crate::rows::{BookRow, ChapterRow, ChapterTitleRow, FileRow};
 use crate::service::plugins::{DeclaredCatalog, PluginService};
 
-/// Where the metadata of an upload comes from.
-pub enum UploadMetadata {
-    /// Attach the file to an existing metadata entry (its metadata wins).
-    Attach { book_id: String },
-    /// Metadata taken from a plugin source by id. `book_id_in_source`
-    /// must be offered by that source's `get-book`.
+/// Where the *content* of a library addition comes from. Every addition
+/// to the library is "acquire content, then attach metadata": this is the
+/// content half, orthogonal to how the metadata entry is resolved (see
+/// [`AcquireMetadata`]).
+pub enum AcquireContent<'a> {
+    /// An uploaded local file (bytes in memory).
+    File { bytes: &'a [u8], filename: &'a str },
+    /// A book offered by a plugin source. Whole-book files are fetched
+    /// via `get-book-file` and run through the upload parser (file mode,
+    /// `book-file` capability); otherwise a virtual chapter-mode file is
+    /// created whose bodies materialize lazily on first read.
     Plugin {
-        source: String,
-        book_id_in_source: String,
+        source: &'a str,
+        book_id_in_source: &'a str,
     },
-    /// Ask every enabled plugin instance to identify the file (first
-    /// match wins), falling back to metadata parsed from the file itself.
-    Auto,
+}
+
+/// How the metadata entry of a library addition is resolved (the
+/// metadata half; orthogonal to the content source).
+pub enum AcquireMetadata<'a> {
+    /// New metadata entry. For local files the entry is parsed from the
+    /// file (plugins may identify it first via `identify-upload`); for
+    /// plugin content it is the plugin's own `book-entry`. `overrides`
+    /// correct the produced metadata.
+    New { overrides: &'a MetadataOverrides },
+    /// Metadata from a named plugin source's `get-book` (e.g. a plugin
+    /// catalog picker). The content may be an uploaded file (the classic
+    /// "metadata from a plugin, file from disk" mode) or the same
+    /// plugin's book.
+    Plugin {
+        source: &'a str,
+        book_id_in_source: &'a str,
+        overrides: &'a MetadataOverrides,
+    },
+    /// Attach to an existing metadata entry. The existing metadata wins;
+    /// `overrides` are ignored.
+    Attach { book_id: &'a str },
 }
 
 /// User-supplied fields that override the metadata produced by the file
@@ -63,15 +87,6 @@ impl MetadataOverrides {
             && self.description.is_none()
             && self.cover_url.is_none()
     }
-}
-
-/// The uploaded file itself: bytes, original name and the storage options
-/// chosen by the uploader.
-pub struct UploadInput<'a> {
-    pub bytes: &'a [u8],
-    pub filename: &'a str,
-    pub visibility: Visibility,
-    pub label: &'a str,
 }
 
 pub struct Library {
@@ -163,63 +178,29 @@ impl Library {
         Ok((result.total, items))
     }
 
-    /// Materialize exactly one book of a searchable source
-    /// (`get-book` + chapter-title placeholders; bodies stay lazy until
-    /// first read). The caller claims the metadata (becomes its creator),
-    /// like an upload identified as this plugin book.
-    ///
-    /// v3 acquisition modes (docs/plugin-http-api-design.md §4.2): an
-    /// instance declaring `book-file` is materialized in **file mode**
-    /// first — the whole file is fetched via `get-book-file` and run
-    /// through the upload parser (chapters + hierarchical TOC + sanitized
-    /// HTML, stored like a local upload). Chapter mode (titles + lazy
-    /// bodies) is the fallback when the source has no file.
+    /// Materialize exactly one book of a plugin source into the library
+    /// (convenience used by `POST /api/plugins/{id}/books`; equivalent to
+    /// the unified acquisition endpoint with plugin content + new
+    /// metadata, public visibility).
     pub async fn materialize_plugin_book(
         &self,
         user: &User,
         instance: &str,
         book_id_in_source: &str,
     ) -> Result<(BookMeta, FileMeta), ApiError> {
-        let entry = self.plugins.get_book(instance, book_id_in_source).await?;
-        let entry = entry.ok_or_else(|| {
-            ApiError::NotFound(format!(
-                "source `{instance}` does not offer book `{book_id_in_source}`"
-            ))
-        })?;
-        let entry = SourceBook::from(entry);
-
-        // File mode first: a declared `book-file` capability means the
-        // source offers whole files; we fall back to chapter mode when
-        // `get-book-file` returns none/errors.
-        if self.plugins.declares(instance, "book-file").await?
-            && let Some(book_file) = self.plugins.get_book_file(instance, &entry.id).await?
-        {
-            return self
-                .materialize_file_mode(user, instance, &entry, &book_file)
-                .await;
-        }
-
-        // Chapter mode: titles (and bodies) come from the *content*
-        // instance.
-        let (content_inst, content_id) = self.plugins.content_target(instance, &entry);
-        let titles = self
-            .plugins
-            .chapter_titles(content_inst, content_id)
-            .await?;
-        let (book_id, _) = self
-            .ensure_plugin_book(instance, Some(&user.id), &entry, &titles)
-            .await?;
-        let file = self
-            .plugin_file(instance, &entry.id)
-            .await?
-            .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("plugin file vanished")))?;
-        // Title placeholders; bodies stay lazy (first read).
-        self.ensure_titles(&file).await?;
-        let book = self
-            .get_book(&book_id)
-            .await?
-            .ok_or_else(|| ApiError::not_found("book"))?;
-        Ok((book, file))
+        self.acquire_book(
+            user,
+            AcquireContent::Plugin {
+                source: instance,
+                book_id_in_source,
+            },
+            AcquireMetadata::New {
+                overrides: &MetadataOverrides::default(),
+            },
+            Visibility::Public,
+            "",
+        )
+        .await
     }
 
     /// File-mode materialization: store a `get-book-file` result like a
@@ -229,15 +210,22 @@ impl Library {
     /// and the plugin is not consulted for content.
     async fn materialize_file_mode(
         &self,
-        user: &User,
         source: &str,
         entry: &SourceBook,
         book_file: &SourceBookFile,
-    ) -> Result<(BookMeta, FileMeta), ApiError> {
+        book_id: &str,
+    ) -> Result<FileMeta, ApiError> {
         let parsed = bookshelf_formats::parse(&book_file.bytes, &book_file.filename)?;
-        let (book_id, file_id) = self
-            .ensure_plugin_book(source, Some(&user.id), entry, &[])
-            .await?;
+        // The virtual row for (source, external_id) under `book_id` was
+        // created by `ensure_plugin_book` / `attach_plugin_file`; rewrite
+        // it into a stored file: self-contained (no content indirection),
+        // real format/toc/chapter count.
+        let file_id: String =
+            sqlx::query_scalar("SELECT id FROM book_files WHERE source = ? AND external_id = ?")
+                .bind(source)
+                .bind(&entry.id)
+                .fetch_one(&self.db)
+                .await?;
         let format = detect_format(&book_file.filename);
         let toc_json = serde_json::to_string(&parsed.toc).unwrap_or_else(|_| "[]".into());
         let label = format!("{source} 下载");
@@ -280,15 +268,9 @@ impl Library {
             "plugin book materialized in file mode (upload parser)"
         );
 
-        let file = self
-            .get_file(&file_id)
+        self.get_file(&file_id)
             .await?
-            .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("plugin file vanished")))?;
-        let book = self
-            .get_book(&book_id)
-            .await?
-            .ok_or_else(|| ApiError::not_found("book"))?;
-        Ok((book, file))
+            .ok_or_else(|| ApiError::not_found("file"))
     }
 
     /// Create/update the metadata entry and virtual file of a plugin book.
@@ -436,54 +418,104 @@ impl Library {
         row.map(FileRow::into_model).transpose()
     }
 
-    // ---- uploads ---------------------------------------------------------
+    // ---- acquisition (获取书籍 → 添加元数据) --------------------------------
 
-    /// Ingest an uploaded epub/txt file. The metadata comes from one of
-    /// [`UploadMetadata`]'s modes (`attach`/`plugin`/`auto`), possibly
-    /// with user `overrides` on top of whatever the file parser or
-    /// plugin produced. Returns the metadata entry and the stored file.
-    pub async fn upload_file(
+    /// Add a book to the library: one unified flow for every content
+    /// source. [`AcquireContent`] is where the book's content comes from
+    /// (uploaded file or plugin source), [`AcquireMetadata`] how the
+    /// metadata entry is resolved (new / from a plugin / attach to
+    /// existing). Storage options (`visibility`, `label`) apply to both.
+    /// Returns the metadata entry and the stored file.
+    pub async fn acquire_book(
         &self,
         user: &User,
-        upload: UploadInput<'_>,
-        mode: UploadMetadata,
-        overrides: &MetadataOverrides,
+        content: AcquireContent<'_>,
+        metadata: AcquireMetadata<'_>,
+        visibility: Visibility,
+        label: &str,
     ) -> Result<(BookMeta, FileMeta), ApiError> {
-        // Chapter extraction is needed in every mode, so parse first.
-        let parsed = bookshelf_formats::parse(upload.bytes, upload.filename)?;
-
-        let book_id = match mode {
-            // Attach to existing metadata: the caller must be able to see
-            // the book (its owner, an admin, or via a public file).
-            UploadMetadata::Attach { book_id } => {
+        let (book_id, file) = match (content, metadata) {
+            // ---- attach an uploaded file to existing metadata -----------
+            (AcquireContent::File { bytes, filename }, AcquireMetadata::Attach { book_id }) => {
+                let parsed = bookshelf_formats::parse(bytes, filename)?;
+                // The caller must be able to see the book (its owner, an
+                // admin, or via a public file).
                 let _ = self
-                    .get_book(&book_id)
+                    .get_book(book_id)
                     .await?
                     .ok_or_else(|| ApiError::not_found("book"))?;
-                if self.files_of_book(&book_id, user).await?.is_empty() {
+                if self.files_of_book(book_id, user).await?.is_empty() {
                     return Err(ApiError::Forbidden);
                 }
                 // The attached edition may be the first one carrying a
                 // real cover — fill it in when the entry has none yet.
                 if let Some(cover) = &parsed.cover {
-                    self.store_cover_if_missing(&book_id, cover).await?;
+                    self.store_cover_if_missing(book_id, cover).await?;
                 }
-                book_id
+                let file = self
+                    .store_local_file(&parsed, book_id, &user.id, filename, visibility, label)
+                    .await?;
+                (book_id.to_string(), file)
             }
-            // Metadata from a named plugin source (manual picker or
-            // explicit plugin reference), resolved via `get-book`.
-            UploadMetadata::Plugin {
-                source,
-                book_id_in_source,
-            } => {
-                let book_entry = self.plugin_book_entry(&source, &book_id_in_source).await?;
-                let (content_inst, content_id) = self.plugins.content_target(&source, &book_entry);
+
+            // ---- attach a plugin book's content to existing metadata ---
+            (
+                AcquireContent::Plugin {
+                    source,
+                    book_id_in_source,
+                },
+                AcquireMetadata::Attach { book_id },
+            ) => {
+                let _ = self
+                    .get_book(book_id)
+                    .await?
+                    .ok_or_else(|| ApiError::not_found("book"))?;
+                if self.files_of_book(book_id, user).await?.is_empty() {
+                    return Err(ApiError::Forbidden);
+                }
+                let entry = self.plugin_book_entry(source, book_id_in_source).await?;
+                // One plugin book = one library entry: it must not already
+                // live under a different metadata entry.
+                let existing: Option<String> = sqlx::query_scalar(
+                    "SELECT book_id FROM book_files WHERE source = ? AND external_id = ?",
+                )
+                .bind(source)
+                .bind(&entry.id)
+                .fetch_optional(&self.db)
+                .await?;
+                if let Some(other) = existing
+                    && other != book_id
+                {
+                    return Err(ApiError::Conflict(format!(
+                        "plugin book `{book_id_in_source}` is already in the library under \
+                         metadata `{other}`; attach another source instead"
+                    )));
+                }
+                self.attach_plugin_file(source, Some(&user.id), &entry, book_id)
+                    .await?;
+                let file = self
+                    .materialize_plugin_content(source, &entry, book_id)
+                    .await?;
+                (book_id.to_string(), file)
+            }
+
+            // ---- metadata from a named plugin source --------------------
+            (
+                content,
+                AcquireMetadata::Plugin {
+                    source,
+                    book_id_in_source,
+                    overrides,
+                },
+            ) => {
+                let entry = self.plugin_book_entry(source, book_id_in_source).await?;
+                let (content_inst, content_id) = self.plugins.content_target(source, &entry);
                 let titles = self
                     .plugins
                     .chapter_titles(content_inst, content_id)
                     .await?;
                 let (book_id, _) = self
-                    .ensure_plugin_book(&source, Some(&user.id), &book_entry, &titles)
+                    .ensure_plugin_book(source, Some(&user.id), &entry, &titles)
                     .await?;
                 // User-provided fields correct the plugin metadata.
                 if !overrides.is_empty() {
@@ -496,13 +528,33 @@ impl Library {
                     )
                     .await?;
                 }
-                book_id
+                match content {
+                    AcquireContent::File { bytes, filename } => {
+                        let parsed = bookshelf_formats::parse(bytes, filename)?;
+                        let file = self
+                            .store_local_file(
+                                &parsed, &book_id, &user.id, filename, visibility, label,
+                            )
+                            .await?;
+                        (book_id, file)
+                    }
+                    AcquireContent::Plugin { .. } => {
+                        let file = self
+                            .materialize_plugin_content(source, &entry, &book_id)
+                            .await?;
+                        (book_id, file)
+                    }
+                }
             }
+
+            // ---- new metadata from an uploaded file ---------------------
             // Auto: let plugins identify the file (first match wins),
-            // otherwise create metadata parsed from the file.
-            UploadMetadata::Auto => {
-                let hash = sha256_hex(upload.bytes);
-                match self.plugins.identify_upload(upload.filename, &hash).await? {
+            // otherwise create metadata parsed from the file. `overrides`
+            // correct the produced metadata in both cases.
+            (AcquireContent::File { bytes, filename }, AcquireMetadata::New { overrides }) => {
+                let parsed = bookshelf_formats::parse(bytes, filename)?;
+                let hash = sha256_hex(bytes);
+                let book_id = match self.plugins.identify_upload(filename, &hash).await? {
                     Some((source, entry)) => {
                         let (content_inst, content_id) =
                             self.plugins.content_target(&source, &entry);
@@ -526,20 +578,49 @@ impl Library {
                         book_id
                     }
                     None => self.create_book(&parsed, &user.id, overrides).await?,
+                };
+                let file = self
+                    .store_local_file(&parsed, &book_id, &user.id, filename, visibility, label)
+                    .await?;
+                (book_id, file)
+            }
+
+            // ---- new metadata from a plugin source's own entry ----------
+            // (plugin content; there is no file to parse/identify — the
+            // plugin's `book-entry` is the natural metadata)
+            (
+                AcquireContent::Plugin {
+                    source,
+                    book_id_in_source,
+                },
+                AcquireMetadata::New { overrides },
+            ) => {
+                let entry = self.plugin_book_entry(source, book_id_in_source).await?;
+                let (content_inst, content_id) = self.plugins.content_target(source, &entry);
+                let titles = self
+                    .plugins
+                    .chapter_titles(content_inst, content_id)
+                    .await?;
+                let (book_id, _) = self
+                    .ensure_plugin_book(source, Some(&user.id), &entry, &titles)
+                    .await?;
+                if !overrides.is_empty() {
+                    self.update_book(
+                        &book_id,
+                        overrides.title.as_deref(),
+                        overrides.description.as_deref(),
+                        overrides.authors.as_ref(),
+                        overrides.cover_url.as_deref(),
+                    )
+                    .await?;
                 }
+                let file = self
+                    .materialize_plugin_content(source, &entry, &book_id)
+                    .await?;
+                (book_id, file)
             }
         };
 
-        let file = self
-            .store_local_file(
-                &parsed,
-                &book_id,
-                &user.id,
-                upload.filename,
-                upload.visibility,
-                upload.label,
-            )
-            .await?;
         let book = self
             .get_book(&book_id)
             .await?
@@ -553,6 +634,96 @@ impl Library {
         entry
             .map(SourceBook::from)
             .ok_or_else(|| ApiError::bad_request(format!("plugin does not offer book `{book_id}`")))
+    }
+
+    /// The virtual file row of a plugin book attached under an existing
+    /// metadata entry (no metadata is created; `ensure_plugin_book` is
+    /// bypassed so the entry the user chose wins). The caller must have
+    /// checked the plugin book is not already materialized elsewhere.
+    async fn attach_plugin_file(
+        &self,
+        source: &str,
+        owner: Option<&str>,
+        book: &SourceBook,
+        book_id: &str,
+    ) -> Result<String, ApiError> {
+        if let Some(file_id) =
+            sqlx::query_scalar("SELECT id FROM book_files WHERE source = ? AND external_id = ?")
+                .bind(source)
+                .bind(&book.id)
+                .fetch_optional(&self.db)
+                .await?
+        {
+            return Ok(file_id);
+        }
+        let file_id = uuid::Uuid::new_v4().simple().to_string();
+        sqlx::query(
+            "INSERT INTO book_files (id, book_id, source, external_id, content_source, content_external_id, format, label, visibility, owner_id, chapter_count) \
+             VALUES (?, ?, ?, ?, ?, ?, 'plugin', '', 'public', ?, 0)",
+        )
+        .bind(&file_id)
+        .bind(book_id)
+        .bind(source)
+        .bind(&book.id)
+        .bind(&book.content_source)
+        .bind(&book.content_id)
+        .bind(owner)
+        .execute(&self.db)
+        .await?;
+        Ok(file_id)
+    }
+
+    /// Materialize a plugin book's *content* under an existing metadata
+    /// entry. File mode (`get-book-file` through the upload parser,
+    /// `book-file` capability) wins; chapter mode (virtual file + title
+    /// placeholders, bodies lazy until first read) is the fallback.
+    async fn materialize_plugin_content(
+        &self,
+        source: &str,
+        entry: &SourceBook,
+        book_id: &str,
+    ) -> Result<FileMeta, ApiError> {
+        if self.plugins.declares(source, "book-file").await?
+            && let Some(book_file) = self.plugins.get_book_file(source, &entry.id).await?
+        {
+            return self
+                .materialize_file_mode(source, entry, &book_file, book_id)
+                .await;
+        }
+
+        // Chapter mode: virtual file row + title placeholders. The row
+        // may be freshly attached (chapter_count 0 — titles were only
+        // ensured for metadata-creating paths), so fetch titles directly
+        // in that case.
+        let file = self
+            .plugin_file(source, &entry.id)
+            .await?
+            .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("plugin file vanished")))?;
+        if file.chapter_count == 0 {
+            let (content_inst, content_id) = self.plugins.content_target(source, entry);
+            let titles = self
+                .plugins
+                .chapter_titles(content_inst, content_id)
+                .await?;
+            if !titles.is_empty() {
+                sqlx::query(
+                    "UPDATE book_files SET chapter_count = ?, content_source = ?, content_external_id = ? \
+                     WHERE id = ?",
+                )
+                .bind(titles.len() as i64)
+                .bind(&entry.content_source)
+                .bind(&entry.content_id)
+                .bind(&file.id)
+                .execute(&self.db)
+                .await?;
+                self.upsert_placeholder_titles(&file.id, &titles).await?;
+            }
+        } else {
+            self.ensure_titles(&file).await?;
+        }
+        self.get_file(&file.id)
+            .await?
+            .ok_or_else(|| ApiError::not_found("file"))
     }
 
     /// Create a fresh metadata entry from the parsed file, applying user

@@ -12,7 +12,7 @@ use bookshelf_core::model::{BookMeta, FileMeta, Visibility};
 
 use crate::error::ApiError;
 use crate::routes::{ListParams, St, current_user};
-use crate::service::library::{MetadataOverrides, UploadMetadata};
+use crate::service::library::{AcquireContent, AcquireMetadata, MetadataOverrides};
 
 #[derive(Serialize)]
 pub struct BookDetail {
@@ -39,19 +39,15 @@ fn parse_visibility(value: Option<&str>, default: Visibility) -> Result<Visibili
     }
 }
 
-/// Metadata fields read from an upload form, besides the file itself.
+/// Metadata fields of an addition form, besides the content itself.
 ///
-/// The metadata fields of an upload that describe *where* the metadata
-/// comes from and how it is overridden.
-///
-/// - `book_id` present       -> attach to existing metadata,
-/// - `plugin_source` present  -> metadata from that plugin's catalog
-///   (`plugin_book_id` names the entry),
-/// - neither                  -> auto: plugins asked to identify the file,
-///   falling back to parsing the file.
-///
+/// The unified acquisition model (获取书籍 → 添加元数据): the *content*
+/// comes either from an uploaded `file` or from a plugin source
+/// (`plugin_source` + `plugin_book_id`); the *metadata* is attached via
+/// `book_id` (existing entry), taken from a plugin catalog
+/// (`plugin_source`), or generated automatically (parsed/identified).
 /// `title`/`authors`/`description`/`cover_url` override the produced
-/// metadata in the auto/manual/plugin cases (never for attach).
+/// metadata (never applied when attaching).
 #[derive(Default)]
 struct UploadFields {
     book_id: Option<String>,
@@ -71,11 +67,13 @@ async fn field_text(field: axum::extract::multipart::Field<'_>) -> Result<String
         .map_err(|e| ApiError::bad_request(format!("field read: {e}")))
 }
 
-/// Read a multipart upload form: `file` (required), `visibility`, `label`
-/// and the optional metadata fields.
+/// Read a multipart addition form: `file` (optional — plugin sources
+/// supply the content without one), `visibility`, `label` and the
+/// optional metadata fields. Returns `None` as the file when the form
+/// has no `file` field (the content then comes from a plugin source).
 async fn read_upload(
     mut multipart: Multipart,
-) -> Result<(Vec<u8>, String, Visibility, String, UploadFields), ApiError> {
+) -> Result<(Option<(Vec<u8>, String)>, Visibility, String, UploadFields), ApiError> {
     let mut bytes: Option<Vec<u8>> = None;
     let mut filename: Option<String> = None;
     let mut visibility = Visibility::Private;
@@ -135,27 +133,61 @@ async fn read_upload(
         }
     }
 
-    let bytes = bytes.ok_or_else(|| ApiError::bad_request("missing `file` field"))?;
-    let filename = filename.unwrap_or_else(|| "book.unknown".into());
-    Ok((bytes, filename, visibility, label, fields))
+    let file = match (bytes, filename) {
+        (Some(bytes), filename) => Some((bytes, filename.unwrap_or_else(|| "book.unknown".into()))),
+        (None, _) => None,
+    };
+    Ok((file, visibility, label, fields))
 }
 
-fn upload_mode(fields: &UploadFields) -> Result<UploadMetadata, ApiError> {
+/// The metadata mode of an addition: attach to an existing entry
+/// (`book_id`), metadata from a plugin catalog (`plugin_source`), or a
+/// new entry (auto/parsed/identified; `overrides` apply).
+fn metadata_mode<'a>(
+    fields: &'a UploadFields,
+    overrides: &'a MetadataOverrides,
+) -> Result<AcquireMetadata<'a>, ApiError> {
     if let Some(book_id) = &fields.book_id {
-        return Ok(UploadMetadata::Attach {
-            book_id: book_id.clone(),
-        });
+        return Ok(AcquireMetadata::Attach { book_id });
     }
     if let Some(source) = &fields.plugin_source {
-        let book_id_in_source = fields.plugin_book_id.clone().ok_or_else(|| {
+        let book_id_in_source = fields.plugin_book_id.as_deref().ok_or_else(|| {
             ApiError::bad_request("`plugin_book_id` is required together with `plugin_source`")
         })?;
-        return Ok(UploadMetadata::Plugin {
-            source: source.clone(),
+        return Ok(AcquireMetadata::Plugin {
+            source,
             book_id_in_source,
+            overrides,
         });
     }
-    Ok(UploadMetadata::Auto)
+    if fields.plugin_book_id.is_some() {
+        return Err(ApiError::bad_request(
+            "`plugin_book_id` requires `plugin_source`",
+        ));
+    }
+    Ok(AcquireMetadata::New { overrides })
+}
+
+/// The content source of an addition: the uploaded file, or a book of a
+/// plugin source (file mode via `get-book-file` when available, else
+/// chapter-mode virtual file).
+fn content_source<'a>(
+    file: &'a Option<(Vec<u8>, String)>,
+    fields: &'a UploadFields,
+) -> Result<AcquireContent<'a>, ApiError> {
+    if let Some((bytes, filename)) = file {
+        return Ok(AcquireContent::File { bytes, filename });
+    }
+    let (Some(source), Some(book_id_in_source)) = (&fields.plugin_source, &fields.plugin_book_id)
+    else {
+        return Err(ApiError::bad_request(
+            "missing `file`, or a plugin book (`plugin_source` + `plugin_book_id`)",
+        ));
+    };
+    Ok(AcquireContent::Plugin {
+        source,
+        book_id_in_source,
+    })
 }
 
 fn overrides(fields: &UploadFields) -> MetadataOverrides {
@@ -188,8 +220,12 @@ pub async fn list_books(
 
 // POST /api/books (multipart) ------------------------------------------------
 //
-// One upload endpoint for all three metadata modes; see `UploadFields` for
-// how the mode is selected.
+// The single library acquisition endpoint (获取书籍 → 添加元数据): the
+// content is either an uploaded `file` or a plugin book
+// (`plugin_source` + `plugin_book_id`); the metadata entry is created
+// automatically, taken from the plugin catalog, or attached to an
+// existing entry (`book_id`). Manual `title`/`authors`/`description`/
+// `cover_url` override the produced metadata (never when attaching).
 
 pub async fn upload_book(
     State(st): State<St>,
@@ -197,19 +233,16 @@ pub async fn upload_book(
     multipart: Multipart,
 ) -> Result<impl IntoResponse, ApiError> {
     let user = current_user(&st, &headers).await?;
-    let (bytes, filename, visibility, label, fields) = read_upload(multipart).await?;
+    let (file, visibility, label, fields) = read_upload(multipart).await?;
+    let overrides = overrides(&fields);
     let (book, file) = st
         .library
-        .upload_file(
+        .acquire_book(
             &user,
-            crate::service::library::UploadInput {
-                bytes: &bytes,
-                filename: &filename,
-                visibility,
-                label: &label,
-            },
-            upload_mode(&fields)?,
-            &overrides(&fields),
+            content_source(&file, &fields)?,
+            metadata_mode(&fields, &overrides)?,
+            visibility,
+            &label,
         )
         .await?;
     Ok((
@@ -240,27 +273,27 @@ pub async fn attach_file(
         .map(|f| f.visibility)
         .unwrap_or(Visibility::Private);
 
-    let (bytes, filename, visibility, label, fields) = read_upload(multipart).await?;
+    let (file, visibility, label, fields) = read_upload(multipart).await?;
+    // Only file content here — the target metadata is the URL's book.
+    let some_file = file.ok_or_else(|| ApiError::bad_request("missing `file` field"))?;
     let (_book, file) = st
         .library
-        .upload_file(
+        .acquire_book(
             &user,
-            crate::service::library::UploadInput {
-                bytes: &bytes,
-                filename: &filename,
-                visibility: if visibility == Visibility::Private {
-                    default_visibility
-                } else {
-                    visibility
-                },
-                label: &label,
+            AcquireContent::File {
+                bytes: &some_file.0,
+                filename: &some_file.1,
             },
-            UploadMetadata::Attach {
-                book_id: book_id.clone(),
+            AcquireMetadata::Attach { book_id: &book_id },
+            if visibility == Visibility::Private {
+                default_visibility
+            } else {
+                visibility
             },
-            &overrides(&fields),
+            &label,
         )
         .await?;
+    let _ = fields; // attach mode: metadata fields are ignored
     Ok((StatusCode::CREATED, Json(file)))
 }
 
