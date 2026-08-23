@@ -7,26 +7,16 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { useAuth } from "../auth";
-import { IconArrowLeft } from "../components/icons";
+import { BookCover } from "../components/BookCover";
+import {
+  IconArrowLeft,
+  IconEdit,
+  IconPlus,
+  IconTrash,
+} from "../components/icons";
 import { Modal } from "../components/Modal";
 import { useToast } from "../components/toast";
 import type { BookDetail, BookListEntry, SeriesBrief, SeriesDetail } from "../types";
-
-function Cover({ bookId, title }: { bookId: string; title: string }) {
-  const [failed, setFailed] = useState(false);
-  return failed ? (
-    <div className="book-cover-fallback">
-      <span>{title.trim().charAt(0) || "书"}</span>
-    </div>
-  ) : (
-    <img
-      src={`/api/books/${bookId}/cover`}
-      alt=""
-      loading="lazy"
-      onError={() => setFailed(true)}
-    />
-  );
-}
 
 /// One volume card of the series. In manage mode the card shows the
 /// reorder/remove controls instead of linking.
@@ -52,7 +42,7 @@ function VolumeCard({
   const inner = (
     <>
       <div className="book-cover">
-        <Cover bookId={book.id} title={book.title} />
+        <BookCover bookId={book.id} title={book.title} coverUrl={book.cover_url} />
         <div className="book-badges">
           <span className="tag tag-volume">第{book.volume_no || orderIndex + 1}卷</span>
         </div>
@@ -197,43 +187,69 @@ export function SeriesPage() {
 
   return (
     <div className="book-detail">
-      <Link to="/" className="link-btn">
-        <IconArrowLeft size={14} /> {t("common.backToShelf")}
-      </Link>
-      <h1>{series?.title}</h1>
-      <p className="hint">
-        {t("series.metaLine", {
-          authors: series?.authors.join(" / ") || t("common.anonymous"),
-          count: series?.volume_count ?? 0,
-        })}
-      </p>
-      {series?.description && <p className="description">{series.description}</p>}
+      <div className="page-back">
+        <Link to="/" className="link-btn">
+          <IconArrowLeft size={14} /> {t("common.backToShelf")}
+        </Link>
+      </div>
 
-      {canManage && (
-        <div className="row">
-          <button className="link-btn" onClick={() => setEditOpen(true)}>
-            {t("series.edit")}
-          </button>
-          <button className="link-btn" onClick={() => void openAddDialog()}>
-            {t("series.addBooks")}
-          </button>
-          {orderDirty ? (
-            <>
-              <button className="link-btn" onClick={() => void saveOrder()}>
-                {t("series.saveOrder")}
+      <div className="detail-hero">
+        {membersByOrder[0] && (
+          <div className="detail-cover">
+            <BookCover
+              bookId={membersByOrder[0].book.id}
+              title={membersByOrder[0].book.title}
+              coverUrl={membersByOrder[0].book.cover_url}
+            />
+          </div>
+        )}
+        <div className="detail-info">
+          {series?.authors.length ? (
+            <span className="chip">{series.authors.join(" / ")}</span>
+          ) : null}
+          <h1>{series?.title}</h1>
+          <div className="detail-meta">
+            <span>{t("series.volumes", { count: series?.volume_count ?? 0 })}</span>
+            <span>·</span>
+            <span>
+              {t("common.chaptersTotal", {
+                count: membersByOrder.reduce(
+                  (n, e) => n + e.files.reduce((m, f) => m + f.chapter_count, 0),
+                  0,
+                ),
+              })}
+            </span>
+          </div>
+          {series?.description && <p className="detail-desc">{series.description}</p>}
+          {canManage && (
+            <div className="detail-actions">
+              <button className="ghost" onClick={() => setEditOpen(true)}>
+                <IconEdit size={14} /> {t("series.edit")}
               </button>
-              <button className="link-btn" onClick={() => setOrder(null)}>
-                {t("series.cancelOrder")}
+              <button className="ghost" onClick={() => void openAddDialog()}>
+                <IconPlus size={14} /> {t("series.addBooks")}
               </button>
-            </>
-          ) : (
-            <button className="link-btn danger" onClick={() => void deleteSeries()}>
-              {t("series.delete")}
-            </button>
+              {orderDirty && (
+                <>
+                  <button className="primary" onClick={() => void saveOrder()}>
+                    {t("series.saveOrder")}
+                  </button>
+                  <button onClick={() => setOrder(null)}>{t("series.cancelOrder")}</button>
+                  <span className="hint">{t("series.orderHint")}</span>
+                </>
+              )}
+              {!orderDirty && (
+                <button
+                  className="ghost danger-text"
+                  onClick={() => void deleteSeries()}
+                >
+                  <IconTrash size={14} /> {t("series.delete")}
+                </button>
+              )}
+            </div>
           )}
         </div>
-      )}
-      {orderDirty && <p className="hint">{t("series.orderHint")}</p>}
+      </div>
 
       <div className="book-grid">
         {membersByOrder.map((entry, i) => (
