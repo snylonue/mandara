@@ -10,6 +10,15 @@ use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+/// Signature of a mock server route handler:
+/// `(path_and_query, method, headers, body)` → `(status, response_headers,
+/// response_body)`. `Send + Sync` so the server can invoke it from
+/// connection threads (kept as a named alias so clippy's
+/// `type-complexity` stays quiet).
+pub type HttpHandler = dyn Fn(&str, &str, &[(String, String)], &[u8]) -> (u16, Vec<(String, String)>, Vec<u8>)
+    + Send
+    + Sync;
+
 /// One recorded request.
 #[derive(Debug, Clone)]
 pub struct Request {
@@ -86,11 +95,7 @@ impl MockServer {
 
 fn serve(
     mut stream: TcpStream,
-    handler: &(
-         dyn Fn(&str, &str, &[(String, String)], &[u8]) -> (u16, Vec<(String, String)>, Vec<u8>)
-             + Send
-             + Sync
-     ),
+    handler: &HttpHandler,
     requests: &Mutex<Vec<Request>>,
 ) -> std::io::Result<()> {
     stream

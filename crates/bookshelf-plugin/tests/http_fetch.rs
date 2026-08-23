@@ -57,82 +57,79 @@ fn request(
 }
 
 /// Standard routes shared by the tests (see `router`).
-fn router(
-    cross_redirect_target: Option<String>,
-) -> impl Fn(&str, &str, &[(String, String)], &[u8]) -> (u16, Vec<(String, String)>, Vec<u8>) + Send + Sync
-{
-    move |target, _method, _headers, _body| {
-        let (path, query) = target.split_once('?').unwrap_or((target, ""));
-        match path {
-            "/hello" => (
-                200,
-                vec![("Content-Type".into(), "text/plain".into())],
-                b"hello world".to_vec(),
-            ),
-            "/json" => (
-                200,
-                vec![("Content-Type".into(), "application/json".into())],
-                br#"{"ok":true}"#.to_vec(),
-            ),
-            "/status/404" => (404, vec![], b"not found".to_vec()),
-            "/status/500" => (500, vec![], b"boom".to_vec()),
-            "/redirect" => (302, vec![("Location".into(), "/hello".into())], Vec::new()),
-            // Same-host redirect straight to the echo endpoint (header
-            // assertions).
-            "/redirect-echo" => (302, vec![("Location".into(), "/echo".into())], Vec::new()),
-            // Relative Location (no leading slash).
-            "/rel" => (302, vec![("Location".into(), "hello".into())], Vec::new()),
-            "/loop" => (302, vec![("Location".into(), "/loop".into())], Vec::new()),
-            "/chain/0" => (200, vec![], b"chain-0".to_vec()),
-            _ if path.starts_with("/chain/") => {
-                let n: u32 = path.trim_start_matches("/chain/").parse().unwrap_or(0);
-                (
-                    302,
-                    vec![("Location".into(), format!("/chain/{}", n - 1))],
-                    Vec::new(),
-                )
-            }
-            "/cross" => {
-                ({
-                    let target = cross_redirect_target.clone().unwrap_or_default();
-                    (302, vec![("Location".into(), target)], Vec::new())
-                })
-            }
-            "/echo" => {
-                // Reflect method + received headers as JSON, so tests can
-                // assert exactly what the host forwarded.
-                let mut json = String::from("{");
-                json.push_str(&format!(" \"method\": \"{_method}\""));
-                for (name, value) in _headers {
-                    json.push_str(&format!(", \"{name}\": \"{value}\""));
-                }
-                json.push_str(" }");
-                (
+fn router(cross_redirect_target: Option<String>) -> Box<common::HttpHandler> {
+    Box::new(
+        move |target: &str, _method: &str, _headers: &[(String, String)], _body: &[u8]| {
+            let (path, query) = target.split_once('?').unwrap_or((target, ""));
+            match path {
+                "/hello" => (
+                    200,
+                    vec![("Content-Type".into(), "text/plain".into())],
+                    b"hello world".to_vec(),
+                ),
+                "/json" => (
                     200,
                     vec![("Content-Type".into(), "application/json".into())],
-                    json.into_bytes(),
-                )
+                    br#"{"ok":true}"#.to_vec(),
+                ),
+                "/status/404" => (404, vec![], b"not found".to_vec()),
+                "/status/500" => (500, vec![], b"boom".to_vec()),
+                "/redirect" => (302, vec![("Location".into(), "/hello".into())], Vec::new()),
+                // Same-host redirect straight to the echo endpoint (header
+                // assertions).
+                "/redirect-echo" => (302, vec![("Location".into(), "/echo".into())], Vec::new()),
+                // Relative Location (no leading slash).
+                "/rel" => (302, vec![("Location".into(), "hello".into())], Vec::new()),
+                "/loop" => (302, vec![("Location".into(), "/loop".into())], Vec::new()),
+                "/chain/0" => (200, vec![], b"chain-0".to_vec()),
+                _ if path.starts_with("/chain/") => {
+                    let n: u32 = path.trim_start_matches("/chain/").parse().unwrap_or(0);
+                    (
+                        302,
+                        vec![("Location".into(), format!("/chain/{}", n - 1))],
+                        Vec::new(),
+                    )
+                }
+                "/cross" => {
+                    let target = cross_redirect_target.clone().unwrap_or_default();
+                    (302, vec![("Location".into(), target)], Vec::new())
+                }
+                "/echo" => {
+                    // Reflect method + received headers as JSON, so tests can
+                    // assert exactly what the host forwarded.
+                    let mut json = String::from("{");
+                    json.push_str(&format!(" \"method\": \"{_method}\""));
+                    for (name, value) in _headers {
+                        json.push_str(&format!(", \"{name}\": \"{value}\""));
+                    }
+                    json.push_str(" }");
+                    (
+                        200,
+                        vec![("Content-Type".into(), "application/json".into())],
+                        json.into_bytes(),
+                    )
+                }
+                "/slow" => {
+                    let ms: u64 = query
+                        .split('=')
+                        .nth(1)
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(1000);
+                    thread::sleep(Duration::from_millis(ms));
+                    (200, vec![], b"finally".to_vec())
+                }
+                "/big" => {
+                    let n: usize = query
+                        .split('=')
+                        .nth(1)
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(1024);
+                    (200, vec![], vec![b'x'; n])
+                }
+                _ => (404, vec![], b"no route".to_vec()),
             }
-            "/slow" => {
-                let ms: u64 = query
-                    .split('=')
-                    .nth(1)
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(1000);
-                thread::sleep(Duration::from_millis(ms));
-                (200, vec![], b"finally".to_vec())
-            }
-            "/big" => {
-                let n: usize = query
-                    .split('=')
-                    .nth(1)
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(1024);
-                (200, vec![], vec![b'x'; n])
-            }
-            _ => (404, vec![], b"no route".to_vec()),
-        }
-    }
+        },
+    )
 }
 
 fn find_header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {

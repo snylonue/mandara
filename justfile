@@ -11,7 +11,8 @@ dev-web:
 # Check + test
 check:
     cargo check --workspace
-    cargo clippy --workspace -- -D warnings
+    # --all-targets so test/example/bench code is linted too
+    cargo clippy --workspace --all-targets -- -D warnings
 
 test:
     cargo test --workspace

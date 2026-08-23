@@ -14,7 +14,7 @@ fn introspection_is_stable_under_epoch_pump() {
         .expect("load");
         let mut fails = 0;
         let mut last = String::new();
-        for i in 0..30 {
+        for _ in 0..30 {
             let r = plugin.name();
             if r.is_err() {
                 fails += 1;
