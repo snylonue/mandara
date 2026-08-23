@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { ApiError, api } from "../api";
 import { useAuth } from "../auth";
 import { IconArrowLeft } from "../components/icons";
+import { Modal } from "../components/Modal";
 import { useToast } from "../components/toast";
 import {
   SourceBrowserDialog,
@@ -16,6 +17,7 @@ import type {
   FileMeta,
   PluginInstance,
   ReadingSession,
+  SeriesBrief,
   SessionsResponse,
   ShareInfo,
   Visibility,
@@ -283,6 +285,52 @@ export function BookDetailPage() {
     }
   }
 
+  // Series membership (assign / move / unassign).
+  const [seriesOpen, setSeriesOpen] = useState(false);
+  const [seriesList, setSeriesList] = useState<SeriesBrief[]>([]);
+  const [seriesPickId, setSeriesPickId] = useState("");
+  const [seriesVolume, setSeriesVolume] = useState("");
+  const [seriesError, setSeriesError] = useState<string | null>(null);
+  const [seriesSaving, setSeriesSaving] = useState(false);
+
+  async function openSeriesDialog() {
+    setSeriesError(null);
+    setSeriesVolume("");
+    try {
+      const list = await api<SeriesBrief[]>("/series");
+      // Prefer the book's current series; else the first manageable one.
+      setSeriesList(list);
+      setSeriesPickId(detail?.book.series_id ?? list.find((s) => s.created_by === user?.id)?.id ?? "");
+      setSeriesOpen(true);
+    } catch (err) {
+      toast.push("error", err instanceof Error ? err.message : t("common.failed"));
+    }
+  }
+
+  async function saveSeries() {
+    const book = detail?.book;
+    if (!book) return;
+    setSeriesSaving(true);
+    setSeriesError(null);
+    try {
+      const body: Record<string, unknown> = {};
+      if (seriesPickId) {
+        body.series_id = seriesPickId;
+        if (seriesVolume.trim()) body.volume_no = Number(seriesVolume.trim());
+      } else {
+        body.series_id = null;
+      }
+      await api<BookMeta>(`/books/${book.id}`, { method: "PATCH", body: JSON.stringify(body) });
+      setSeriesOpen(false);
+      toast.push("success", t("book.seriesSaved"));
+      await load();
+    } catch (err) {
+      setSeriesError(err instanceof Error ? err.message : t("common.failed_verb"));
+    } finally {
+      setSeriesSaving(false);
+    }
+  }
+
   /** Re-pull metadata from the plugin source(s) backing this book. */
   async function refreshFromSource() {
     try {
@@ -354,6 +402,20 @@ export function BookDetailPage() {
           count: files.length,
         })}
       </p>
+      {(detail.series || book.volume_no > 0) && (
+        <p className="hint">
+          {detail.series ? (
+            <Link className="strong" to={`/series/${detail.series.id}`}>
+              {t("book.seriesLine", {
+                title: detail.series.title,
+                volume: book.volume_no,
+              })}
+            </Link>
+          ) : (
+            <span className="tag tag-volume">第{book.volume_no}卷</span>
+          )}
+        </p>
+      )}
       {book.description && <p className="description">{book.description}</p>}
 
       {canManage && (
@@ -363,6 +425,9 @@ export function BookDetailPage() {
               {t("book.refreshFromSource")}
             </button>
           )}
+          <button className="link-btn" onClick={() => void openSeriesDialog()}>
+            {t("book.manageSeries")}
+          </button>
           <button
             className="link-btn danger"
             disabled={deleting}
@@ -458,6 +523,44 @@ export function BookDetailPage() {
           </div>
         )}
       </section>
+
+      {/* Series membership control (creator/admin of the book). */}
+      <Modal
+        open={seriesOpen}
+        onClose={() => setSeriesOpen(false)}
+        title={t("book.seriesTitle")}
+      >
+        <div className="field">
+          <select
+            value={seriesPickId}
+            onChange={(e) => setSeriesPickId(e.target.value)}
+            aria-label={t("book.seriesLabel")}
+          >
+            <option value="">{t("book.seriesNone")}</option>
+            {seriesList.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.title}
+              </option>
+            ))}
+          </select>
+          <input
+            type="number"
+            min={1}
+            placeholder={t("book.seriesVolumePlaceholder")}
+            value={seriesVolume}
+            onChange={(e) => setSeriesVolume(e.target.value)}
+            disabled={!seriesPickId}
+          />
+          <p className="hint">{t("book.seriesHint")}</p>
+        </div>
+        {seriesError && <div className="error">{seriesError}</div>}
+        <div className="modal-actions">
+          <button onClick={() => setSeriesOpen(false)}>{t("library.cancel")}</button>
+          <button className="primary" disabled={seriesSaving} onClick={() => void saveSeries()}>
+            {seriesSaving ? t("library.uploading") : t("series.save")}
+          </button>
+        </div>
+      </Modal>
     </div>
   );
 }

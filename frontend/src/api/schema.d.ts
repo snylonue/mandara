@@ -268,7 +268,9 @@ export interface paths {
          *     from the file / the plugin's own entry), taken from a plugin
          *     catalog, or attached to an existing entry (`book_id`).
          *     `title`/`authors`/`description`/`cover_url` override the produced
-         *     metadata (manual mode; never applied when attaching).
+         *     metadata (manual mode; never applied when attaching). When the
+         *     plugin source declares >1 volumes, the acquisition auto-splits
+         *     into one series + one book per 卷 (the response carries them all).
          */
         post: operations["uploadBook"];
         delete?: never;
@@ -357,6 +359,76 @@ export interface paths {
         put?: never;
         /** Attach another file (format/edition) to existing metadata */
         post: operations["attachFile"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/series": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List series visible to the caller: those created by the caller,
+         *     and series owning at least one visible member file (admins see
+         *     all). Each entry carries its member count.
+         */
+        get: operations["listSeries"];
+        put?: never;
+        /** Create a series (any logged-in user; the creator manages it) */
+        post: operations["createSeries"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/series/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Series detail: metadata plus member books in volume order (files
+         *     filtered by visibility; entries without visible files still
+         *     appear with an empty `files` list).
+         */
+        get: operations["getSeriesDetail"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a series (creator or admin). Member books are unassigned
+         *     (their entries stay standalone); the series row is removed.
+         */
+        delete: operations["deleteSeries"];
+        options?: never;
+        head?: never;
+        /** Edit series metadata (creator or admin) */
+        patch: operations["patchSeries"];
+        trace?: never;
+    };
+    "/api/series/{id}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Replace the member set + order of a series in one call: the
+         *     listed books (in order) become volumes 1..N; former members not
+         *     listed are unassigned. The caller must manage the series and
+         *     every listed book.
+         */
+        put: operations["putSeriesMembers"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -570,6 +642,15 @@ export interface components {
             /** @description Id of the user who created this metadata entry */
             created_by: string | null;
             created_at: string;
+            /**
+             * @description Series this book is a volume of (null = standalone). Volume
+             *     splits assign every 卷 its own book entry plus one series
+             *     row; manual assignment (`PATCH /api/books/{id}`) moves books
+             *     in and out of series.
+             */
+            series_id: string | null;
+            /** @description 1-based volume ordinal inside the series (0 = standalone) */
+            volume_no: number;
         };
         FileMeta: {
             id: string;
@@ -593,6 +674,18 @@ export interface components {
             owner_id: string | null;
             chapter_count: number;
             created_at: string;
+            /**
+             * @description Volume slice of the source book this file covers (0 = the
+             *     whole book). A multi-volume plugin book is acquired as one
+             *     file per 卷.
+             */
+            volume_no: number;
+            /**
+             * @description Flat chapter index of this volume's first chapter inside the
+             *     source (persisted because the plugin is stateless); lazy
+             *     chapter pulls use `volume_offset + idx`.
+             */
+            volume_offset: number;
         };
         ChapterMeta: {
             idx: number;
@@ -624,14 +717,48 @@ export interface components {
             /** @description Scroll fraction within the chapter (web reader) */
             fraction: number;
         };
+        /**
+         * @description A series: metadata grouping for the volumes of one publication
+         *     family (e.g. a light-novel series split from a multi-volume
+         *     plugin source). Member books carry `series_id` + `volume_no`.
+         */
+        SeriesBrief: {
+            id: string;
+            title: string;
+            authors: string[];
+            description: string | null;
+            cover_url: string | null;
+            /** @description Number of member books (all visibilities) */
+            volume_count: number;
+            created_by: string | null;
+            created_at: string;
+        };
+        SeriesDetail: {
+            series: components["schemas"]["SeriesBrief"];
+            /** @description Member books in volume order, files filtered by visibility */
+            books: components["schemas"]["BookDetail"][];
+        };
+        /**
+         * @description Result of one acquisition (`POST /api/books`). When the plugin
+         *     source declared >1 volumes, `series` is the created series and
+         *     `books` holds one entry per 卷; otherwise `series` is null and
+         *     `books` has exactly one entry. Always non-empty.
+         */
+        AcquireResult: {
+            series: components["schemas"]["SeriesBrief"];
+            books: components["schemas"]["BookDetail"][];
+        };
         BookDetail: {
             book: components["schemas"]["BookMeta"];
             files: components["schemas"]["FileMeta"][];
+            series: components["schemas"]["SeriesBrief"];
         };
         BookListEntry: {
             book: components["schemas"]["BookMeta"];
             /** @description Files of this book visible to the caller */
             files: components["schemas"]["FileMeta"][];
+            /** @description Series this book belongs to (null = standalone) */
+            series: components["schemas"]["SeriesBrief"];
         };
         FileDetail: {
             file: components["schemas"]["FileMeta"];
@@ -639,9 +766,12 @@ export interface components {
             chapters: components["schemas"]["ChapterMeta"][];
             toc: components["schemas"]["TocNode"][];
         };
+        /** @description Metadata edit (creator or admin) plus optional series membership changes. `series_id`: a series id moves the book into it, explicit `null` unassigns, absent keeps the current series. `volume_no`: 1-based ordinal; absent/`null` = next free volume. Volume numbers within a series are unique (409 otherwise). */
         PatchBook: {
             title?: string;
             description?: string;
+            series_id?: string | null;
+            volume_no?: number | null;
         };
         PatchFile: {
             visibility?: components["schemas"]["Visibility"];
@@ -865,6 +995,8 @@ export interface components {
         BookId: string;
         /** @description Book file id */
         FileId: string;
+        /** @description Series id */
+        SeriesId: string;
         /** @description Share token */
         ShareToken: string;
         /** @description Plugin instance id (source id) */
@@ -1300,13 +1432,16 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Book and its first file created */
+            /**
+             * @description The created series (when a multi-volume source book was
+             *     split) and the created books, each with its first file.
+             */
             201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["BookDetail"];
+                    "application/json": components["schemas"]["AcquireResult"];
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -1489,6 +1624,170 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FileMeta"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listSeries: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Visible series */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SeriesBrief"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    createSeries: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    title: string;
+                    authors?: string[];
+                    description?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Created series */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SeriesBrief"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    getSeriesDetail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Series id */
+                id: components["parameters"]["SeriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Series detail */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SeriesDetail"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    deleteSeries: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Series id */
+                id: components["parameters"]["SeriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    patchSeries: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Series id */
+                id: components["parameters"]["SeriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    title?: string;
+                    authors?: string[];
+                    description?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Updated series */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SeriesBrief"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    putSeriesMembers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Series id */
+                id: components["parameters"]["SeriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    book_ids: string[];
+                };
+            };
+        };
+        responses: {
+            /** @description Updated series detail */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SeriesDetail"];
                 };
             };
             400: components["responses"]["BadRequest"];

@@ -13,6 +13,7 @@ import { BookDetailPage } from "./pages/BookDetailPage";
 import { LibraryPage } from "./pages/LibraryPage";
 import { LoginPage, RegisterPage } from "./pages/AuthPages";
 import { PluginsPage } from "./pages/PluginsPage";
+import { SeriesPage } from "./pages/SeriesPage";
 import { ReaderPage } from "./pages/ReaderPage";
 import { SharePage } from "./pages/SharePage";
 
@@ -139,6 +140,14 @@ export default function App() {
               element={
                 <RequireAuth>
                   <BookDetailPage />
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/series/:id"
+              element={
+                <RequireAuth>
+                  <SeriesPage />
                 </RequireAuth>
               }
             />

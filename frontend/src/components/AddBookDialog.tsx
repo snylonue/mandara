@@ -17,7 +17,13 @@ import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { Modal } from "./Modal";
 import { SourceSearchPane, type SourcePick } from "./SourceSearch";
-import type { BookDetail, BookListEntry, PluginInstance, Visibility } from "../types";
+import { useToast } from "./toast";
+import type {
+  AcquireResult,
+  BookListEntry,
+  PluginInstance,
+  Visibility,
+} from "../types";
 
 type AcquireTab = "upload" | "plugin";
 type MetaMode = "auto" | "attach" | "manual";
@@ -40,6 +46,7 @@ export function AddBookDialog({
   onAdded: () => void;
 }) {
   const { t } = useTranslation();
+  const toast = useToast();
   const [tab, setTab] = useState<AcquireTab>("upload");
   const [mode, setMode] = useState<MetaMode>("auto");
   const [uploading, setUploading] = useState(false);
@@ -168,7 +175,19 @@ export function AddBookDialog({
         }
       }
 
-      await api<BookDetail>("/books", { method: "POST", body: form });
+      const result = await api<AcquireResult>("/books", { method: "POST", body: form });
+      // Volume splits create a series + one book per 卷; surface that.
+      if (result.series && result.books.length > 1) {
+        toast.push(
+          "success",
+          t("library.seriesAdded", {
+            title: result.series.title,
+            count: result.books.length,
+          }),
+        );
+      } else {
+        toast.push("success", t("library.added", { title: result.books[0]?.book.title ?? "" }));
+      }
       reset();
       onClose();
       onAdded();

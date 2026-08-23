@@ -6,7 +6,7 @@ import { useAuth } from "../auth";
 import { AddBookDialog } from "../components/AddBookDialog";
 import { useToast } from "../components/toast";
 import { usePluginInstances } from "../components/SourceSearch";
-import type { BookListEntry, BookMeta } from "../types";
+import type { BookListEntry, BookMeta, SeriesBrief } from "../types";
 import {
   IconBook,
   IconPlugin,
@@ -37,6 +37,10 @@ function BookCover({ book }: { book: BookMeta }) {
   );
 }
 
+function VolumeBadge({ book }: { book: BookMeta }) {
+  return book.volume_no > 0 ? <span className="tag tag-volume">第{book.volume_no}卷</span> : null;
+}
+
 function BookCard({ entry }: { entry: BookListEntry }) {
   const { t } = useTranslation();
   const { book, files } = entry;
@@ -51,6 +55,7 @@ function BookCard({ entry }: { entry: BookListEntry }) {
       <div className="book-cover">
         <BookCover book={book} />
         <div className="book-badges">
+          <VolumeBadge book={book} />
           <span
             className={`badge-icon ${anyPublic ? "badge-public" : "badge-private"}`}
             title={anyPublic ? t("book.publicTag") : t("book.privateTag")}
@@ -114,6 +119,19 @@ export function LibraryPage() {
     void load(q);
   }, [load, q]);
 
+  // Group the (series-sorted) list into series groups + standalone books,
+  // preserving order.
+  const groups: { series: SeriesBrief | null; entries: BookListEntry[] }[] = [];
+  for (const entry of entries ?? []) {
+    const key = entry.series?.id ?? null;
+    const last = groups[groups.length - 1];
+    if (last && last.series?.id === key) {
+      last.entries.push(entry);
+    } else {
+      groups.push({ series: entry.series ?? null, entries: [entry] });
+    }
+  }
+
   return (
     <div>
       <div className="toolbar">
@@ -129,15 +147,34 @@ export function LibraryPage() {
       </div>
       {user?.role === "admin" && <p className="hint">{t("library.adminHint")}</p>}
       <p className="hint">{t("library.metadataHint")}</p>
-      <div className="book-grid">
-        {(entries ?? Array.from({ length: 8 }, () => null)).map((entry, i) =>
-          entry ? (
-            <BookCard key={entry.book.id} entry={entry} />
-          ) : (
+      {entries === null && (
+        <div className="book-grid">
+          {Array.from({ length: 8 }, (_, i) => (
             <BookCardSkeleton key={`sk-${i}`} />
-          ),
-        )}
-      </div>
+          ))}
+        </div>
+      )}
+      {entries !== null &&
+        groups.map((group) => (
+          <section className="series-group" key={group.series?.id ?? "standalone"}>
+            {group.series && (
+              <Link className="series-group-head" to={`/series/${group.series.id}`}>
+                <h2>{group.series.title}</h2>
+                <span className="tag tag-volume">
+                  {t("series.volumes", { count: group.entries.length })}
+                </span>
+                {group.series.authors.length > 0 && (
+                  <span className="hint">{group.series.authors.join(" / ")}</span>
+                )}
+              </Link>
+            )}
+            <div className="book-grid">
+              {group.entries.map((e) => (
+                <BookCard key={e.book.id} entry={e} />
+              ))}
+            </div>
+          </section>
+        ))}
       {entries !== null && entries.length === 0 && (
         <div className="empty-state">
           <IconBook size={40} className="empty-state-icon" />
