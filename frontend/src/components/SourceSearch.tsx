@@ -1,9 +1,21 @@
-// Reusable plugin source search pane (design v2, lazy catalog browsing).
+// Reusable plugin source picker (design v2/v3, lazy catalog browsing).
 //
-// Renders an instance select + search box + paginated result list for
-// instances matching the given filter. Used by:
-//   - library "源浏览器" (materialize a book),
-//   - upload dialog manual mode (pick metadata from a plugin),
+// Interaction abstraction: a source is presented according to its
+// *interaction kind* (`sourceInteraction`, derived from the plugin's
+// `source-info` declaration and its capabilities). Kinds:
+//   - "search"    — the catalog is browsed with a query box
+//     (`search-books`, paginated results + pick buttons);
+//   - "manual-id" — no search (wenku8-style login-walled sources); users
+//     enter a book id directly (`lookup`), with a per-source hint from
+//     `source_info.id_hint`;
+//   - "browse"    — a declared catalog, already synced at startup;
+//     there is nothing to pick.
+// The declared kind wins only when it matches this frontend's
+// capabilities-derived reality; unsupported future kinds degrade to the
+// capability default, so one new plugin cannot break the picker.
+//
+// Used by:
+//   - the unified add-book dialog (获取书籍 step, file/plugin tabs),
 //   - book detail "更换内容源" (rebind a file's content source).
 
 import { useEffect, useRef, useState } from "react";
@@ -18,6 +30,41 @@ export type SourcePick = {
   instance: PluginInstance;
   item: PluginSearchItem;
 };
+
+/** How the frontend acquires books from a source. */
+export type SourceInteraction = "search" | "manual-id" | "browse";
+
+/** Whether a source supports the given capability. */
+function has(inst: PluginInstance, cap: string): boolean {
+  return inst.capabilities.includes(cap);
+}
+
+/**
+ * Resolve a source's interaction kind. The plugin's `source-info`
+ * declaration wins when it matches what this frontend can actually do
+ * with the source's capabilities; otherwise the kind is derived from
+ * capabilities (so a stale/unknown declared kind degrades gracefully).
+ */
+export function sourceInteraction(inst: PluginInstance): SourceInteraction {
+  const declared = inst.source_info?.kind;
+  if (declared === "search" && has(inst, "search")) return "search";
+  if (declared === "manual-id" && has(inst, "lookup")) return "manual-id";
+  if (has(inst, "search")) return "search";
+  if (has(inst, "lookup")) return "manual-id";
+  return "browse";
+}
+
+/** The search-box placeholder of a source (its declared hint, else the
+ * locale fallback). */
+export function searchPlaceholder(inst: PluginInstance, fallback: string): string {
+  return inst.source_info?.search_hint?.trim() || fallback;
+}
+
+/** The manual-id entry hint of a source (its declared hint, else the
+ * locale fallback). */
+export function idHint(inst: PluginInstance, fallback: string): string {
+  return inst.source_info?.id_hint?.trim() || fallback;
+}
 
 /** Fetch one search page of an instance's catalog. */
 export async function searchSource(
@@ -57,11 +104,8 @@ export function SourceSearchPane({
   const [manual, setManual] = useState("");
   const seq = useRef(0);
 
-  // A selected instance without the `search` capability cannot be
-  // browsed (e.g. wenku8: login-walled search); its books are picked by
-  // manually entering a book id instead.
   const selected = options.find((i) => i.id === sel);
-  const canSearch = Boolean(selected?.capabilities.includes("search"));
+  const interaction = selected ? sourceInteraction(selected) : null;
 
   // Keep the selection valid when the instance list changes (e.g. after
   // registration in the admin page).
@@ -85,17 +129,17 @@ export function SourceSearchPane({
     }
   }
 
-  // Re-search when the instance or the query changes. Instances without
-  // `search` are not searched (their books are picked by id).
+  // Re-search when the instance or the query changes. Only searchable
+  // sources are searched; others pick books by id.
   useEffect(() => {
-    if (!sel || !canSearch) {
+    if (!sel || interaction !== "search") {
       setResult(null);
       setError(null);
       return;
     }
     void load(sel, q, 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sel, q, canSearch]);
+  }, [sel, q, interaction]);
 
   const total = result?.total ?? 0;
   const shown = result?.items.length ?? 0;
@@ -120,10 +164,10 @@ export function SourceSearchPane({
             </option>
           ))}
         </select>
-        {sel && canSearch && (
+        {sel && interaction === "search" && selected && (
           <input
             className="search"
-            placeholder={t("plugin.searchPlaceholder")}
+            placeholder={searchPlaceholder(selected, t("plugin.searchPlaceholder"))}
             value={q}
             onChange={(e) => setQ(e.target.value)}
           />
@@ -132,14 +176,14 @@ export function SourceSearchPane({
 
       {error && <div className="error">{error}</div>}
       {loading && <p className="hint">{t("common.loading")}</p>}
-      {!loading && !error && canSearch && sel && result && result.items.length === 0 && (
+      {!loading && !error && interaction === "search" && sel && result && result.items.length === 0 && (
         <p className="hint">{t("plugin.noResults")}</p>
       )}
-      {!loading && !error && !canSearch && sel && selected && (
+      {!loading && !error && interaction === "manual-id" && sel && selected && (
         <div className="field">
           <p className="hint">{t("plugin.noSearch")}</p>
           <input
-            placeholder={t("plugin.manualIdPlaceholder")}
+            placeholder={idHint(selected, t("plugin.manualIdPlaceholder"))}
             value={manual}
             onChange={(e) => setManual(e.target.value)}
           />
@@ -162,6 +206,9 @@ export function SourceSearchPane({
             </button>
           )}
         </div>
+      )}
+      {!loading && !error && interaction === "browse" && sel && (
+        <p className="hint">{t("plugin.browseSynced")}</p>
       )}
       <ul className="source-results">
         {result?.items.map((item) => (

@@ -181,6 +181,46 @@ HFMT=$(api GET "/api/files/$BFILE/chapters/0" | jq_field "d['format']")
 api GET "/api/files/$BFILE/chapters/0" | grep -q "<p>" || fail "sanitized HTML missing"
 pass "file-mode r-2 materialized through the upload parser (epub, nested TOC, html chapters)"
 
+# --- unified acquisition matrix (docs/api/openapi.yaml POST /api/books) -
+# Every combination of content source (file | plugin) and metadata mode
+# (auto | attach | manual overrides) goes through the one endpoint.
+printf '第一章 测试章节\n正文内容一行\n' > /tmp/e2e-upload.txt
+
+# file + auto: a plain upload parses its own metadata
+UP=$(api_form /api/books "file=@/tmp/e2e-upload.txt" "visibility=public")
+UPBOOK=$(echo "$UP" | jq_field "d['book']['id']")
+UPC=$(echo "$UP" | jq_field "d['files'][0]['chapter_count']")
+[ "$UPC" -ge 1 ] 2>/dev/null || fail "file+auto chapter_count=$UPC"
+pass "file+auto: uploaded txt parsed into a new metadata entry"
+
+# file + attach: a second file joins the same metadata entry
+UP2=$(api_form /api/books "file=@/tmp/e2e-upload.txt" "book_id=$UPBOOK" "visibility=public")
+[ "$(echo "$UP2" | jq_field "d['book']['id']")" = "$UPBOOK" ] || fail "file+attach book mismatch"
+pass "file+attach: second file attached under the same metadata"
+
+# plugin + attach: plugin content joins an existing metadata entry
+UP3=$(api_form /api/books "plugin_source=wiki" "plugin_book_id=w-2" "book_id=$UPBOOK" "visibility=public")
+[ "$(echo "$UP3" | jq_field "d['book']['id']")" = "$UPBOOK" ] || fail "plugin+attach book mismatch"
+W3C=$(echo "$UP3" | jq_field "d['files'][0]['chapter_count']")
+[ "$W3C" = "3" ] || fail "plugin+attach chapter_count=$W3C (expected 3: reader r-2 content)"
+pass "plugin+attach: wiki w-2 content attached under existing metadata"
+
+# plugin content + manual overrides: the plugin entry with a user title
+OV=$(api_form /api/books "plugin_source=wiki" "plugin_book_id=w-3" "title=自定义书题" "visibility=public")
+echo "$OV" | grep -q "自定义书题" || fail "plugin+overrides title lost"
+pass "plugin+overrides: plugin entry overridden with a manual title"
+
+# one plugin book = one library entry: attaching it under another entry
+# must conflict
+UP4=$(api_form /api/books "file=@/tmp/e2e-upload.txt" "visibility=public")
+UPBOOK4=$(echo "$UP4" | jq_field "d['book']['id']")
+if api_form /api/books "plugin_source=wiki" "plugin_book_id=w-2" "book_id=$UPBOOK4" "visibility=public" > /dev/null 2>&1; then
+    fail "re-attaching an already materialized plugin book should 409"
+fi
+pass "plugin+attach conflict: w-2 already materialized under another entry -> 409"
+
+rm -f /tmp/e2e-upload.txt
+
 # --- policy: empty allow list denies every plugin fetch -------------------
 start_server ""   # restart with the allow list emptied
 api POST /api/plugins/instances '{"id":"wiki","wasm_file":"wiki.wasm"}' > /dev/null
