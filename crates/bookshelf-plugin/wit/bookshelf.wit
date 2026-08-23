@@ -1,6 +1,12 @@
-// bookshelf plugin interface v4 (dev phase: no backward compatibility).
+// bookshelf plugin interface v5 (dev phase: no backward compatibility).
 //
-// v4 adds `source-info`: the plugin declares how the frontend should
+// v5 adds `volume-info`/`book-entry.volumes`: sources with multi-volume
+// books (light-novel series where vcss-style TOC rows group chapters into
+// 卷) declare the volume structure, and the host acquires each volume as
+// its own library book under one series entry instead of merging the whole
+// series into a single book (see docs/series-design.md).
+//
+// v4 added `source-info`: the plugin declares how the frontend should
 // present it when a user acquires books (interaction kind + id/search
 // hints), so UIs do not need to hardcode one plugin's shape (e.g. wenku8's
 // login-walled search / numeric book ids).
@@ -16,14 +22,33 @@
 //     hierarchical TOC and sanitized HTML like uploads (capability
 //     `"book-file"`);
 //   - `source-info` (v4): per-plugin interaction hints;
+//   - `volumes` (v5): multi-volume structure (auto-split by the host);
 //   - every export is still required (wit-parser has no `optional-export`;
 //     unsupported features are declared via `capabilities()` and return
 //     `none`/empty).
 
-package bookshelf:plugin@0.4.0;
+package bookshelf:plugin@0.5.0;
 
 /// Shared types between bookshelf and plugins.
 interface types {
+    /// One volume of a multi-volume source book (a light-novel series).
+    ///
+    /// A volume's chapter list is a consecutive slice of the flat
+    /// `chapter-titles` order: volume `k` starts at the sum of the
+    /// `chapter-count`s of its predecessors, and the host maps
+    /// per-volume chapter indices to flat indices using these counts
+    /// (the persisted per-file `volume-offset` is the cache of that
+    /// sum). The sum of all counts should equal `chapter-titles`; the
+    /// host clamps mismatches defensively.
+    record volume-info {
+        /// Volume title as shown in the library (e.g. `"第一卷"`); the
+        /// host falls back to `第N卷` when empty.
+        title: string,
+        /// Number of chapters in this volume, in the flat reading order
+        /// (after the plugin's own 插图/etc. placement policy).
+        chapter-count: u32,
+    }
+
     /// A book offered by a plugin source.
     record book-entry {
         /// Stable id of the book within this plugin.
@@ -41,6 +66,12 @@ interface types {
         content-source: option<string>,
         /// Book id inside the content source. Defaults to `id` when `none`.
         content-id: option<string>,
+        /// Volume structure when the source book spans several volumes
+        /// (e.g. a 卷-split series TOC). `none`/empty = single volume
+        /// (one library book, today's behavior). When >1 volumes are
+        /// declared, the host auto-splits acquisition into one series +
+        /// one library book (and file) per volume.
+        volumes: option<list<volume-info>>,
     }
 
     /// A single chapter of a book.
@@ -240,7 +271,7 @@ world bookshelf-plugin {
     // Types used by this world's exports come from the imported `types`
     // interface; WIT requires an explicit `use` to bring them into the
     // world scope.
-    use types.{book-entry, chapter, declared-book, search-result, book-file, source-info};
+    use types.{book-entry, chapter, declared-book, search-result, book-file, source-info, volume-info};
     use config.{config-field, config-value};
 
     /// Human-readable name of this plugin (same for all instances).

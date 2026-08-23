@@ -121,6 +121,7 @@ impl From<JsonEntry> for BookEntry {
             cover_url: e.cover_url,
             content_source: e.content_source,
             content_id: e.content_id,
+            volumes: None,
         }
     }
 }

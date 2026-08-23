@@ -379,10 +379,15 @@ struct ChapterRef {
 }
 
 /// A volume: its 1-based ordinal (for disambiguating repeated 插图
-/// chapters in the flat TOC) + its chapter rows in wenku8's own order
-/// (插图 last).
+/// chapters in the flat TOC), its `vcss` row title (often empty on
+/// wenku8; the host falls back to `第N卷`) + its chapter rows in
+/// wenku8's own order (插图 last).
 struct Volume {
     vol_no: usize,
+    /// Raw volume title from the TOC row (empty when wenku8 leaves it
+    /// blank). Used for the WIT `volumes` declaration so the host can
+    /// split acquisition into one library book per 卷.
+    title: String,
     chapters: Vec<ChapterRef>,
 }
 
@@ -426,9 +431,11 @@ fn parse_toc(html: &str) -> Option<Vec<Volume>> {
             let after = find_after(html, ">", pos)?;
             let end = html[after..].find("</td>")? + after;
             // volume titles are not representable in the flat plugin TOC;
-            // only the 1-based ordinal is kept (for 插图 disambiguation)
+            // keep the row text anyway for the WIT `volumes` declaration
+            let title = decode_entities(&html[after..end]).trim().to_string();
             vols.push(Volume {
                 vol_no: vols.len() + 1,
+                title,
                 chapters: Vec::new(),
             });
             i = end;
@@ -801,6 +808,7 @@ fn parse_book_page(book: &str, html: &str) -> Option<BookEntry> {
         cover_url: extract_cover(&inner),
         content_source: None,
         content_id: None,
+        volumes: None,
     })
 }
 
@@ -899,7 +907,31 @@ impl Guest for Wenku8Plugin {
         let base = config_string("base-url", DEFAULT_BASE_URL);
         let url = format!("{base}/book/{book}.htm");
         let html = fetch_page("get-book", &url, &format!("{base}/"))?;
-        parse_book_page(&book, &html)
+        let mut entry = parse_book_page(&book, &html)?;
+        // Multi-volume books (卷-split TOCs) declare their volumes so
+        // the host acquires one library book per 卷 under a series
+        // instead of merging the whole series into one book.
+        if let Some(info) = fetch_toc(&book) {
+            let mut counts = vec![0u32; info.volumes.len()];
+            for c in &info.order {
+                counts[c.volume] += 1;
+            }
+            entry.volumes = Some(
+                info.volumes
+                    .iter()
+                    .enumerate()
+                    .map(|(i, v)| VolumeInfo {
+                        title: if v.title.is_empty() {
+                            format!("第{}卷", v.vol_no)
+                        } else {
+                            v.title.clone()
+                        },
+                        chapter_count: counts[i],
+                    })
+                    .collect(),
+            );
+        }
+        Some(entry)
     }
 
     fn chapter_titles(book_id: String) -> Vec<String> {
@@ -956,6 +988,36 @@ export!(Wenku8Plugin);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_volume_titles_and_counts() {
+        let html = "<td class=\"vcss\">第一卷 相遇</td>\
+                    <td class=\"ccss\"><a href=\"reader.php?aid=1&amp;cid=1\">序章</a></td>\
+                    <td class=\"ccss\"><a href=\"reader.php?aid=1&amp;cid=2\">第一章</a></td>\
+                    <td class=\"vcss\">第二卷 觉醒</td>\
+                    <td class=\"ccss\"><a href=\"reader.php?aid=1&amp;cid=3\">第一章</a></td>\
+                    <td class=\"ccss\"><a href=\"reader.php?aid=1&amp;cid=4\">插图</a></td>";
+        let vols = parse_toc(html).unwrap();
+        assert_eq!(vols.len(), 2);
+        assert_eq!(vols[0].title, "第一卷 相遇");
+        assert_eq!(vols[1].title, "第二卷 觉醒");
+        // Per-volume counts under the default `end` placement (插图
+        // stays in its volume, at the end).
+        let order = build_order(&vols, Placement::End);
+        let mut counts = vec![0u32; vols.len()];
+        for c in &order {
+            counts[c.volume] += 1;
+        }
+        assert_eq!(counts, vec![2, 2]);
+        assert_eq!(order.last().unwrap().title, "第2卷 插图");
+        // `skip` drops the plate chapters from their volume's count.
+        let order = build_order(&vols, Placement::Skip);
+        let mut counts = vec![0u32; vols.len()];
+        for c in &order {
+            counts[c.volume] += 1;
+        }
+        assert_eq!(counts, vec![2, 1]);
+    }
 
     #[test]
     fn parses_fullwidth_illustration_mark() {

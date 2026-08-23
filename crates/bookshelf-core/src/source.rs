@@ -4,6 +4,16 @@
 //! the chapters it returns. The server materializes them into the central
 //! library (unified metadata storage in SQLite) on sync / on demand.
 
+/// One volume of a multi-volume source book (see WIT `volume-info`).
+#[derive(Debug, Clone)]
+pub struct SourceVolume {
+    /// Volume title (e.g. `第一卷`); the host falls back to `第N卷` when
+    /// empty.
+    pub title: String,
+    /// Chapters in this volume, in the flat reading order.
+    pub chapter_count: u32,
+}
+
 /// A book as advertised by a plugin source.
 #[derive(Debug, Clone)]
 pub struct SourceBook {
@@ -19,6 +29,10 @@ pub struct SourceBook {
     pub content_source: Option<String>,
     /// Book id inside the content source. `None` = same as `id`.
     pub content_id: Option<String>,
+    /// Volume structure when the source book spans several volumes;
+    /// empty = single volume. The host auto-splits acquisition into one
+    /// series + one library book per volume when >1 volumes are declared.
+    pub volumes: Vec<SourceVolume>,
 }
 
 /// A chapter as returned by a plugin source.

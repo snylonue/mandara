@@ -165,6 +165,7 @@ impl Guest for HelloPlugin {
             cover_url: None,
             content_source: None,
             content_id: None,
+            volumes: None,
         };
         let book2 = BookEntry {
             id: "hello-2".into(),
@@ -174,6 +175,7 @@ impl Guest for HelloPlugin {
             cover_url: None,
             content_source: None,
             content_id: None,
+            volumes: None,
         };
         Some(vec![
             DeclaredBook {
@@ -280,6 +282,7 @@ impl Guest for HelloPlugin {
                 cover_url: None,
                 content_source: None,
                 content_id: None,
+                volumes: None,
             })
         } else {
             None

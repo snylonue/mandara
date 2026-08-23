@@ -19,7 +19,7 @@ use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Config, Engine, Store};
 
 use bookshelf_core::error::{Error, Result};
-use bookshelf_core::source::{SourceBook, SourceBookFile, SourceChapter};
+use bookshelf_core::source::{SourceBook, SourceBookFile, SourceChapter, SourceVolume};
 
 use crate::http_fetch::{self, FetchPolicy};
 
@@ -405,6 +405,15 @@ impl From<BookEntry> for SourceBook {
             cover_url: b.cover_url,
             content_source: b.content_source,
             content_id: b.content_id,
+            volumes: b
+                .volumes
+                .unwrap_or_default()
+                .into_iter()
+                .map(|v| SourceVolume {
+                    title: v.title,
+                    chapter_count: v.chapter_count,
+                })
+                .collect(),
         }
     }
 }
