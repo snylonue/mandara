@@ -1810,7 +1810,11 @@ impl Library {
         // whole book files is materialized *as a file* on first read
         // (once; the DB becomes the source of truth afterwards). The
         // upload parser gives it a real TOC + sanitized HTML for free.
-        if file.format == "plugin" && file.content_source.is_none() {
+        // Volume files (multi-volume splits) stay chapter-mode: their
+        // `volume_offset` slices of the source's flat list are only valid
+        // in chapter mode — a whole-book file rewrite would merge the
+        // volumes back together.
+        if file.format == "plugin" && file.content_source.is_none() && file.volume_no == 0 {
             let entry = self
                 .plugins
                 .get_book(source_id, external_id)
