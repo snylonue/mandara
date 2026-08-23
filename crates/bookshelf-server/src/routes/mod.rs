@@ -4,6 +4,7 @@ pub mod auth;
 pub mod books;
 pub mod files;
 pub mod plugins;
+pub mod series;
 pub mod sessions;
 pub mod shares;
 
@@ -95,6 +96,17 @@ pub fn router(state: St) -> Router {
         .route("/api/plugins/{id}/config", put(plugins::put_plugin_config))
         .route("/api/plugins/{id}/search", get(plugins::search_plugins))
         .route("/api/plugins/{id}/books", post(plugins::materialize_book))
+        .route(
+            "/api/series",
+            get(series::list_series).post(series::create_series),
+        )
+        .route(
+            "/api/series/{id}",
+            get(series::get_series_detail)
+                .patch(patch(series::patch_series))
+                .delete(delete(series::delete_series)),
+        )
+        .route("/api/series/{id}/members", put(series::put_series_members))
         .route(
             "/api/books",
             get(books::list_books).post(books::upload_book),

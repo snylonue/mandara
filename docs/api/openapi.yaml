@@ -422,7 +422,9 @@ paths:
         from the file / the plugin's own entry), taken from a plugin
         catalog, or attached to an existing entry (`book_id`).
         `title`/`authors`/`description`/`cover_url` override the produced
-        metadata (manual mode; never applied when attaching).
+        metadata (manual mode; never applied when attaching). When the
+        plugin source declares >1 volumes, the acquisition auto-splits
+        into one series + one book per 卷 (the response carries them all).
       operationId: uploadBook
       security:
         - bearerAuth: []
@@ -482,11 +484,13 @@ paths:
                   description: "Manual metadata: cover image URL"
       responses:
         "201":
-          description: Book and its first file created
+          description: |
+            The created series (when a multi-volume source book was
+            split) and the created books, each with its first file.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/BookDetail"
+                $ref: "#/components/schemas/AcquireResult"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -663,6 +667,175 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/FileMeta"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/series:
+    get:
+      tags: [series]
+      summary: |
+        List series visible to the caller: those created by the caller,
+        and series owning at least one visible member file (admins see
+        all). Each entry carries its member count.
+      operationId: listSeries
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Visible series
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SeriesBrief"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      tags: [series]
+      summary: Create a series (any logged-in user; the creator manages it)
+      operationId: createSeries
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title:
+                  type: string
+                authors:
+                  type: array
+                  items:
+                    type: string
+                description:
+                  type: string
+      responses:
+        "201":
+          description: Created series
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SeriesBrief"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/series/{id}:
+    get:
+      tags: [series]
+      summary: |
+        Series detail: metadata plus member books in volume order (files
+        filtered by visibility; entries without visible files still
+        appear with an empty `files` list).
+      operationId: getSeriesDetail
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/SeriesId"
+      responses:
+        "200":
+          description: Series detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SeriesDetail"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [series]
+      summary: Edit series metadata (creator or admin)
+      operationId: patchSeries
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/SeriesId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                authors:
+                  type: array
+                  items:
+                    type: string
+                description:
+                  type: string
+      responses:
+        "200":
+          description: Updated series
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SeriesBrief"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [series]
+      summary: |
+        Delete a series (creator or admin). Member books are unassigned
+        (their entries stay standalone); the series row is removed.
+      operationId: deleteSeries
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/SeriesId"
+      responses:
+        "204":
+          description: Deleted
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/series/{id}/members:
+    put:
+      tags: [series]
+      summary: |
+        Replace the member set + order of a series in one call: the
+        listed books (in order) become volumes 1..N; former members not
+        listed are unassigned. The caller must manage the series and
+        every listed book.
+      operationId: putSeriesMembers
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/SeriesId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [book_ids]
+              properties:
+                book_ids:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        "200":
+          description: Updated series detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SeriesDetail"
         "400":
           $ref: "#/components/responses/BadRequest"
         "403":
@@ -1015,6 +1188,13 @@ components:
       description: Book file id
       schema:
         type: string
+    SeriesId:
+      name: id
+      in: path
+      required: true
+      description: Series id
+      schema:
+        type: string
     ShareToken:
       name: token
       in: path
@@ -1156,7 +1336,7 @@ components:
 
     BookMeta:
       type: object
-      required: [id, title, authors, description, cover_url, created_by, created_at]
+      required: [id, title, authors, description, cover_url, created_by, created_at, series_id, volume_no]
       properties:
         id:
           type: string
@@ -1175,6 +1355,17 @@ components:
           type: [string, "null"]
         created_at:
           type: string
+        series_id:
+          description: |
+            Series this book is a volume of (null = standalone). Volume
+            splits assign every 卷 its own book entry plus one series
+            row; manual assignment (`PATCH /api/books/{id}`) moves books
+            in and out of series.
+          type: [string, "null"]
+        volume_no:
+          description: 1-based volume ordinal inside the series (0 = standalone)
+          type: integer
+          minimum: 0
 
     FileMeta:
       type: object
@@ -1191,6 +1382,8 @@ components:
         - owner_id
         - chapter_count
         - created_at
+        - volume_no
+        - volume_offset
       properties:
         id:
           type: string
@@ -1227,6 +1420,20 @@ components:
           type: integer
         created_at:
           type: string
+        volume_no:
+          description: |
+            Volume slice of the source book this file covers (0 = the
+            whole book). A multi-volume plugin book is acquired as one
+            file per 卷.
+          type: integer
+          minimum: 0
+        volume_offset:
+          description: |
+            Flat chapter index of this volume's first chapter inside the
+            source (persisted because the plugin is stateless); lazy
+            chapter pulls use `volume_offset + idx`.
+          type: integer
+          minimum: 0
 
     ChapterMeta:
       type: object
@@ -1297,9 +1504,66 @@ components:
           maximum: 1
           description: Scroll fraction within the chapter (web reader)
 
+    SeriesBrief:
+      type: object
+      description: |
+        A series: metadata grouping for the volumes of one publication
+        family (e.g. a light-novel series split from a multi-volume
+        plugin source). Member books carry `series_id` + `volume_no`.
+      required: [id, title, authors, description, cover_url, volume_count, created_by, created_at]
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        authors:
+          type: array
+          items:
+            type: string
+        description:
+          type: [string, "null"]
+        cover_url:
+          type: [string, "null"]
+        volume_count:
+          description: Number of member books (all visibilities)
+          type: integer
+        created_by:
+          type: [string, "null"]
+        created_at:
+          type: string
+
+    SeriesDetail:
+      type: object
+      required: [series, books]
+      properties:
+        series:
+          $ref: "#/components/schemas/SeriesBrief"
+        books:
+          description: Member books in volume order, files filtered by visibility
+          type: array
+          items:
+            $ref: "#/components/schemas/BookDetail"
+
+    AcquireResult:
+      type: object
+      description: |
+        Result of one acquisition (`POST /api/books`). When the plugin
+        source declared >1 volumes, `series` is the created series and
+        `books` holds one entry per 卷; otherwise `series` is null and
+        `books` has exactly one entry. Always non-empty.
+      required: [series, books]
+      properties:
+        series:
+          $ref: "#/components/schemas/SeriesBrief"
+          nullable: true
+        books:
+          type: array
+          items:
+            $ref: "#/components/schemas/BookDetail"
+
     BookDetail:
       type: object
-      required: [book, files]
+      required: [book, files, series]
       properties:
         book:
           $ref: "#/components/schemas/BookMeta"
@@ -1307,10 +1571,13 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/FileMeta"
+        series:
+          $ref: "#/components/schemas/SeriesBrief"
+          nullable: true
 
     BookListEntry:
       type: object
-      required: [book, files]
+      required: [book, files, series]
       properties:
         book:
           $ref: "#/components/schemas/BookMeta"
@@ -1319,6 +1586,10 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/FileMeta"
+        series:
+          description: Series this book belongs to (null = standalone)
+          $ref: "#/components/schemas/SeriesBrief"
+          nullable: true
 
     FileDetail:
       type: object
@@ -1339,11 +1610,22 @@ components:
 
     PatchBook:
       type: object
+      description: >
+        Metadata edit (creator or admin) plus optional series membership
+        changes. `series_id`: a series id moves the book into it,
+        explicit `null` unassigns, absent keeps the current series.
+        `volume_no`: 1-based ordinal; absent/`null` = next free volume.
+        Volume numbers within a series are unique (409 otherwise).
       properties:
         title:
           type: string
         description:
           type: string
+        series_id:
+          type: [string, "null"]
+        volume_no:
+          type: [integer, "null"]
+          minimum: 1
 
     PatchFile:
       type: object

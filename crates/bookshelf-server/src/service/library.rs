@@ -23,12 +23,13 @@ use sqlx::SqlitePool;
 use tracing::{info, warn};
 
 use bookshelf_core::model::{
-    BookMeta, Chapter, ChapterFormat, ChapterMeta, FileMeta, TocNode, User, Visibility,
+    BookMeta, Chapter, ChapterFormat, ChapterMeta, FileMeta, Role, SeriesMeta, TocNode, User,
+    Visibility,
 };
-use bookshelf_core::source::{SourceBook, SourceBookFile, SourceChapter};
+use bookshelf_core::source::{SourceBook, SourceBookFile, SourceChapter, SourceVolume};
 
 use crate::error::ApiError;
-use crate::rows::{BookRow, ChapterRow, ChapterTitleRow, FileRow};
+use crate::rows::{BookRow, ChapterRow, ChapterTitleRow, FileRow, SeriesRow};
 use crate::service::plugins::{DeclaredCatalog, PluginService};
 
 /// Where the *content* of a library addition comes from. Every addition
@@ -87,6 +88,16 @@ impl MetadataOverrides {
             && self.description.is_none()
             && self.cover_url.is_none()
     }
+}
+
+/// Result of one acquisition: the series created by a volume split (when
+/// the source declared >1 volumes) plus the books that entered the
+/// library, each with the file stored under it.
+#[derive(Debug, Clone)]
+pub struct AcquireOutcome {
+    pub series: Option<SeriesMeta>,
+    /// Non-empty; one element unless the acquisition split volumes.
+    pub books: Vec<(BookMeta, FileMeta)>,
 }
 
 pub struct Library {
@@ -188,19 +199,25 @@ impl Library {
         instance: &str,
         book_id_in_source: &str,
     ) -> Result<(BookMeta, FileMeta), ApiError> {
-        self.acquire_book(
-            user,
-            AcquireContent::Plugin {
-                source: instance,
-                book_id_in_source,
-            },
-            AcquireMetadata::New {
-                overrides: &MetadataOverrides::default(),
-            },
-            Visibility::Public,
-            "",
-        )
-        .await
+        let outcome = self
+            .acquire_book(
+                user,
+                AcquireContent::Plugin {
+                    source: instance,
+                    book_id_in_source,
+                },
+                AcquireMetadata::New {
+                    overrides: &MetadataOverrides::default(),
+                },
+                Visibility::Public,
+                "",
+            )
+            .await?;
+        outcome
+            .books
+            .into_iter()
+            .next()
+            .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("acquisition produced no books")))
     }
 
     /// File-mode materialization: store a `get-book-file` result like a
@@ -408,7 +425,7 @@ impl Library {
     ) -> Result<Option<FileMeta>, ApiError> {
         let row: Option<FileRow> = sqlx::query_as(
             "SELECT id, book_id, source, external_id, content_source, content_external_id, format, \
-             label, visibility, owner_id, chapter_count, created_at \
+             label, visibility, owner_id, chapter_count, created_at, volume_no, volume_offset \
              FROM book_files WHERE source = ? AND external_id = ?",
         )
         .bind(source)
@@ -425,7 +442,11 @@ impl Library {
     /// (uploaded file or plugin source), [`AcquireMetadata`] how the
     /// metadata entry is resolved (new / from a plugin / attach to
     /// existing). Storage options (`visibility`, `label`) apply to both.
-    /// Returns the metadata entry and the stored file.
+    ///
+    /// When a plugin source declares >1 volumes for its book, the
+    /// acquisition auto-splits into one series + one book per volume
+    /// (see [`Self::try_split_acquire`]); otherwise a single book is
+    /// created/attached, exactly as before.
     pub async fn acquire_book(
         &self,
         user: &User,
@@ -433,7 +454,28 @@ impl Library {
         metadata: AcquireMetadata<'_>,
         visibility: Visibility,
         label: &str,
-    ) -> Result<(BookMeta, FileMeta), ApiError> {
+    ) -> Result<AcquireOutcome, ApiError> {
+        // Multi-volume plugin acquisition: the source declares the book
+        // spans several 卷 — split into a series + one book per volume.
+        if let AcquireContent::Plugin {
+            source,
+            book_id_in_source,
+        } = &content
+            && let AcquireMetadata::New { .. } | AcquireMetadata::Plugin { .. } = &metadata
+            && let Some(outcome) = self
+                .try_split_acquire(
+                    user,
+                    source,
+                    book_id_in_source,
+                    &metadata,
+                    visibility,
+                    label,
+                )
+                .await?
+        {
+            return Ok(outcome);
+        }
+
         let (book_id, file) = match (content, metadata) {
             // ---- attach an uploaded file to existing metadata -----------
             (AcquireContent::File { bytes, filename }, AcquireMetadata::Attach { book_id }) => {
@@ -474,6 +516,15 @@ impl Library {
                     return Err(ApiError::Forbidden);
                 }
                 let entry = self.plugin_book_entry(source, book_id_in_source).await?;
+                // A multi-volume source book cannot be squeezed into one
+                // metadata entry: each 卷 is its own library book under a
+                // series (acquire it as a new book instead).
+                if entry.volumes.len() > 1 {
+                    return Err(ApiError::bad_request(
+                        "this plugin book spans several volumes and cannot be attached to a single \
+                         metadata entry — acquire it as a new book instead (one book per volume)",
+                    ));
+                }
                 // One plugin book = one library entry: it must not already
                 // live under a different metadata entry.
                 let existing: Option<String> = sqlx::query_scalar(
@@ -625,7 +676,213 @@ impl Library {
             .get_book(&book_id)
             .await?
             .ok_or_else(|| ApiError::not_found("book"))?;
-        Ok((book, file))
+        Ok(AcquireOutcome {
+            series: None,
+            books: vec![(book, file)],
+        })
+    }
+
+    /// Multi-volume plugin acquisition (series split). Returns `Some`
+    /// when the source's `book-entry` declared >1 volumes and the split
+    /// was performed; `None` when the book is effectively single-volume.
+    ///
+    /// Only plugin *content* splits (an uploaded file is one complete
+    /// edition and never does): the guard in [`Self::acquire_book`]
+    /// limits this path to `AcquireContent::Plugin` + new/plugin
+    /// metadata.
+    async fn try_split_acquire(
+        &self,
+        user: &User,
+        source: &str,
+        book_id_in_source: &str,
+        metadata: &AcquireMetadata<'_>,
+        visibility: Visibility,
+        label: &str,
+    ) -> Result<Option<AcquireOutcome>, ApiError> {
+        let _ = label; // the volume's label is its volume title, not a user string
+        let entry = self.plugin_book_entry(source, book_id_in_source).await?;
+        if entry.volumes.len() <= 1 {
+            return Ok(None);
+        }
+        let (content_inst, content_id) = self.plugins.content_target(source, &entry);
+        let titles = self
+            .plugins
+            .chapter_titles(content_inst, content_id)
+            .await?;
+        let Some(slices) = volume_slices(&entry.volumes, titles.len() as u32) else {
+            // Declared volumes collapsed (all empty): fall back to today's
+            // single-book acquisition.
+            return Ok(None);
+        };
+        let overrides = match metadata {
+            AcquireMetadata::New { overrides } | AcquireMetadata::Plugin { overrides, .. } => {
+                overrides
+            }
+            AcquireMetadata::Attach { .. } => unreachable!("guarded by the caller"),
+        };
+
+        // One plugin book = one library series: reject materializing the
+        // same source book twice (incl. pre-split merged entries).
+        let existing: Option<String> = sqlx::query_scalar(
+            "SELECT book_id FROM book_files WHERE source = ? AND external_id = ? LIMIT 1",
+        )
+        .bind(source)
+        .bind(&entry.id)
+        .fetch_optional(&self.db)
+        .await?;
+        if let Some(existing_id) = existing {
+            return Err(ApiError::Conflict(format!(
+                "plugin book `{}` is already in the library (as book `{existing_id}`); \
+                 delete the existing entry first to re-acquire it split into volumes",
+                entry.id
+            )));
+        }
+
+        let title = overrides
+            .title
+            .clone()
+            .unwrap_or_else(|| entry.title.clone());
+        let authors_json =
+            serde_json::to_string(overrides.authors.as_ref().unwrap_or(&entry.authors))
+                .unwrap_or_else(|_| "[]".into());
+        let description = overrides
+            .description
+            .clone()
+            .or_else(|| entry.description.clone());
+        let cover_url = overrides
+            .cover_url
+            .clone()
+            .or_else(|| entry.cover_url.clone());
+
+        let series_id = uuid::Uuid::new_v4().simple().to_string();
+        let mut tx = self.db.begin().await?;
+        sqlx::query(
+            "INSERT INTO series (id, title, authors, description, cover_url, created_by) \
+             VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&series_id)
+        .bind(&title)
+        .bind(&authors_json)
+        .bind(&description)
+        .bind(&cover_url)
+        .bind(&user.id)
+        .execute(&mut *tx)
+        .await?;
+
+        let mut books = Vec::with_capacity(slices.len());
+        for (index, (vol_title, start, count)) in slices.iter().enumerate() {
+            let volume_no = (index + 1) as u32;
+            let book_id = uuid::Uuid::new_v4().simple().to_string();
+            sqlx::query(
+                "INSERT INTO books (id, title, authors, description, cover_url, series_id, \
+                 volume_no, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(&book_id)
+            .bind(&title)
+            .bind(&authors_json)
+            .bind(&description)
+            .bind(&cover_url)
+            .bind(&series_id)
+            .bind(volume_no as i64)
+            .bind(&user.id)
+            .execute(&mut *tx)
+            .await?;
+
+            // One virtual chapter-mode file per volume; the volume's
+            // chapter range is a slice of the source's flat list, so lazy
+            // `get-chapter(source, volume_offset + idx)` works.
+            let file_label = if vol_title.is_empty() {
+                format!("第{volume_no}卷")
+            } else {
+                vol_title.clone()
+            };
+            let file_id = uuid::Uuid::new_v4().simple().to_string();
+            sqlx::query(
+                "INSERT INTO book_files (id, book_id, source, external_id, content_source, \
+                 content_external_id, format, label, visibility, owner_id, chapter_count, \
+                 volume_no, volume_offset) \
+                 VALUES (?, ?, ?, ?, ?, ?, 'plugin', ?, 'public', ?, ?, ?, ?)",
+            )
+            .bind(&file_id)
+            .bind(&book_id)
+            .bind(source)
+            .bind(&entry.id)
+            .bind(&entry.content_source)
+            .bind(&entry.content_id)
+            .bind(&file_label)
+            .bind(&user.id)
+            .bind(*count as i64)
+            .bind(volume_no as i64)
+            .bind(*start as i64)
+            .execute(&mut *tx)
+            .await?;
+
+            // Title-only placeholder rows for this volume's slice.
+            let slice = &titles[*start as usize..(*start + *count) as usize];
+            for (idx, t) in slice.iter().enumerate() {
+                sqlx::query(
+                    "INSERT INTO chapters (file_id, idx, title, format, content) \
+                     VALUES (?, ?, ?, 'text', '')",
+                )
+                .bind(&file_id)
+                .bind(idx as i64)
+                .bind(t.trim())
+                .execute(&mut *tx)
+                .await?;
+            }
+
+            books.push((
+                BookMeta {
+                    id: book_id.clone(),
+                    title: title.clone(),
+                    authors: parse_authors(&authors_json),
+                    description: description.clone(),
+                    cover_url: cover_url.clone(),
+                    created_by: Some(user.id.clone()),
+                    created_at: String::new(),
+                    series_id: Some(series_id.clone()),
+                    volume_no,
+                },
+                FileMeta {
+                    id: file_id,
+                    book_id,
+                    source: source.to_string(),
+                    external_id: entry.id.clone(),
+                    content_source: entry.content_source.clone(),
+                    content_external_id: entry.content_id.clone(),
+                    format: "plugin".into(),
+                    label: file_label,
+                    visibility,
+                    owner_id: Some(user.id.clone()),
+                    chapter_count: *count,
+                    created_at: String::new(),
+                    volume_no,
+                    volume_offset: *start,
+                },
+            ));
+        }
+        tx.commit().await?;
+
+        let series = SeriesMeta {
+            id: series_id,
+            title: title.clone(),
+            authors: parse_authors(&authors_json),
+            description: description.clone(),
+            cover_url: cover_url.clone(),
+            created_by: Some(user.id.clone()),
+            created_at: String::new(),
+        };
+        info!(
+            source = %source,
+            book = %entry.id,
+            volumes = books.len(),
+            series = %series.id,
+            "acquired multi-volume plugin book as a series"
+        );
+        Ok(Some(AcquireOutcome {
+            series: Some(series),
+            books,
+        }))
     }
 
     /// Fetch one entry from a plugin source by id (`lookup` capability).
@@ -869,19 +1126,23 @@ impl Library {
         let is_admin = user.role == bookshelf_core::model::Role::Admin;
 
         let mut q = sqlx::QueryBuilder::new(
-            "SELECT DISTINCT b.id, b.title, b.authors, b.description, b.cover_url, b.created_by, b.created_at \
-             FROM books b JOIN book_files f ON f.book_id = b.id WHERE b.title LIKE ",
+            "SELECT DISTINCT b.id, b.title, b.authors, b.description, b.cover_url, b.created_by, \
+             b.created_at, b.series_id, b.volume_no FROM books b JOIN book_files f ON f.book_id = b.id \
+             WHERE b.title LIKE ",
         );
         q.push_bind(pattern);
         if let Some(src) = source {
             q.push(" AND f.source = ").push_bind(src);
         }
+        // Series first (in volume order), then standalone books, newest first.
+        let order =
+            " ORDER BY (b.series_id IS NOT NULL) DESC, b.series_id, b.volume_no, b.created_at DESC";
         if is_admin {
-            q.push(" ORDER BY b.created_at DESC");
+            q.push(order);
         } else {
             q.push(" AND (f.visibility = 'public' OR f.owner_id = ")
                 .push_bind(&user.id)
-                .push(") ORDER BY b.created_at DESC");
+                .push(order);
         }
         let rows: Vec<BookRow> = q.build_query_as().fetch_all(&self.db).await?;
 
@@ -898,8 +1159,8 @@ impl Library {
 
     pub async fn get_book(&self, id: &str) -> Result<Option<BookMeta>, ApiError> {
         let row: Option<BookRow> = sqlx::query_as(
-            "SELECT id, title, authors, description, cover_url, created_by, created_at \
-             FROM books WHERE id = ?",
+            "SELECT id, title, authors, description, cover_url, created_by, created_at, series_id, \
+             volume_no FROM books WHERE id = ?",
         )
         .bind(id)
         .fetch_optional(&self.db)
@@ -949,8 +1210,8 @@ impl Library {
         }
 
         // Files of this book backed by a plugin source.
-        let plugin_files: Vec<(String, String, String)> = sqlx::query_as(
-            "SELECT id, source, external_id FROM book_files \
+        let plugin_files: Vec<(String, String, String, i64, i64, i64)> = sqlx::query_as(
+            "SELECT id, source, external_id, volume_no, volume_offset, chapter_count FROM book_files \
              WHERE book_id = ? AND source != 'local'",
         )
         .bind(book_id)
@@ -962,7 +1223,9 @@ impl Library {
             ));
         }
 
-        for (file_id, source_id, external_id) in &plugin_files {
+        for (file_id, source_id, external_id, volume_no, volume_offset, chapter_count) in
+            &plugin_files
+        {
             let entry = self.plugins.get_book(source_id, external_id).await?;
             let entry = entry.ok_or_else(|| {
                 ApiError::NotFound(format!(
@@ -995,20 +1258,28 @@ impl Library {
             .bind(book_id)
             .execute(&self.db)
             .await?;
+            // Refresh the chapter-title placeholder rows (never overwrite
+            // materialized chapter content). A volume file only owns its
+            // slice of the source's flat list.
+            let slice = title_slice(
+                &titles,
+                *volume_no as u32,
+                *volume_offset as u32,
+                *chapter_count as u32,
+            );
             sqlx::query(
                 "UPDATE book_files SET chapter_count = ?, content_source = ?, content_external_id = ? \
                  WHERE id = ?",
             )
-            .bind(titles.len() as i64)
+            .bind(slice.len() as i64)
             .bind(&entry.content_source)
             .bind(&entry.content_id)
             .bind(file_id)
             .execute(&self.db)
             .await?;
-
-            // Refresh the chapter-title placeholder rows (never overwrite
-            // materialized chapter content).
-            self.upsert_placeholder_titles(file_id, &titles).await?;
+            if !slice.is_empty() {
+                self.upsert_placeholder_titles(file_id, slice).await?;
+            }
             info!(book = %book_id, source = %source_id, "book metadata refreshed from plugin source");
         }
 
@@ -1038,6 +1309,325 @@ impl Library {
         Ok(())
     }
 
+    // ---- series -----------------------------------------------------------
+
+    /// Member books of a series in volume order (all members — file
+    /// visibility is applied per book by the caller; the series itself
+    /// is already visibility-checked).
+    pub async fn series_member_books(&self, id: &str) -> Result<Vec<BookMeta>, ApiError> {
+        let rows: Vec<BookRow> = sqlx::query_as(
+            "SELECT id, title, authors, description, cover_url, created_by, created_at, series_id, \
+             volume_no FROM books WHERE series_id = ? ORDER BY volume_no",
+        )
+        .bind(id)
+        .fetch_all(&self.db)
+        .await?;
+        rows.into_iter().map(BookRow::into_model).collect()
+    }
+
+    /// Is the series visible to the caller (creator, admin, or ≥1 member
+    /// book with a visible file)?
+    pub async fn series_visible_to(&self, user: &User, series_id: &str) -> Result<bool, ApiError> {
+        if user.role == Role::Admin {
+            return Ok(true);
+        }
+        let creator: Option<String> =
+            sqlx::query_scalar("SELECT created_by FROM series WHERE id = ?")
+                .bind(series_id)
+                .fetch_optional(&self.db)
+                .await?;
+        let creator = creator.ok_or_else(|| ApiError::not_found("series"))?;
+        if creator == user.id {
+            return Ok(true);
+        }
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM books b JOIN book_files f ON f.book_id = b.id \
+             WHERE b.series_id = ? AND (f.visibility = 'public' OR f.owner_id = ?)",
+        )
+        .bind(series_id)
+        .bind(&user.id)
+        .fetch_one(&self.db)
+        .await?;
+        Ok(count > 0)
+    }
+
+    pub async fn get_series(&self, id: &str) -> Result<Option<SeriesMeta>, ApiError> {
+        let row: Option<SeriesRow> = sqlx::query_as(
+            "SELECT id, title, authors, description, cover_url, created_by, created_at \
+             FROM series WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&self.db)
+        .await?;
+        Ok(row.map(SeriesRow::into_model))
+    }
+
+    /// Number of member books of a series (any visibility).
+    pub async fn series_volume_count(&self, id: &str) -> Result<u32, ApiError> {
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM books WHERE series_id = ?")
+            .bind(id)
+            .fetch_one(&self.db)
+            .await?;
+        Ok(count.max(0) as u32)
+    }
+
+    /// All series the caller can see (creator, or ≥1 visible member
+    /// file; admins see all), each with its member count.
+    pub async fn list_series(&self, user: &User) -> Result<Vec<(SeriesMeta, u32)>, ApiError> {
+        let rows: Vec<SeriesRow> = if user.role == Role::Admin {
+            sqlx::query_as(
+                "SELECT id, title, authors, description, cover_url, created_by, created_at \
+                 FROM series ORDER BY created_at DESC",
+            )
+            .fetch_all(&self.db)
+            .await?
+        } else {
+            sqlx::query_as(
+                "SELECT s.id, s.title, s.authors, s.description, s.cover_url, s.created_by, \
+                 s.created_at FROM series s WHERE s.created_by = ? OR EXISTS ( \
+                     SELECT 1 FROM books b JOIN book_files f ON f.book_id = b.id \
+                     WHERE b.series_id = s.id AND (f.visibility = 'public' OR f.owner_id = ?) \
+                 ) ORDER BY s.created_at DESC",
+            )
+            .bind(&user.id)
+            .bind(&user.id)
+            .fetch_all(&self.db)
+            .await?
+        };
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            let series = row.into_model();
+            let count = self.series_volume_count(&series.id).await?;
+            out.push((series, count));
+        }
+        Ok(out)
+    }
+
+    /// Create a series (any logged-in user; the creator manages it).
+    pub async fn create_series(
+        &self,
+        user: &User,
+        title: &str,
+        authors: Option<&Vec<String>>,
+        description: Option<&str>,
+    ) -> Result<SeriesMeta, ApiError> {
+        let id = uuid::Uuid::new_v4().simple().to_string();
+        let authors_json =
+            authors.map(|a| serde_json::to_string(a).unwrap_or_else(|_| "[]".into()));
+        sqlx::query(
+            "INSERT INTO series (id, title, authors, description, cover_url, created_by) \
+             VALUES (?, ?, ?, ?, NULL, ?)",
+        )
+        .bind(&id)
+        .bind(title)
+        .bind(authors_json)
+        .bind(description)
+        .bind(&user.id)
+        .execute(&self.db)
+        .await?;
+        self.get_series(&id)
+            .await?
+            .ok_or_else(|| ApiError::not_found("series"))
+    }
+
+    /// Edit series metadata (creator/admin).
+    pub async fn update_series(
+        &self,
+        user: &User,
+        id: &str,
+        title: Option<&str>,
+        authors: Option<&Vec<String>>,
+        description: Option<&str>,
+    ) -> Result<SeriesMeta, ApiError> {
+        let series = self
+            .get_series(id)
+            .await?
+            .ok_or_else(|| ApiError::not_found("series"))?;
+        if series.created_by.as_deref() != Some(user.id.as_str()) && user.role != Role::Admin {
+            return Err(ApiError::Forbidden);
+        }
+        let authors_json =
+            authors.map(|a| serde_json::to_string(a).unwrap_or_else(|_| "[]".into()));
+        sqlx::query(
+            "UPDATE series SET title = COALESCE(?, title), description = COALESCE(?, description), \
+             authors = COALESCE(?, authors) WHERE id = ?",
+        )
+        .bind(title)
+        .bind(description)
+        .bind(authors_json)
+        .bind(id)
+        .execute(&self.db)
+        .await?;
+        self.get_series(id)
+            .await?
+            .ok_or_else(|| ApiError::not_found("series"))
+    }
+
+    /// Delete a series: member books are unassigned (their entries stay).
+    pub async fn delete_series(&self, user: &User, id: &str) -> Result<(), ApiError> {
+        let series = self
+            .get_series(id)
+            .await?
+            .ok_or_else(|| ApiError::not_found("series"))?;
+        if series.created_by.as_deref() != Some(user.id.as_str()) && user.role != Role::Admin {
+            return Err(ApiError::Forbidden);
+        }
+        let mut tx = self.db.begin().await?;
+        sqlx::query("UPDATE books SET series_id = NULL, volume_no = 0 WHERE series_id = ?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM series WHERE id = ?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Replace the member set + order of a series in one call: the given
+    /// books (in order) become the volumes 1..N; former members not in
+    /// the list are unassigned. The caller must manage the series and
+    /// every listed book.
+    pub async fn set_series_members(
+        &self,
+        user: &User,
+        id: &str,
+        book_ids: &[String],
+    ) -> Result<(), ApiError> {
+        let series = self
+            .get_series(id)
+            .await?
+            .ok_or_else(|| ApiError::not_found("series"))?;
+        if series.created_by.as_deref() != Some(user.id.as_str()) && user.role != Role::Admin {
+            return Err(ApiError::Forbidden);
+        }
+        let mut seen = std::collections::HashSet::new();
+        for bid in book_ids {
+            if !seen.insert(bid) {
+                return Err(ApiError::bad_request(format!(
+                    "book `{bid}` appears more than once"
+                )));
+            }
+            let book = self
+                .get_book(bid)
+                .await?
+                .ok_or_else(|| ApiError::bad_request(format!("no such book `{bid}`")))?;
+            let owned = book.created_by.as_deref() == Some(user.id.as_str());
+            if !owned && user.role != Role::Admin {
+                return Err(ApiError::Forbidden);
+            }
+        }
+        let mut tx = self.db.begin().await?;
+        sqlx::query("UPDATE books SET series_id = NULL, volume_no = 0 WHERE series_id = ?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        for (i, bid) in book_ids.iter().enumerate() {
+            sqlx::query("UPDATE books SET series_id = ?, volume_no = ? WHERE id = ?")
+                .bind(id)
+                .bind((i + 1) as i64)
+                .bind(bid)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Assign / move / unassign a book's series membership (per-book
+    /// `PATCH /api/books/{id}`). Both the book and the target series
+    /// must be manageable by the caller. `series_id: Some(None)` (JSON
+    /// `null`) unassigns; a missing `series_id` keeps the current series
+    /// (a `volume_no` then renumbers within it); without a `volume_no`
+    /// the next free volume is used.
+    pub async fn set_book_series(
+        &self,
+        user: &User,
+        book_id: &str,
+        series_id: Option<Option<String>>,
+        volume_no: Option<Option<u32>>,
+    ) -> Result<BookMeta, ApiError> {
+        let book = self
+            .get_book(book_id)
+            .await?
+            .ok_or_else(|| ApiError::not_found("book"))?;
+        let owned = book.created_by.as_deref() == Some(user.id.as_str());
+        if !owned && user.role != Role::Admin {
+            return Err(ApiError::Forbidden);
+        }
+
+        let (target_series, target_vol) = match series_id {
+            Some(Some(id)) => (Some(id), volume_no),
+            Some(None) => (None, None),
+            None => {
+                let current = book.series_id.clone();
+                if current.is_none() && matches!(volume_no, Some(Some(_))) {
+                    return Err(ApiError::bad_request(
+                        "book is not part of a series; pass `series_id` to assign it",
+                    ));
+                }
+                (current, volume_no)
+            }
+        };
+
+        let Some(sid) = target_series else {
+            sqlx::query("UPDATE books SET series_id = NULL, volume_no = 0 WHERE id = ?")
+                .bind(book_id)
+                .execute(&self.db)
+                .await?;
+            return self
+                .get_book(book_id)
+                .await?
+                .ok_or_else(|| ApiError::not_found("book"));
+        };
+
+        let series = self
+            .get_series(&sid)
+            .await?
+            .ok_or_else(|| ApiError::not_found("series"))?;
+        let owned_series = series.created_by.as_deref() == Some(user.id.as_str());
+        if !owned_series && user.role != Role::Admin {
+            return Err(ApiError::Forbidden);
+        }
+        let vol = match target_vol {
+            Some(Some(n)) => n,
+            Some(None) | None => {
+                let max: Option<i64> = sqlx::query_scalar(
+                    "SELECT MAX(volume_no) FROM books WHERE series_id = ? AND id != ?",
+                )
+                .bind(&sid)
+                .bind(book_id)
+                .fetch_one(&self.db)
+                .await?;
+                (max.unwrap_or(0).max(0) as u32).saturating_add(1)
+            }
+        };
+        // Volume numbers within a series are unique.
+        let taken: Option<String> = sqlx::query_scalar(
+            "SELECT id FROM books WHERE series_id = ? AND volume_no = ? AND id != ?",
+        )
+        .bind(&sid)
+        .bind(vol as i64)
+        .bind(book_id)
+        .fetch_optional(&self.db)
+        .await?;
+        if let Some(other) = taken {
+            return Err(ApiError::Conflict(format!(
+                "第{vol}卷 already belongs to book `{other}`; pick another volume number"
+            )));
+        }
+        sqlx::query("UPDATE books SET series_id = ?, volume_no = ? WHERE id = ?")
+            .bind(&sid)
+            .bind(vol as i64)
+            .bind(book_id)
+            .execute(&self.db)
+            .await?;
+        self.get_book(book_id)
+            .await?
+            .ok_or_else(|| ApiError::not_found("book"))
+    }
+
     // ---- files -----------------------------------------------------------
 
     /// Files of a book the user is allowed to see.
@@ -1049,7 +1639,7 @@ impl Library {
         let is_admin = user.role == bookshelf_core::model::Role::Admin;
         let mut q = sqlx::QueryBuilder::new(
             "SELECT id, book_id, source, external_id, content_source, content_external_id, format, label, visibility, owner_id, \
-             chapter_count, created_at FROM book_files WHERE book_id = ",
+             chapter_count, created_at, volume_no, volume_offset FROM book_files WHERE book_id = ",
         );
         q.push_bind(book_id);
         if !is_admin {
@@ -1065,7 +1655,7 @@ impl Library {
     pub async fn get_file(&self, id: &str) -> Result<Option<FileMeta>, ApiError> {
         let row: Option<FileRow> = sqlx::query_as(
             "SELECT id, book_id, source, external_id, content_source, content_external_id, format, label, visibility, owner_id, \
-             chapter_count, created_at FROM book_files WHERE id = ?",
+             chapter_count, created_at, volume_no, volume_offset FROM book_files WHERE id = ?",
         )
         .bind(id)
         .fetch_optional(&self.db)
@@ -1318,9 +1908,11 @@ impl Library {
         }
 
         // Chapter mode (lazy per-chapter pulls from the content source).
+        // For a volume file, the plugin index is the volume's chapter
+        // shifted by the persisted flat `volume_offset`.
         let Some(chapter) = self
             .plugins
-            .get_chapter(source_id, external_id, idx)
+            .get_chapter(source_id, external_id, idx + file.volume_offset)
             .await?
         else {
             return Ok(None);
@@ -1389,18 +1981,29 @@ impl Library {
         if titles.is_empty() {
             return Ok(());
         }
-        self.upsert_placeholder_titles(&file.id, &titles).await?;
-        // Placeholder rows beyond the new title set are stale (previous
+        // A volume file only owns its slice of the source's flat chapter
+        // list; ensure_titles must not import the other volumes.
+        let slice = title_slice(
+            &titles,
+            file.volume_no,
+            file.volume_offset,
+            file.chapter_count,
+        );
+        if slice.is_empty() {
+            return Ok(());
+        }
+        self.upsert_placeholder_titles(&file.id, slice).await?;
+        // Placeholder rows beyond the volume's range are stale (previous
         // content source, or a chapter count that shrank); drop the
         // empty ones. Materialized bodies stay untouched.
         sqlx::query("DELETE FROM chapters WHERE file_id = ? AND content = '' AND idx >= ?")
             .bind(&file.id)
-            .bind(titles.len() as i64)
+            .bind(slice.len() as i64)
             .execute(&self.db)
             .await?;
-        if titles.len() != file.chapter_count as usize {
+        if slice.len() != file.chapter_count as usize {
             sqlx::query("UPDATE book_files SET chapter_count = ? WHERE id = ?")
-                .bind(titles.len() as i64)
+                .bind(slice.len() as i64)
                 .bind(&file.id)
                 .execute(&self.db)
                 .await?;
@@ -1429,6 +2032,60 @@ fn detect_format(filename: &str) -> &'static str {
     }
 }
 
+/// The flat chapter list of a plugin book, restricted to the range a file
+/// owns: `[volume_offset, volume_offset + chapter_count)` for volume
+/// files, the whole list otherwise. Clamped defensively (a source may
+/// have restructured since acquisition).
+fn title_slice(
+    titles: &[String],
+    volume_no: u32,
+    volume_offset: u32,
+    chapter_count: u32,
+) -> &[String] {
+    if volume_no == 0 {
+        return titles;
+    }
+    let start = (volume_offset as usize).min(titles.len());
+    let end = start
+        .saturating_add(chapter_count as usize)
+        .min(titles.len());
+    &titles[start..end]
+}
+
+/// Consecutive volume slices of a source book's flat chapter list:
+/// `(volume title, start, count)`. Defensive: zero-chapter volumes
+/// collapse, declared counts are clamped to the flat list, and leftover
+/// chapters (declarations running out early) extend the last volume.
+/// Returns `None` when the book is effectively single-volume.
+fn volume_slices(volumes: &[SourceVolume], total: u32) -> Option<Vec<(String, u32, u32)>> {
+    if volumes.is_empty() {
+        return None;
+    }
+    let mut out = Vec::new();
+    let mut start = 0u32;
+    for v in volumes {
+        let count = v.chapter_count.min(total.saturating_sub(start));
+        if count > 0 {
+            out.push((v.title.clone(), start, count));
+            start += count;
+        }
+    }
+    if out.len() < 2 || start == 0 {
+        return None;
+    }
+    if start < total
+        && let Some(last) = out.last_mut()
+    {
+        last.2 += total - start;
+    }
+    Some(out)
+}
+
+/// Parse a stored `authors` JSON array (as read back from the DB).
+fn parse_authors(json: &str) -> Vec<String> {
+    serde_json::from_str(json).unwrap_or_default()
+}
+
 /// Lowercase hex sha-256 digest, passed to plugins for upload
 /// identification.
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -1440,4 +2097,127 @@ fn sha256_hex(bytes: &[u8]) -> String {
         let _ = write!(out, "{b:02x}");
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn vol(title: &str, n: u32) -> SourceVolume {
+        SourceVolume {
+            title: title.into(),
+            chapter_count: n,
+        }
+    }
+
+    #[test]
+    fn single_volume_declaration_does_not_split() {
+        assert!(volume_slices(&[], 10).is_none());
+        assert!(volume_slices(&[vol("", 10)], 10).is_none());
+    }
+
+    #[test]
+    fn two_volumes_split_flat_list() {
+        let slices = volume_slices(&[vol("第一卷", 2), vol("第二卷", 3)], 5).unwrap();
+        assert_eq!(
+            slices,
+            vec![("第一卷".to_string(), 0, 2), ("第二卷".to_string(), 2, 3)]
+        );
+    }
+
+    #[test]
+    fn declared_counts_are_clamped_to_the_flat_list() {
+        // declarations claim more than the source offers: one volume
+        // swallows everything → no split
+        assert!(volume_slices(&[vol("一", 9), vol("二", 9)], 5).is_none());
+        // declarations claim less: the last volume absorbs the rest
+        let slices = volume_slices(&[vol("一", 2), vol("二", 1)], 7).unwrap();
+        assert_eq!(
+            slices,
+            vec![("一".to_string(), 0, 2), ("二".to_string(), 2, 5)]
+        );
+    }
+
+    #[test]
+    fn zero_chapter_volumes_collapse() {
+        let slices = volume_slices(&[vol("一", 0), vol("二", 3), vol("三", 2)], 5).unwrap();
+        assert_eq!(
+            slices,
+            vec![("二".to_string(), 0, 3), ("三".to_string(), 3, 2)]
+        );
+        // enough zeroes → effectively single volume → no split
+        assert!(volume_slices(&[vol("一", 0), vol("二", 0)], 5).is_none());
+        assert!(volume_slices(&[vol("一", 5), vol("二", 0)], 5).is_none());
+        assert!(volume_slices(&[vol("一", 0), vol("二", 5)], 5).is_none());
+    }
+
+    #[test]
+    fn title_slice_is_the_volume_range() {
+        let titles: Vec<String> = (0..6).map(|i| format!("c{i}")).collect();
+        let whole = FileMeta {
+            volume_no: 0,
+            volume_offset: 0,
+            chapter_count: 6,
+            ..dummy_file()
+        };
+        assert_eq!(
+            title_slice(
+                &titles,
+                whole.volume_no,
+                whole.volume_offset,
+                whole.chapter_count
+            ),
+            &titles[..]
+        );
+        let vol2 = FileMeta {
+            volume_no: 2,
+            volume_offset: 3,
+            chapter_count: 2,
+            ..dummy_file()
+        };
+        assert_eq!(
+            title_slice(
+                &titles,
+                vol2.volume_no,
+                vol2.volume_offset,
+                vol2.chapter_count
+            ),
+            &["c3", "c4"]
+        );
+        // clamped when the source shrank
+        let vol2shrank = FileMeta {
+            volume_no: 2,
+            volume_offset: 4,
+            chapter_count: 3,
+            ..dummy_file()
+        };
+        assert_eq!(
+            title_slice(
+                &titles,
+                vol2shrank.volume_no,
+                vol2shrank.volume_offset,
+                vol2shrank.chapter_count
+            ),
+            &["c4", "c5"]
+        );
+    }
+
+    fn dummy_file() -> FileMeta {
+        FileMeta {
+            id: String::new(),
+            book_id: String::new(),
+            source: String::new(),
+            external_id: String::new(),
+            content_source: None,
+            content_external_id: None,
+            format: "plugin".into(),
+            label: String::new(),
+            visibility: Visibility::Public,
+            owner_id: None,
+            chapter_count: 0,
+            created_at: String::new(),
+            volume_no: 0,
+            volume_offset: 0,
+        }
+    }
 }

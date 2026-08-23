@@ -267,6 +267,8 @@ pub async fn materialize_book(
     Json(req): Json<MaterializeBook>,
 ) -> Result<impl IntoResponse, ApiError> {
     let user = current_user(&st, &headers).await?;
+    // Legacy endpoint (superseded by the unified acquisition endpoint);
+    // the first created book is returned when the entry was split.
     let (book, _file) = st
         .library
         .materialize_plugin_book(&user, &id, &req.book_id)
@@ -274,6 +276,10 @@ pub async fn materialize_book(
     let files = st.library.files_of_book(&book.id, &user).await?;
     Ok((
         axum::http::StatusCode::CREATED,
-        Json(crate::routes::books::BookDetail { book, files }),
+        Json(crate::routes::books::BookDetail {
+            series: None,
+            book,
+            files,
+        }),
     ))
 }

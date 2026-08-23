@@ -8,7 +8,7 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 
-use bookshelf_core::model::{BookMeta, FileMeta, Visibility};
+use bookshelf_core::model::{BookMeta, FileMeta, SeriesMeta, Visibility};
 
 use crate::error::ApiError;
 use crate::routes::{ListParams, St, current_user};
@@ -19,13 +19,27 @@ pub struct BookDetail {
     pub book: BookMeta,
     /// Files of this book visible to the current user.
     pub files: Vec<FileMeta>,
+    /// The series this book is a volume of (`null` = standalone).
+    pub series: Option<SeriesMeta>,
 }
 
-/// One library entry: metadata plus its visible files.
+/// One library entry: metadata plus its visible files (and the series it
+/// belongs to, when any — so the UI groups without extra round trips).
 #[derive(Serialize)]
 pub struct BookListEntry {
     pub book: BookMeta,
     pub files: Vec<FileMeta>,
+    pub series: Option<SeriesMeta>,
+}
+
+/// Response of one acquisition (`POST /api/books`): the series created by
+/// a volume split (when the source declared >1 volumes) and the books
+/// that entered the library. `books` is non-empty; it has exactly one
+/// element unless the acquisition split volumes.
+#[derive(Serialize)]
+pub struct AcquireResult {
+    pub series: Option<SeriesMeta>,
+    pub books: Vec<BookDetail>,
 }
 
 fn parse_visibility(value: Option<&str>, default: Visibility) -> Result<Visibility, ApiError> {
@@ -211,11 +225,27 @@ pub async fn list_books(
         .library
         .list_books(params.q.as_deref(), params.source.as_deref(), &user)
         .await?;
-    let entries: Vec<BookListEntry> = entries
-        .into_iter()
-        .map(|(book, files)| BookListEntry { book, files })
-        .collect();
-    Ok(Json(entries))
+    // Attach the series of every entry (deduplicated lookups — library
+    // sizes are small, so an N+1 fetch per series id is fine).
+    let mut series_cache: std::collections::HashMap<String, SeriesMeta> = Default::default();
+    let mut out = Vec::with_capacity(entries.len());
+    for (book, files) in entries {
+        if let Some(id) = &book.series_id
+            && !series_cache.contains_key(id)
+            && let Some(s) = st.library.get_series(id).await?
+        {
+            series_cache.insert(id.clone(), s);
+        }
+        out.push(BookListEntry {
+            series: book
+                .series_id
+                .as_ref()
+                .and_then(|id| series_cache.get(id).cloned()),
+            book,
+            files,
+        });
+    }
+    Ok(Json(out))
 }
 
 // POST /api/books (multipart) ------------------------------------------------
@@ -235,7 +265,7 @@ pub async fn upload_book(
     let user = current_user(&st, &headers).await?;
     let (file, visibility, label, fields) = read_upload(multipart).await?;
     let overrides = overrides(&fields);
-    let (book, file) = st
+    let outcome = st
         .library
         .acquire_book(
             &user,
@@ -247,9 +277,17 @@ pub async fn upload_book(
         .await?;
     Ok((
         StatusCode::CREATED,
-        Json(BookDetail {
-            book,
-            files: vec![file],
+        Json(AcquireResult {
+            series: outcome.series,
+            books: outcome
+                .books
+                .into_iter()
+                .map(|(book, file)| BookDetail {
+                    series: None,
+                    book,
+                    files: vec![file],
+                })
+                .collect(),
         }),
     ))
 }
@@ -276,7 +314,7 @@ pub async fn attach_file(
     let (file, visibility, label, fields) = read_upload(multipart).await?;
     // Only file content here — the target metadata is the URL's book.
     let some_file = file.ok_or_else(|| ApiError::bad_request("missing `file` field"))?;
-    let (_book, file) = st
+    let outcome = st
         .library
         .acquire_book(
             &user,
@@ -294,6 +332,11 @@ pub async fn attach_file(
         )
         .await?;
     let _ = fields; // attach mode: metadata fields are ignored
+    let (_book, file) = outcome
+        .books
+        .into_iter()
+        .next()
+        .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("acquisition produced no books")))?;
     Ok((StatusCode::CREATED, Json(file)))
 }
 
@@ -314,7 +357,15 @@ pub async fn get_book(
     if files.is_empty() {
         return Err(ApiError::not_found("book"));
     }
-    Ok(Json(BookDetail { book, files }))
+    let series = match &book.series_id {
+        Some(sid) => st.library.get_series(sid).await?,
+        None => None,
+    };
+    Ok(Json(BookDetail {
+        book,
+        files,
+        series,
+    }))
 }
 
 /// Check the caller may manage the book's metadata (its creator or admin).
@@ -347,6 +398,14 @@ pub async fn get_book_cover(
 pub struct PatchBook {
     pub title: Option<String>,
     pub description: Option<String>,
+    /// Series assignment (see `library::set_book_series`): a series id
+    /// moves the book into it, `null` unassigns, absent keeps the
+    /// current series.
+    #[serde(default)]
+    pub series_id: Option<Option<String>>,
+    /// 1-based volume number (absent/`null` = next free volume).
+    #[serde(default)]
+    pub volume_no: Option<Option<u32>>,
 }
 
 pub async fn patch_book(
@@ -363,6 +422,13 @@ pub async fn patch_book(
         .ok_or_else(|| ApiError::not_found("book"))?;
     if !can_manage_metadata(&user, &book) {
         return Err(ApiError::Forbidden);
+    }
+    // Series membership (assign / move / unassign) is orthogonal to the
+    // metadata fields; both may be sent in one request.
+    if req.series_id.is_some() || req.volume_no.is_some() {
+        st.library
+            .set_book_series(&user, &id, req.series_id, req.volume_no)
+            .await?;
     }
     let updated = st
         .library

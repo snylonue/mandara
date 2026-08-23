@@ -74,8 +74,24 @@ pub struct User {
     pub created_at: String,
 }
 
+/// A series: metadata grouping for the volumes of one publication family
+/// (e.g. a light-novel series split from a multi-volume source). Member
+/// books carry `series_id` + `volume_no` (1-based order).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SeriesMeta {
+    pub id: String,
+    pub title: String,
+    pub authors: Vec<String>,
+    pub description: Option<String>,
+    pub cover_url: Option<String>,
+    pub created_by: Option<String>,
+    pub created_at: String,
+}
+
 /// Pure book metadata. One entry can be linked to many
-/// [`FileMeta`]s (formats/editions).
+/// [`FileMeta`]s (formats/editions). When the entry is one volume of a
+/// series, `series_id` points to it and `volume_no` is its 1-based
+/// ordinal (`0` = standalone).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BookMeta {
     pub id: String,
@@ -85,6 +101,10 @@ pub struct BookMeta {
     pub cover_url: Option<String>,
     pub created_by: Option<String>,
     pub created_at: String,
+    /// Series this book is a volume of (`None` = standalone).
+    pub series_id: Option<String>,
+    /// 1-based volume ordinal inside the series (`0` = standalone).
+    pub volume_no: u32,
 }
 
 /// One actual book file (a local upload or a virtual plugin book).
@@ -110,6 +130,12 @@ pub struct FileMeta {
     pub owner_id: Option<String>,
     pub chapter_count: u32,
     pub created_at: String,
+    /// Volume slice of the source book this file covers (0 = the whole
+    /// book, today's semantics).
+    pub volume_no: u32,
+    /// Flat chapter index of this volume's first chapter inside the
+    /// source (persisted because the plugin is stateless).
+    pub volume_offset: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

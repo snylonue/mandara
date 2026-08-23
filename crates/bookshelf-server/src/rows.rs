@@ -4,8 +4,8 @@ use anyhow::anyhow;
 use sqlx::FromRow;
 
 use bookshelf_core::model::{
-    BookMeta, Chapter, ChapterFormat, ChapterMeta, FileMeta, Position, ReadingSession, Role, Share,
-    ShareKind, User, Visibility,
+    BookMeta, Chapter, ChapterFormat, ChapterMeta, FileMeta, Position, ReadingSession, Role,
+    SeriesMeta, Share, ShareKind, User, Visibility,
 };
 
 use crate::error::ApiError;
@@ -31,6 +31,31 @@ impl UserRow {
 }
 
 #[derive(Debug, FromRow)]
+pub struct SeriesRow {
+    pub id: String,
+    pub title: String,
+    pub authors: String,
+    pub description: Option<String>,
+    pub cover_url: Option<String>,
+    pub created_by: Option<String>,
+    pub created_at: String,
+}
+
+impl SeriesRow {
+    pub fn into_model(self) -> SeriesMeta {
+        SeriesMeta {
+            id: self.id,
+            title: self.title,
+            authors: serde_json::from_str(&self.authors).unwrap_or_default(),
+            description: self.description,
+            cover_url: self.cover_url,
+            created_by: self.created_by,
+            created_at: self.created_at,
+        }
+    }
+}
+
+#[derive(Debug, FromRow)]
 pub struct BookRow {
     pub id: String,
     pub title: String,
@@ -39,6 +64,8 @@ pub struct BookRow {
     pub cover_url: Option<String>,
     pub created_by: Option<String>,
     pub created_at: String,
+    pub series_id: Option<String>,
+    pub volume_no: i64,
 }
 
 impl BookRow {
@@ -51,6 +78,8 @@ impl BookRow {
             cover_url: self.cover_url,
             created_by: self.created_by,
             created_at: self.created_at,
+            series_id: self.series_id,
+            volume_no: self.volume_no.max(0) as u32,
         })
     }
 }
@@ -69,6 +98,8 @@ pub struct FileRow {
     pub owner_id: Option<String>,
     pub chapter_count: i64,
     pub created_at: String,
+    pub volume_no: i64,
+    pub volume_offset: i64,
 }
 
 impl FileRow {
@@ -86,6 +117,8 @@ impl FileRow {
             owner_id: self.owner_id,
             chapter_count: self.chapter_count.max(0) as u32,
             created_at: self.created_at,
+            volume_no: self.volume_no.max(0) as u32,
+            volume_offset: self.volume_offset.max(0) as u32,
         })
     }
 }
