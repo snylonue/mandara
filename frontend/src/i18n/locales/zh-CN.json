@@ -67,7 +67,8 @@
     "sourceBrowser": "源浏览器",
     "sourceBrowserTitle": "从插件源添加书籍",
     "sectionMeta": "元数据",
-    "sectionFile": "文件"
+    "sectionFile": "文件",
+    "emptyTitle": "书架还是空的"
   },
   "book": {
     "filesTitle": "文件版本（{{count}}）",
