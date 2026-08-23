@@ -234,38 +234,14 @@ export interface paths {
         };
         /**
          * Paginated catalog search of a search-capable instance. The library
-         *     does not enumerate large sources; users pick books here and
-         *     materialize them one by one. Caps: limit 1..50, offset <= 10000.
+         *     does not enumerate large sources; users pick books here and add
+         *     them through the unified acquisition endpoint (POST /api/books
+         *     with plugin_source + plugin_book_id). Caps: limit 1..50,
+         *     offset <= 10000.
          */
         get: operations["searchPlugins"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/plugins/{id}/books": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Materialize exactly one book of a lookup-capable source into the
-         *     library. Materialization modes (docs/plugin-http-api-design.md): a
-         *     source declaring book-file is materialized in FILE mode first —
-         *     the whole file is fetched via get-book-file and parsed like an
-         *     upload (format epub/txt, chapters, hierarchical TOC, sanitized
-         *     HTML); otherwise CHAPTER mode: metadata + virtual file +
-         *     chapter-title placeholders, chapter bodies stay lazy until first
-         *     read. The caller claims the metadata (becomes its creator).
-         */
-        post: operations["materializeBook"];
         delete?: never;
         options?: never;
         head?: never;
@@ -283,10 +259,14 @@ export interface paths {
         get: operations["listBooks"];
         put?: never;
         /**
-         * Upload a book — one endpoint for all three metadata modes:
-         *     attach to existing metadata (`book_id`), metadata from a plugin
-         *     source (`plugin_source` + `plugin_book_id`), or auto (plugins are
-         *     asked to identify the file, falling back to parsing the file).
+         * Add a book to the library — the single acquisition flow
+         *     (获取书籍 → 添加元数据). The content is either an uploaded
+         *     `file` or a plugin book (`plugin_source` + `plugin_book_id`
+         *     without a `file`; the plugin supplies the book file via
+         *     `get-book-file` when available, otherwise chapters materialize
+         *     lazily). The metadata entry is created automatically (parsed
+         *     from the file / the plugin's own entry), taken from a plugin
+         *     catalog, or attached to an existing entry (`book_id`).
          *     `title`/`authors`/`description`/`cover_url` override the produced
          *     metadata (manual mode; never applied when attaching).
          */
@@ -1226,38 +1206,6 @@ export interface operations {
             404: components["responses"]["NotFound"];
         };
     };
-    materializeBook: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Plugin instance id (source id) */
-                id: components["parameters"]["PluginId"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": {
-                    /** @description Book id inside the source */
-                    book_id: string;
-                };
-            };
-        };
-        responses: {
-            /** @description The materialized book with its visible files */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BookDetail"];
-                };
-            };
-            400: components["responses"]["BadRequest"];
-            404: components["responses"]["NotFound"];
-        };
-    };
     listBooks: {
         parameters: {
             query?: {
@@ -1296,11 +1244,15 @@ export interface operations {
                 "multipart/form-data": {
                     /**
                      * Format: binary
-                     * @description Epub or txt file
+                     * @description Epub or txt file — the content. Mutually exclusive
+                     *     with `plugin_source` + `plugin_book_id` (plugin
+                     *     content): exactly one content source is required.
+                     *     When given together with `plugin_source`, the file is
+                     *     the content and the plugin only supplies the metadata.
                      */
-                    file: string;
+                    file?: string;
                     /**
-                     * @description Choose whether this upload is published
+                     * @description Choose whether this file is published
                      * @default private
                      * @enum {string}
                      */
@@ -1308,16 +1260,18 @@ export interface operations {
                     /** @description Short human label for this edition (e.g. "proofread") */
                     label?: string;
                     /**
-                     * @description Attach the file to this existing metadata entry instead
-                     *     of creating one. The caller must be able to see the
-                     *     book. Mutually exclusive with `plugin_source`.
+                     * @description Attach the content to this existing metadata entry
+                     *     instead of creating one. The caller must be able to
+                     *     see the book. Mutually exclusive with the plugin
+                     *     metadata modes (a plugin book attached this way must
+                     *     not already be materialized under another entry).
                      */
                     book_id?: string;
                     /**
-                     * @description Take the metadata from this plugin source's catalog
-                     *     (requires `plugin_book_id` too). The plugin book is
-                     *     synced into the library if needed and the upload is
-                     *     attached to its metadata entry.
+                     * @description Together with `plugin_book_id`: the metadata comes
+                     *     from this plugin source's catalog. Without a `file`,
+                     *     the plugin is also the content source (the book is
+                     *     materialized into the library).
                      */
                     plugin_source?: string;
                     /** @description Id of the book inside the plugin's catalog */
@@ -1346,6 +1300,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
         };
     };
     getBook: {

@@ -185,7 +185,8 @@ Materialization rules (host side, extending §6 of the v2 design):
 - **Chapter mode**: unchanged — titles placeholders, bodies lazy on first
   read, refresh never touches materialized bodies.
 - **File mode**: declarers of `book-file` are materialized by fetching the
-  file *once* (on first access / on `POST /api/plugins/{id}/books`) and
+  file *once* (on first access / on the unified acquisition endpoint
+  `POST /api/books` with `plugin_source` + `plugin_book_id`) and
   running the **existing upload parser** (`bookshelf-formats::parse`):
   chapters, `chapters.format`, hierarchical `toc`, sanitized HTML all come
   for free; the file row is stored like a local upload

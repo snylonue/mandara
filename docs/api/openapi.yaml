@@ -338,8 +338,10 @@ paths:
       tags: [plugins]
       summary: |
         Paginated catalog search of a search-capable instance. The library
-        does not enumerate large sources; users pick books here and
-        materialize them one by one. Caps: limit 1..50, offset <= 10000.
+        does not enumerate large sources; users pick books here and add
+        them through the unified acquisition endpoint (POST /api/books
+        with plugin_source + plugin_book_id). Caps: limit 1..50,
+        offset <= 10000.
       operationId: searchPlugins
       security:
         - bearerAuth: []
@@ -376,46 +378,6 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "404":
           $ref: "#/components/responses/NotFound"
-
-  /api/plugins/{id}/books:
-    post:
-      tags: [plugins]
-      summary: |
-        Materialize exactly one book of a lookup-capable source into the
-        library. Materialization modes (docs/plugin-http-api-design.md): a
-        source declaring book-file is materialized in FILE mode first —
-        the whole file is fetched via get-book-file and parsed like an
-        upload (format epub/txt, chapters, hierarchical TOC, sanitized
-        HTML); otherwise CHAPTER mode: metadata + virtual file +
-        chapter-title placeholders, chapter bodies stay lazy until first
-        read. The caller claims the metadata (becomes its creator).
-      operationId: materializeBook
-      security:
-        - bearerAuth: []
-      parameters:
-        - $ref: "#/components/parameters/PluginId"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [book_id]
-              properties:
-                book_id:
-                  type: string
-                  description: Book id inside the source
-      responses:
-        "201":
-          description: The materialized book with its visible files
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/BookDetail"
-        "404":
-          $ref: "#/components/responses/NotFound"
-        "400":
-          $ref: "#/components/responses/BadRequest"
 
   /api/books:
     get:

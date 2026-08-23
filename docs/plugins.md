@@ -34,8 +34,9 @@ the full design. This guide is for plugin authors.
   `POST /api/plugins/sync` (metadata + title rows; eager bodies for
   non-empty `content`).
 - `search`/`lookup`-capable instances are **lazy**: nothing is
-  materialized until a user picks a book in the source browser
-  (`POST /api/plugins/{id}/books`).
+  materialized until a user acquires a book through the unified
+  acquisition flow (`POST /api/books` with `plugin_source` +
+  `plugin_book_id` — 获取书籍 → 添加元数据).
 - Acquisition modes on materialize (v3): **file mode first** when the
   instance declares `book-file` — the host calls `get-book-file` and runs
   the bytes through the normal upload parser (chapters, hierarchical TOC,

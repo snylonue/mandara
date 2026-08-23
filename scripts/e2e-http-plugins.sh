@@ -97,6 +97,21 @@ api() { # api <method> <path> [json body] -> prints response body
     fi
 }
 
+# Post multipart fields to the unified acquisition endpoint
+# (POST /api/books): api_form <path> <field=value> [<field=value> ...]
+api_form() { # api_form <path> fields...
+    local path="$1"; shift
+    local args=()
+    for f in "$@"; do args+=(-F "$f"); done
+    curl -sf -X POST "$BASE$path" "${args[@]}"
+}
+
+# Acquire a plugin book through the unified endpoint (public, like the
+# old one-click materialize).
+acquire() { # acquire <plugin> <book_id>
+    api_form /api/books "plugin_source=$1" "plugin_book_id=$2" "visibility=public"
+}
+
 jq_field() { # jq-ish helper: python -c reading stdin
     python3 -c "import json,sys; d=json.load(sys.stdin); print(eval(sys.argv[1]))" "$1"
 }
@@ -118,7 +133,7 @@ TOTAL=$(api GET "/api/plugins/wiki/search?limit=3" | jq_field "d['total']")
 [ "$TOTAL" = "8" ] || fail "wiki search total=$TOTAL (expected 8)"
 pass "wiki search: $TOTAL books served over HTTP"
 
-BOOK=$(api POST /api/plugins/wiki/books '{"book_id":"w-1"}' | jq_field "d['book']['id']")
+BOOK=$(acquire wiki w-1 | jq_field "d['book']['id']")
 FILE=$(api GET "/api/books/$BOOK" | jq_field "d['files'][0]['id']")
 COUNT=$(api GET "/api/books/$BOOK" | jq_field "d['files'][0]['chapter_count']")
 [ "$COUNT" = "3" ] || fail "w-1 chapter_count=$COUNT (expected 3)"
@@ -135,7 +150,7 @@ CS=$(api GET "/api/books/$BOOK" | jq_field "d['files'][0]['content_source']")
 pass "content indirection wiki -> reader intact"
 
 # independent materialize through the reader instance
-COUNT2=$(api POST /api/plugins/reader/books '{"book_id":"r-1"}' | jq_field "d['files'][0]['chapter_count']")
+COUNT2=$(acquire reader r-1 | jq_field "d['files'][0]['chapter_count']")
 [ "$COUNT2" = "3" ] || fail "r-1 chapter_count=$COUNT2"
 pass "materialized r-1 directly via reader"
 
@@ -145,7 +160,7 @@ api GET "/api/files/$FILE/chapters/0" | grep -q "mock-source.py" || fail "refres
 pass "refresh: metadata from source, bodies untouched"
 
 # --- file mode: get-book-file -> epub through the upload parser ----------
-BFILE=$(api POST /api/plugins/reader/books '{"book_id":"r-2"}' | jq_field "d['files'][0]['id']")
+BFILE=$(acquire reader r-2 | jq_field "d['files'][0]['id']")
 api GET "/api/files/$BFILE" > /tmp/e2e-file.json
 BFMT=$(python3 -c "import json; d=json.load(open('/tmp/e2e-file.json')); print(d['file']['format'])")
 [ "$BFMT" = "epub" ] || fail "file-mode format=$BFMT (expected epub)"

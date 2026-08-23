@@ -241,10 +241,12 @@ Semantics:
 | Instance capabilities | Startup behavior | Catalog entry points |
 |---|---|---|
 | `declare` | full sync via `declare` (metadata + title rows; eager body materialization for non-empty `content`) | n/a — everything is in the library |
-| `search` (+`lookup`) | **no listing, nothing materialized** | `GET /api/plugins/{id}/search` → user picks a book → `POST /api/plugins/{id}/books` materializes just that book |
+| `search` (+`lookup`) | **no listing, nothing materialized** | `GET /api/plugins/{id}/search` → user picks a book → `POST /api/books` (`plugin_source` + `plugin_book_id`) materializes just that book |
 | none of the above | only virtual metadata (plugin without books) | n/a |
 
-Materialization of one book (`POST /api/plugins/{id}/books`):
+Materialization of one book (unified acquisition: `POST /api/books`
+with `plugin_source` + `plugin_book_id` as the content, 获取书籍 →
+添加元数据):
 
 1. `get-book(book-id)` → `book-entry` (+ `chapter-titles`) — 404 when `none`
 2. `ensure_plugin_book` creates/updates `books` row + virtual `book_files`
@@ -283,7 +285,7 @@ PUT    /api/plugins/instances/{id}/enabled # admin
 GET    /api/plugins/{id}/config-schema     # render the admin form
 PUT    /api/plugins/{id}/config            # validate + store; triggers re-sync for declare
 GET    /api/plugins/{id}/search?q=&limit=&offset=
-POST   /api/plugins/{id}/books             # {book_id} → materialize one book
+POST   /api/books                          # unified acquisition: content = file | plugin_source+plugin_book_id; metadata = book_id | plugin | auto (+ overrides)
 POST   /api/files/{id}/content-source      # owner/admin: rebind content instance
 ```
 
