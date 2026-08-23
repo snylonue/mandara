@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { useAuth } from "../auth";
 import { Modal } from "../components/Modal";
+import { useToast } from "../components/toast";
 import {
   SourceBrowserDialog,
   SourceSearchPane,
@@ -111,9 +112,9 @@ export function LibraryPage() {
   const { user } = useAuth();
   const { t } = useTranslation();
   const instances = usePluginInstances();
+  const toast = useToast();
   const [entries, setEntries] = useState<BookListEntry[] | null>(null);
   const [q, setQ] = useState("");
-  const [error, setError] = useState<string | null>(null);
   // Which toolbar dialog is open — at most one at a time.
   const [dialog, setDialog] = useState<"upload" | "source" | null>(null);
 
@@ -121,12 +122,11 @@ export function LibraryPage() {
     try {
       const list = await api<BookListEntry[]>(`/books?q=${encodeURIComponent(query)}`);
       setEntries(list);
-      setError(null);
     } catch (err) {
       setEntries([]);
-      setError(err instanceof Error ? err.message : t("common.failed"));
+      toast.push("error", err instanceof Error ? err.message : t("common.failed"));
     }
-  }, []);
+  }, [toast, t]);
 
   useEffect(() => {
     void load(q);
@@ -148,7 +148,6 @@ export function LibraryPage() {
           {t("library.upload")}
         </button>
       </div>
-      {error && <div className="error">{error}</div>}
       {user?.role === "admin" && <p className="hint">{t("library.adminHint")}</p>}
       <p className="hint">{t("library.metadataHint")}</p>
       <div className="book-grid">
@@ -160,7 +159,7 @@ export function LibraryPage() {
           ),
         )}
       </div>
-      {entries !== null && entries.length === 0 && !error && (
+      {entries !== null && entries.length === 0 && (
         <div className="empty-state">
           <IconBook size={40} className="empty-state-icon" />
           <p className="strong">{t("library.emptyTitle")}</p>
@@ -183,7 +182,6 @@ export function LibraryPage() {
             body: JSON.stringify({ book_id: pick.item.id }),
           });
           setDialog(null);
-          setError(null);
           setQ("");
           void load("");
         }}

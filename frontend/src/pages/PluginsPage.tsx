@@ -8,6 +8,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api, ApiError } from "../api";
 import { useAuth } from "../auth";
+import { useToast } from "../components/toast";
 import type {
   ConfigError,
   ConfigField,
@@ -50,13 +51,12 @@ function currentValues(schema: ConfigSchema): Record<string, unknown> {
 function ConfigForm({
   instance,
   onSaved,
-  setError,
 }: {
   instance: PluginInstance;
   onSaved: () => void;
-  setError: (msg: string | null) => void;
 }) {
   const { t } = useTranslation();
+  const toast = useToast();
   const [schema, setSchema] = useState<ConfigSchema | null>(null);
   const [values, setValues] = useState<Record<string, unknown> | null>(null);
   const [saving, setSaving] = useState(false);
@@ -79,9 +79,9 @@ function ConfigForm({
       setListTexts(texts);
       setFieldErrors({});
     } catch (e) {
-      setError(e instanceof Error ? e.message : t("common.failed"));
+      toast.push("error", e instanceof Error ? e.message : t("common.failed"));
     }
-  }, [instance.id, setError, t]);
+  }, [instance.id, toast, t]);
 
   useEffect(() => {
     void load();
@@ -113,7 +113,6 @@ function ConfigForm({
     if (!schema || !values) return;
     setSaving(true);
     setFieldErrors({});
-    setError(null);
     try {
       await api<PluginInstance>(`/plugins/${instance.id}/config`, {
         method: "PUT",
@@ -127,7 +126,7 @@ function ConfigForm({
           Object.fromEntries(errors.map((err: ConfigError) => [err.field, err.message])),
         );
       } else {
-        setError(e instanceof Error ? e.message : t("common.failed_verb"));
+        toast.push("error", e instanceof Error ? e.message : t("common.failed_verb"));
       }
     } finally {
       setSaving(false);
@@ -198,10 +197,9 @@ function ConfigForm({
 export function PluginsPage() {
   const { user } = useAuth();
   const { t } = useTranslation();
+  const toast = useToast();
   const [instances, setInstances] = useState<PluginInstance[]>([]);
   const [wasmFiles, setWasmFiles] = useState<string[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
   const [configFor, setConfigFor] = useState<string | null>(null);
   // register form
   const [regFile, setRegFile] = useState("");
@@ -216,21 +214,18 @@ export function PluginsPage() {
       ]);
       setInstances(list);
       setWasmFiles(files);
-      setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : t("common.failed"));
+      toast.push("error", e instanceof Error ? e.message : t("common.failed"));
     }
-  }, [t]);
+  }, [toast, t]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
   async function register() {
-    setError(null);
-    setNotice(null);
     if (!regFile) {
-      setError(t("plugin.pickWasmFile"));
+      toast.push("warning", t("plugin.pickWasmFile"));
       return;
     }
     setRegBusy(true);
@@ -243,18 +238,16 @@ export function PluginsPage() {
         }),
       });
       setRegId("");
-      setNotice(t("plugin.registered"));
+      toast.push("success", t("plugin.registered"));
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : t("common.failed_verb"));
+      toast.push("error", e instanceof Error ? e.message : t("common.failed_verb"));
     } finally {
       setRegBusy(false);
     }
   }
 
   async function setEnabled(instance: PluginInstance, enabled: boolean) {
-    setNotice(null);
-    setError(null);
     try {
       await api<PluginInstance>(`/plugins/instances/${instance.id}/enabled`, {
         method: "PUT",
@@ -262,32 +255,28 @@ export function PluginsPage() {
       });
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : t("common.failed_verb"));
+      toast.push("error", e instanceof Error ? e.message : t("common.failed_verb"));
     }
   }
 
   async function syncInstance(_instance: PluginInstance) {
-    setNotice(null);
-    setError(null);
     try {
       const r = await api<{ synced: number }>("/plugins/sync", { method: "POST" });
-      setNotice(t("plugin.synced", { n: String(r.synced) }));
+      toast.push("success", t("plugin.synced", { n: String(r.synced) }));
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : t("common.failed_verb"));
+      toast.push("error", e instanceof Error ? e.message : t("common.failed_verb"));
     }
   }
 
   async function deleteInstance(instance: PluginInstance) {
     if (!window.confirm(t("plugin.confirmDelete", { id: instance.id }))) return;
-    setError(null);
-    setNotice(null);
     try {
       await api(`/plugins/instances/${instance.id}`, { method: "DELETE" });
       if (configFor === instance.id) setConfigFor(null);
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : t("common.failed_verb"));
+      toast.push("error", e instanceof Error ? e.message : t("common.failed_verb"));
     }
   }
 
@@ -300,9 +289,6 @@ export function PluginsPage() {
         <h2>{t("plugin.manageTitle")}</h2>
         <span className="hint">{user?.username}</span>
       </div>
-      {error && <div className="error">{error}</div>}
-      {notice && <p className="hint">{notice}</p>}
-
       <section className="card">
         <h3>{t("plugin.registerTitle")}</h3>
         <p className="hint">{t("plugin.registerHint")}</p>
@@ -364,9 +350,8 @@ export function PluginsPage() {
             {configFor === instance.id && (
               <ConfigForm
                 instance={instance}
-                setError={setError}
                 onSaved={() => {
-                  setNotice(t("plugin.configSaved"));
+                  toast.push("success", t("plugin.configSaved"));
                   setConfigFor(null);
                   void load();
                 }}

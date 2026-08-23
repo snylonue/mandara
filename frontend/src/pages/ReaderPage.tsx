@@ -2,13 +2,16 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
+import { IconPlus } from "../components/icons";
 import { Reader } from "../components/Reader";
+import { useToast } from "../components/toast";
 import type { Chapter, FileDetail, Position, ReadingSession, SessionsResponse } from "../types";
 
 /// Reader page for one file (one format/edition of a book).
 export function ReaderPage() {
   const { id = "" } = useParams();
   const { t } = useTranslation();
+  const toast = useToast();
   const [params, setParams] = useSearchParams();
   const [detail, setDetail] = useState<FileDetail | null>(null);
   const [sessions, setSessions] = useState<ReadingSession[]>([]);
@@ -55,7 +58,7 @@ export function ReaderPage() {
       setSessions((prev) => [...prev, created]);
       setParams({ session: created.id });
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("reader.createFailed"));
+      toast.push("error", err instanceof Error ? err.message : t("reader.createFailed"));
     }
   }
 
@@ -96,12 +99,12 @@ export function ReaderPage() {
               ))}
             </select>
             <button className="link-btn" onClick={() => void createSession()}>
-              {t("reader.newSession")}
+              <IconPlus size={13} /> {t("reader.newSession")}
             </button>
           </>
         ) : (
           <button className="link-btn" onClick={() => void createSession()}>
-            {t("reader.createSession")}
+            <IconPlus size={13} /> {t("reader.createSession")}
           </button>
         )}
         <span className="hint">

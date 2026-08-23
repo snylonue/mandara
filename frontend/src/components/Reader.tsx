@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import { IconArrowLeft, IconChevronLeft, IconChevronRight } from "./icons";
 import {
   ReaderSettingsPanel,
   useReaderSettings,
@@ -154,7 +155,7 @@ export function Reader({
           )}
           {backHref && (
             <Link className="link-btn" to={backHref}>
-              {t("common.backToDetail")}
+              <IconArrowLeft size={14} /> {t("common.backToDetail")}
             </Link>
           )}
         </div>
@@ -233,7 +234,9 @@ export function Reader({
           onClick={() => goto(idx - 1)}
           disabled={idx <= 0}
         >
-          <small>{t("reader.prev")}</small>
+          <small>
+            <IconChevronLeft size={13} /> {t("reader.prev")}
+          </small>
           <span>{chapters.find((c) => c.idx === idx - 1)?.title ?? ""}</span>
         </button>
         <button
@@ -241,7 +244,9 @@ export function Reader({
           onClick={() => goto(idx + 1)}
           disabled={idx >= chapters.length - 1 || readOnly}
         >
-          <small>{t("reader.next")}</small>
+          <small>
+            {t("reader.next")} <IconChevronRight size={13} />
+          </small>
           <span>{next?.title ?? ""}</span>
         </button>
       </div>

@@ -1,14 +1,15 @@
 {
   "nav": {
-    "brand": "📚 Bookshelf",
     "localMode": "本地模式",
     "logout": "退出",
     "login": "登录",
-    "plugins": "插件管理"
+    "plugins": "插件管理",
+    "shelf": "书架",
+    "toggleTheme": "切换主题"
   },
   "common": {
     "loading": "加载中…",
-    "backToShelf": "← 书架",
+    "backToShelf": "书架",
     "backToDetail": "返回书籍详情",
     "failed": "加载失败",
     "failed_verb": "失败",
@@ -119,11 +120,10 @@
     "contentSourceLine": "元数据来源：{{source}} · 章节来源：{{content}}（{{external}}）"
   },
   "reader": {
-    "prev": "← 上一章",
-    "next": "下一章 →",
-    "chapterOf": "{{current}} / {{total}} 章 · {{percent}}%",
-    "newSession": "＋ 新会话",
-    "createSession": "＋ 创建会话开始阅读",
+    "prev": "上一章",
+    "next": "下一章",
+    "newSession": "新会话",
+    "createSession": "创建会话开始阅读",
     "newSessionPrompt": "新会话名称（如：平板）",
     "defaultSessionLabel": "平板",
     "createFailed": "创建失败",
@@ -146,11 +146,11 @@
   "share": {
     "invalidTitle": "链接不可用",
     "invalid": "链接无效或已过期",
-    "progressOf": "📍 {{owner}} 的进度 · 会话「{{label}}」",
+    "progressOf": "{{owner}} 的进度 · 会话「{{label}}」",
     "readTo": "已读到",
     "updatedAt": "（更新于 {{time}}）",
     "from": "分享自 Bookshelf · ",
-    "deploy": "自己部署一个 →"
+    "deploy": "自己部署一个 Bookshelf"
   },
   "plugin": {
     "chooseSource": "选择插件源…",

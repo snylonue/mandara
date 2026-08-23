@@ -3,6 +3,8 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { ApiError, api } from "../api";
 import { useAuth } from "../auth";
+import { IconArrowLeft } from "../components/icons";
+import { useToast } from "../components/toast";
 import {
   SourceBrowserDialog,
   usePluginInstances,
@@ -30,15 +32,14 @@ function FileSection({
   canManage,
   onChanged,
   onShare,
-  setError,
 }: {
   file: FileMeta;
   canManage: boolean;
   onChanged: () => Promise<void>;
   onShare: (fileId: string, kind: "book" | "session", sessionId?: string) => Promise<void>;
-  setError: (msg: string | null) => void;
 }) {
   const { t } = useTranslation();
+  const toast = useToast();
   const instances = usePluginInstances();
   const [rebindOpen, setRebindOpen] = useState(false);
   const [rebindError, setRebindError] = useState<string | null>(null);
@@ -89,7 +90,7 @@ function FileSection({
       });
       await onChanged();
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("book.opFailed"));
+      toast.push("error", err instanceof Error ? err.message : t("book.opFailed"));
     }
   }
 
@@ -99,7 +100,7 @@ function FileSection({
       await api(`/files/${file.id}`, { method: "DELETE" });
       await onChanged();
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("book.deleteFailed"));
+      toast.push("error", err instanceof Error ? err.message : t("book.deleteFailed"));
     }
   }
 
@@ -224,9 +225,9 @@ export function BookDetailPage() {
   const navigate = useNavigate();
   const { t } = useTranslation();
   const { user } = useAuth();
+  const toast = useToast();
   const [detail, setDetail] = useState<BookDetail | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [share, setShare] = useState<ShareInfo | null>(null);
   const [attachLabel, setAttachLabel] = useState("");
   const [attachVisibility, setAttachVisibility] = useState<Visibility>("public");
@@ -239,11 +240,11 @@ export function BookDetailPage() {
     try {
       const d = await api<BookDetail>(`/books/${id}`);
       setDetail(d);
-      setError(null);
+      setLoadError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("common.failed"));
+      setLoadError(err instanceof Error ? err.message : t("common.failed"));
     }
-  }, [id]);
+  }, [id, t]);
 
   useEffect(() => {
     void load();
@@ -253,7 +254,6 @@ export function BookDetailPage() {
     const file = e.target.files?.[0];
     if (!file) return;
     setAttaching(true);
-    setError(null);
     try {
       const form = new FormData();
       form.append("file", file);
@@ -263,7 +263,7 @@ export function BookDetailPage() {
       setAttachLabel("");
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("book.attachFailed"));
+      toast.push("error", err instanceof Error ? err.message : t("book.attachFailed"));
     } finally {
       setAttaching(false);
       if (attachRef.current) attachRef.current.value = "";
@@ -279,20 +279,18 @@ export function BookDetailPage() {
       });
       setShare(info);
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("common.failed_verb"));
+      toast.push("error", err instanceof Error ? err.message : t("common.failed_verb"));
     }
   }
 
   /** Re-pull metadata from the plugin source(s) backing this book. */
   async function refreshFromSource() {
-    setError(null);
-    setNotice(null);
     try {
       await api<BookMeta>(`/books/${id}/refresh`, { method: "POST" });
-      setNotice(t("book.refreshed"));
+      toast.push("success", t("book.refreshed"));
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("book.opFailed"));
+      toast.push("error", err instanceof Error ? err.message : t("book.opFailed"));
     }
   }
 
@@ -306,7 +304,6 @@ export function BookDetailPage() {
     if (!book) return;
     if (!window.confirm(t("book.confirmDeleteMetadata", { title: book.title }))) return;
     setDeleting(true);
-    setError(null);
     setFileCount409(null);
     try {
       if (withFiles && detail) {
@@ -322,16 +319,24 @@ export function BookDetailPage() {
       if (err instanceof ApiError && err.status === 409) {
         const files = (err.details as { files?: string[] } | undefined)?.files ?? [];
         setFileCount409(files.length || null);
-        setError(err.message);
+        toast.push("warning", err.message);
       } else {
-        setError(err instanceof Error ? err.message : t("book.opFailed"));
+        toast.push("error", err instanceof Error ? err.message : t("book.opFailed"));
       }
     } finally {
       setDeleting(false);
     }
   }
 
-  if (error) return <div className="error">{error}</div>;
+  if (loadError)
+    return (
+      <div>
+        <div className="error">{loadError}</div>
+        <Link to="/" className="link-btn">
+          {t("common.backToShelf")}
+        </Link>
+      </div>
+    );
   if (!detail) return <div className="page-loading">{t("common.loading")}</div>;
   const { book, files } = detail;
   const canManage = user !== null && (user.role === "admin" || book.created_by === user.id);
@@ -340,7 +345,7 @@ export function BookDetailPage() {
   return (
     <div className="book-detail">
       <Link to="/" className="link-btn">
-        {t("common.backToShelf")}
+        <IconArrowLeft size={14} /> {t("common.backToShelf")}
       </Link>
       <h1>{book.title}</h1>
       <p className="hint">
@@ -367,7 +372,6 @@ export function BookDetailPage() {
           </button>
         </div>
       )}
-      {notice && <p className="hint">{notice}</p>}
       {fileCount409 !== null && (
         <div className="card">
           <p className="hint">
@@ -393,7 +397,6 @@ export function BookDetailPage() {
             canManage={user !== null && (user.role === "admin" || f.owner_id === user.id)}
             onChanged={load}
             onShare={makeShare}
-            setError={setError}
           />
         ))}
       </section>

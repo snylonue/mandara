@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
+import { IconPin } from "../components/icons";
 import { Reader } from "../components/Reader";
 import type { Chapter, ShareBookResponse, ShareView } from "../types";
 
@@ -43,6 +44,7 @@ export function SharePage() {
       {view.session && (
         <div className="card share-snapshot">
           <h2>
+            <IconPin size={16} />{" "}
             {t("share.progressOf", {
               owner: view.session.owner_username,
               label: view.session.label,
