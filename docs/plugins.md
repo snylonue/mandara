@@ -240,7 +240,15 @@ and, when it has `lookup`, the book id).
   front like the physical book / linovelib2epub (`front`), or drops it
   (`skip`). Plates are extracted
   as numbered image URLs (plugin chapters are text; the host has no
-  per-chapter HTML format yet). Needs the host allow list:
+  per-chapter HTML format yet). Prose chapters also carry `（插图NNN）`
+  marks where the print book has a plate; the plugin resolves them to
+  the matching plate of that volume's 插图 chapter (001 → first plate,
+  `[插图005] https://…` inline, so the image appears where the text
+  references it). wenku8 rate-limits this server's IP under bursty
+  scraping (HTTP 429): transient 403/429/5xx/transport responses are
+  retried up to three times per request; a failed chapter read can be
+  retried later and, once materialized, is served from the library DB.
+  Needs the host allow list:
   `BOOKSHELF_PLUGIN_FETCH_ALLOWED_HOSTS=www.wenku8.net`.
   Build: `./scripts/build-plugins.sh wenku8`.
 

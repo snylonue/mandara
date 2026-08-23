@@ -117,11 +117,17 @@ fn http_get(url: &str, referer: &str) -> Result<(u16, Vec<u8>), String> {
             timeout_ms: Some(15_000),
         };
         match bookshelf::plugin::http::fetch(&request) {
-            // Retry once on transient application states (5xx, anti-bot
-            // 403) and on transport-level errors; 404/4xx are final.
-            Ok(resp) if attempt == 1 && (resp.status == 403 || resp.status >= 500) => continue,
+            // Retry on transient application states (429 rate limiting,
+            // 5xx, anti-bot 403) and on transport-level errors: up to
+            // three attempts per request; 404/4xx are final.
+            Ok(resp)
+                if attempt < 3
+                    && (resp.status == 403 || resp.status == 429 || resp.status >= 500) =>
+            {
+                continue;
+            }
             Ok(resp) => return Ok((resp.status, resp.body)),
-            Err(_) if attempt == 1 => continue,
+            Err(_) if attempt < 3 => continue,
             Err(e) => return Err(format!("{e:?}")),
         }
     }
@@ -385,6 +391,9 @@ struct OrderedChapter {
     cid: u32,
     title: String,
     illustration: bool,
+    /// 0-based index of the volume this chapter belongs to (needed to
+    /// resolve `（插图NNN）` marks against that volume's plate chapter).
+    volume: usize,
 }
 
 /// Is this chapter an illustration chapter? wenku8 names these exactly
@@ -459,7 +468,7 @@ fn parse_toc(html: &str) -> Option<Vec<Volume>> {
 fn build_order(vols: &[Volume], placement: Placement) -> Vec<OrderedChapter> {
     let multi_volume = vols.len() > 1;
     let mut out = Vec::new();
-    for vol in vols {
+    for (vol_idx, vol) in vols.iter().enumerate() {
         let (mut ill, mut normal): (Vec<_>, Vec<_>) =
             vol.chapters.iter().partition(|c| is_illustration(&c.title));
         let mut push = |chs: &mut Vec<&ChapterRef>| {
@@ -474,6 +483,7 @@ fn build_order(vols: &[Volume], placement: Placement) -> Vec<OrderedChapter> {
                     cid: c.cid,
                     title,
                     illustration,
+                    volume: vol_idx,
                 });
             }
         };
@@ -513,12 +523,22 @@ fn referer_for(base: &str, book: &str) -> String {
     }
 }
 
-/// Fetch + parse the TOC of `book`, returning the flat reading order.
-fn fetch_order(book: &str) -> Option<Vec<OrderedChapter>> {
+/// TOC rows plus the flat reading order. The raw volumes are kept so
+/// prose chapters can resolve `（插图NNN）` marks against the plate
+/// chapter of their own volume.
+struct TocInfo {
+    volumes: Vec<Volume>,
+    order: Vec<OrderedChapter>,
+}
+
+/// Fetch + parse the TOC of `book`, returning both the raw volumes and
+/// the flat reading order under the configured 插图 policy.
+fn fetch_toc(book: &str) -> Option<TocInfo> {
     let base = config_string("base-url", DEFAULT_BASE_URL);
     let html = fetch_page("toc", &toc_url(&base, book), &referer_for(&base, book))?;
-    let vols = parse_toc(&html)?;
-    Some(build_order(&vols, placement()))
+    let volumes = parse_toc(&html)?;
+    let order = build_order(&volumes, placement());
+    Some(TocInfo { volumes, order })
 }
 
 // ---------------------------------------------------------------------------
@@ -527,7 +547,9 @@ fn fetch_order(book: &str) -> Option<Vec<OrderedChapter>> {
 
 /// 插图 chapters: list the plate image URLs, one per line (plugin
 /// chapters are stored as text; the reader shows them as a URL list).
-fn extract_image_urls(inner: &str) -> String {
+/// Collect the plate image URLs of an 插图 chapter body (deduplicated,
+/// in page order).
+fn collect_image_urls(inner: &str) -> Vec<String> {
     let mut urls: Vec<String> = Vec::new();
     let mut i = 0usize;
     while let Some(p) = inner[i..].find("class=\"divimage\"") {
@@ -559,6 +581,12 @@ fn extract_image_urls(inner: &str) -> String {
             j = e;
         }
     }
+    urls
+}
+
+/// 插图 chapters: list the plate image URLs, one per line (plugin
+/// chapters are stored as text; the reader shows them as a URL list).
+fn format_image_list(urls: &[String]) -> String {
     if urls.is_empty() {
         return String::new();
     }
@@ -567,6 +595,121 @@ fn extract_image_urls(inner: &str) -> String {
         out.push_str(&format!("{}. {}\n", n + 1, u));
     }
     out.trim_end().to_string()
+}
+
+/// Plate URLs of the volume a prose chapter belongs to (the volume's
+/// 插图 chapter, in TOC order). Empty when the volume has none or its
+/// plate page cannot be fetched.
+fn volume_illustration_urls(
+    base: &str,
+    book: &str,
+    volumes: &[Volume],
+    volume: usize,
+) -> Vec<String> {
+    let Some(vol) = volumes.get(volume) else {
+        return Vec::new();
+    };
+    let Some(ill) = vol.chapters.iter().find(|c| is_illustration(&c.title)) else {
+        return Vec::new();
+    };
+    let toc = toc_url(base, book);
+    let Some(html) = fetch_page("illustration", &chapter_url(base, book, ill.cid), &toc) else {
+        return Vec::new();
+    };
+    let Some(inner) = content_div(&html) else {
+        return Vec::new();
+    };
+    collect_image_urls(&strip_contentdp(&inner))
+}
+
+/// Try to parse an illustration mark `（插图005）` / `(插圖 6)` /
+/// `[插图12]` starting exactly at byte `at`. Returns `(number, end)` —
+/// `end` is just past the closing bracket.
+fn parse_illustration_mark(text: &str, at: usize) -> Option<(u32, usize)> {
+    let mut pos = at;
+    let mut chars = text[pos..].chars();
+    let open = chars.next()?;
+    if !matches!(open, '（' | '(' | '[') {
+        return None;
+    }
+    pos += open.len_utf8();
+    // 插[图|圖|画|畫]，then digits（optional inner spaces），then bracket
+    let c = chars.next()?;
+    if c != '插' {
+        return None;
+    }
+    pos += c.len_utf8();
+    let c = chars.next()?;
+    if !matches!(c, '图' | '圖' | '画' | '畫') {
+        return None;
+    }
+    pos += c.len_utf8();
+    let mut digits = String::new();
+    let mut closed = false;
+    for c in chars {
+        if c.is_ascii_digit() {
+            digits.push(c);
+            pos += 1;
+        } else if c.is_whitespace() {
+            pos += c.len_utf8();
+        } else if matches!(c, '）' | ')' | ']') {
+            pos += c.len_utf8();
+            closed = true;
+            break;
+        } else {
+            break;
+        }
+    }
+    if digits.is_empty() || !closed {
+        return None;
+    }
+    Some((digits.parse().ok()?, pos))
+}
+
+/// Replace `（插图NNN）` marks in a prose chapter with the matching plate
+/// URL of the volume's 插图 chapter, in `[插图NNN] <url>` form. Numbered
+/// marks resolve by plate number (001 → first plate); marks whose number
+/// exceeds the plate count fall back to appearance order within the
+/// chapter; unresolved marks stay as-is.
+fn replace_illustration_marks(text: &str, urls: &[String]) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    let mut seen = 0u32;
+    while let Some(at) = next_open_bracket(rest) {
+        match parse_illustration_mark(rest, at) {
+            Some((n, end)) => {
+                seen += 1;
+                let idx = if (n as usize) <= urls.len() {
+                    n as usize - 1
+                } else {
+                    seen as usize - 1
+                };
+                if let Some(url) = urls.get(idx) {
+                    out.push_str(&rest[..at]);
+                    out.push_str(&format!("[插图{n:03}] {url}"));
+                } else {
+                    out.push_str(&rest[..end]);
+                }
+                rest = &rest[end..];
+            }
+            None => {
+                // an opening bracket that does not start a mark: copy it
+                // (one full char) and keep scanning
+                let char_len = rest[at..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+                out.push_str(&rest[..at + char_len]);
+                rest = &rest[at + char_len..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Byte offset of the next opening bracket (`（` `(` `[`).
+fn next_open_bracket(text: &str) -> Option<usize> {
+    text.char_indices()
+        .find(|(_, c)| matches!(c, '（' | '(' | '['))
+        .map(|(i, _)| i)
 }
 
 // ---------------------------------------------------------------------------
@@ -752,24 +895,30 @@ impl Guest for Wenku8Plugin {
         let Some(book) = normalize_book_id(&book_id) else {
             return Vec::new();
         };
-        fetch_order(&book)
-            .map(|order| order.into_iter().map(|c| c.title).collect())
+        fetch_toc(&book)
+            .map(|info| info.order.into_iter().map(|c| c.title).collect())
             .unwrap_or_default()
     }
 
     fn get_chapter(book_id: String, index: u32) -> Option<Chapter> {
         let book = normalize_book_id(&book_id)?;
         let base = config_string("base-url", DEFAULT_BASE_URL);
-        let order = fetch_order(&book)?;
-        let entry = order.get(index as usize)?;
+        let info = fetch_toc(&book)?;
+        let entry = info.order.get(index as usize)?;
         let url = chapter_url(&base, &book, entry.cid);
         let html = fetch_page("get-chapter", &url, &toc_url(&base, &book))?;
         let inner = strip_contentdp(&content_div(&html)?);
         let is_ill = entry.illustration || inner.contains("class=\"divimage\"");
         let content = if is_ill {
-            extract_image_urls(&inner)
+            format_image_list(&collect_image_urls(&inner))
         } else {
-            tidy(&html_to_text(&inner))
+            let text = tidy(&html_to_text(&inner));
+            // wenku8 inserts `（插图NNN）` marks where the print book has a
+            // plate; resolve them to the volume's plate image URLs.
+            replace_illustration_marks(
+                &text,
+                &volume_illustration_urls(&base, &book, &info.volumes, entry.volume),
+            )
         };
         // Content must be non-empty to be a real chapter (the host skips
         // empty bodies).
@@ -792,3 +941,56 @@ impl Guest for Wenku8Plugin {
 }
 
 export!(Wenku8Plugin);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_fullwidth_illustration_mark() {
+        let text = "前文\n（插图009）结束";
+        let at = text.find('（').unwrap();
+        let (n, end) = parse_illustration_mark(text, at).unwrap();
+        assert_eq!(n, 9);
+        assert_eq!(&text[end..], "结束");
+    }
+
+    #[test]
+    fn parses_halfwidth_and_traditional_marks() {
+        let text = "a[插圖 12]b（插画3）c";
+        let (n, end) = parse_illustration_mark(text, text.find('[').unwrap()).unwrap();
+        assert_eq!(n, 12);
+        assert_eq!(&text[end..], "b（插画3）c");
+        let (n, end) = parse_illustration_mark(text, text.find('（').unwrap()).unwrap();
+        assert_eq!(n, 3);
+        assert_eq!(&text[end..], "c");
+    }
+
+    #[test]
+    fn non_mark_text_is_not_consumed() {
+        let text = "这里没有插图标记";
+        assert!(parse_illustration_mark(text, 0).is_none());
+        // 无括号的“插图”文字
+        assert!(parse_illustration_mark("（插图无数字）", 0).is_none());
+    }
+
+    #[test]
+    fn replaces_marks_with_plate_urls() {
+        let urls: Vec<String> = (1..=3).map(|i| format!("https://a/{i}.jpg")).collect();
+        let out = replace_illustration_marks("（插图001）\n（插图002）\n（插图003）", &urls);
+        assert!(out.contains("[插图001] https://a/1.jpg"), "{out}");
+        assert!(out.contains("[插图002] https://a/2.jpg"), "{out}");
+        assert!(out.contains("[插图003] https://a/3.jpg"), "{out}");
+    }
+
+    #[test]
+    fn out_of_range_mark_falls_back_to_appearance_order_then_stays() {
+        let urls: Vec<String> = (1..=2).map(|i| format!("https://a/{i}.jpg")).collect();
+        // 004 越界（仅 2 张）且是第 1 次出现 → 出现序 → 第 1 张
+        let out = replace_illustration_marks("（插图004）", &urls);
+        assert!(out.contains("[插图004] https://a/1.jpg"), "{out}");
+        // 无图列表 → 全部保留原文
+        let out = replace_illustration_marks("（插图005）", &[]);
+        assert_eq!(out, "（插图005）");
+    }
+}
