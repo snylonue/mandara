@@ -57,12 +57,18 @@ the full design. This guide is for plugin authors.
 ## Interface (WIT)
 
 Interface file: `crates/bookshelf-plugin/wit/bookshelf.wit`, world
-`bookshelf:plugin/bookshelf-plugin@0.3.0`. Every export is **required**
+`bookshelf:plugin/bookshelf-plugin@0.5.0`. Every export is **required**
 (the WIT parser has no optional exports) — unsupported features return
 `none`/empty and are declared via `capabilities()`:
 
 ```wit
 interface types {
+    // multi-volume structure (v0.5.0): when a source book spans several
+    // 卷, the host acquires one library book per volume under a series
+    record volume-info {
+        title: string,          // "第一卷" — host falls back to 第N卷
+        chapter-count: u32,     // chapters in this volume (flat order)
+    }
     record book-entry {
         id: string,
         title: string,
@@ -72,6 +78,7 @@ interface types {
         // metadata/content separation (R5):
         content-source: option<string>,  // instance id providing the chapters
         content-id: option<string>,      // book id inside that instance
+        volumes: option<list<volume-info>>,  // none/empty = single volume
     }
     record chapter { title: string, content: string }  // empty content = lazy body
     record declared-book { book: book-entry, chapters: list<chapter> }
@@ -117,6 +124,20 @@ World exports:
 | `get-chapter(book-id, index)` | `content` | One chapter body |
 | `identify-upload(filename, file-hash)` | `identify` | Upload recognition |
 | `get-book-file(book-id)` | `book-file` | Whole book file (epub/txt download) |
+
+**Multi-volume books (`book-entry.volumes`, v0.5.0).** A source whose
+TOC groups chapters into 卷 (light-novel series, e.g. wenku8's `vcss`
+rows) should declare the volume structure: `volumes` is a list of
+`volume-info {title, chapter-count}` in order, and the flat
+`chapter-titles` list must be the concatenation of the volumes' chapters
+(`get-chapter` indices stay flat — the host slices titles per volume and
+maps per-volume chapter pulls via a persisted `volume-offset`). The host
+then auto-splits acquisition into **one series + one library book per
+卷** instead of merging the whole series into one book (see
+`docs/series-design.md`). Sources without volumes leave the field
+`none`/empty (single book, previous behavior). Volume counts must match
+`chapter-titles` after the source's own 插图/etc. placement policy; the
+host clamps mismatches defensively.
 
 Host caps: `search-books` limit ≤ 50 / offset ≤ 10 000 (400 beyond);
 `declare` ≤ 10 000 books / 100 000 chapters (error beyond, warn past 90%);
