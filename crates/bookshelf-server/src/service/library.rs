@@ -2185,6 +2185,39 @@ fn original_path(files_dir: &Path, file_id: &str, ext: &str) -> PathBuf {
     files_dir.join(format!("{file_id}.{ext}"))
 }
 
+/// Startup backfill (storage unification P3): convert legacy plain-text
+/// chapter rows to canonical HTML. Idempotent — after one pass no row has
+/// `format='text'` and subsequent boots are a no-op. Returns the number
+/// of converted rows. Removed together with the `chapters.format`
+/// column in migration 0008 (P4).
+pub async fn backfill_text_chapters(db: &SqlitePool) -> anyhow::Result<usize> {
+    let mut total = 0usize;
+    loop {
+        let rows: Vec<(String, i64, String)> = sqlx::query_as(
+            "SELECT file_id, idx, content FROM chapters WHERE format = 'text' LIMIT 500",
+        )
+        .fetch_all(db)
+        .await?;
+        if rows.is_empty() {
+            return Ok(total);
+        }
+        let mut tx = db.begin().await?;
+        for (file_id, idx, content) in &rows {
+            let html = bookshelf_formats::htmlize::plugin_text_to_html(content);
+            sqlx::query(
+                "UPDATE chapters SET format = 'html', content = ? WHERE file_id = ? AND idx = ?",
+            )
+            .bind(&html)
+            .bind(file_id)
+            .bind(idx)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        total += rows.len();
+    }
+}
+
 /// One-shot upgrade migration (`--reparse-originals`, owner decision:
 /// manual, no HTTP endpoint): re-run the current parser over every
 /// retained original and replace the stored chapters + toc in one

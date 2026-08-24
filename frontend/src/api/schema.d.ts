@@ -731,11 +731,10 @@ export interface components {
             idx: number;
             title: string;
             /**
-             * @description `html`: sanitized HTML fragment (epub chapters, structure preserved, images inlined as data URIs). `text`: plain text (txt uploads, plugin chapters).
-             * @enum {string}
+             * @description Sanitized HTML fragment (canonical for every source since the
+             *     storage unification: epub chapters, txt paragraphs, plugin
+             *     text with illustration conventions expanded).
              */
-            format: "html" | "text";
-            /** @description Chapter content per `format`. */
             content: string;
         };
         Position: {

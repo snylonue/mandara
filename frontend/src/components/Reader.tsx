@@ -1,10 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { IconArrowLeft, IconChevronLeft, IconChevronRight } from "./icons";
@@ -222,15 +216,13 @@ export function Reader({
       >
         {loading && <p className="hint">{t("common.loading")}</p>}
         {chapter &&
-          (chapter.format === "html" ? (
-            // Sanitized by the server (epub XHTML whitelist).
-            <div
-              className="epub-content"
-              dangerouslySetInnerHTML={{ __html: chapter.content }}
-            />
-          ) : (
-            <TextChapter content={chapter.content} />
-          ))}
+          // Canonical sanitized HTML for every source (storage
+          // unification): epub chapters, txt paragraphs, plugin text with
+          // illustration conventions expanded at the ingest boundary.
+          <div
+            className="epub-content"
+            dangerouslySetInnerHTML={{ __html: chapter.content }}
+          />}
       </article>
 
       {/* single prev/next control set — large buttons with chapter preview */}
@@ -258,55 +250,6 @@ export function Reader({
       </div>
     </div>
   );
-}
-
-/// Image reference inside a plugin/text chapter. The wenku8 source emits
-/// two forms:
-///   - plate chapters: one `N. <url>` per line (after a `[插图] 共 N 张` head)
-///   - prose chapters: inline marks rewritten to `[插图NNN] <url>`
-const TEXT_IMAGE_RE =
-  /\[插图\d*\]\s*(https?:\/\/[^\s\]]+)|(^|\n)\s*\d+\.\s+(https?:\/\/\S+)\s*(?=\n|$)/g;
-
-/// Renderer for text-format chapters (txt / plugin sources). Plain text
-/// keeps its `pre-wrap` layout; recognized illustration references render
-/// as actual <img> elements instead of raw URLs.
-function TextChapter({ content }: { content: string }) {
-  const nodes: ReactNode[] = [];
-  let last = 0;
-  let key = 0;
-  for (const m of content.matchAll(TEXT_IMAGE_RE)) {
-    const url = m[1] ?? m[3];
-    const start = m[1] !== undefined ? m.index : m.index + m[2].length;
-    if (start > last) {
-      nodes.push(
-        <span key={key++} className="chapter-text">
-          {content.slice(last, start)}
-        </span>,
-      );
-    }
-    nodes.push(
-      <img
-        key={key++}
-        className="chapter-img"
-        src={url}
-        alt=""
-        loading="lazy"
-        referrerPolicy="no-referrer"
-      />,
-    );
-    last = m.index + m[0].length;
-  }
-  if (nodes.length === 0) {
-    return <p className="chapter-text">{content}</p>;
-  }
-  if (last < content.length) {
-    nodes.push(
-      <span key={key++} className="chapter-text">
-        {content.slice(last)}
-      </span>,
-    );
-  }
-  return <>{nodes}</>;
 }
 
 /// Recursive renderer for the hierarchical TOC.

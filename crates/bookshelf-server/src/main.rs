@@ -50,6 +50,15 @@ async fn main() -> anyhow::Result<()> {
     let pool = db::connect(&cfg).await?;
     db::seed_local_user(&pool, cfg.auth_enabled).await?;
 
+    // Startup backfill (storage unification P3): legacy plain-text
+    // chapter rows → canonical HTML. No-op after the first successful
+    // pass.
+    match service::library::backfill_text_chapters(&pool).await {
+        Ok(0) => {}
+        Ok(n) => tracing::info!(converted = n, "backfilled text chapters to html"),
+        Err(e) => tracing::warn!(error = %e, "text chapter backfill failed"),
+    }
+
     // One-shot upgrade migration (`--reparse-originals`): re-parse every
     // retained original with the current parser, then exit. Runs before
     // plugin loading — it needs neither wasm nor the HTTP stack.
