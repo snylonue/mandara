@@ -1464,6 +1464,16 @@ button.active {
   margin: 0;
 }
 
+/* Illustration references in text chapters (plugin sources, e.g. wenku8
+   plate lists / inline 插图 marks) rendered as real images. */
+.chapter-img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 1em auto;
+  border-radius: 4px;
+}
+
 /* Sanitized EPUB XHTML (see backend epub parser). */
 .epub-content {
   letter-spacing: 0.02em;
