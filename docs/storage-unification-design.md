@@ -1,8 +1,10 @@
 # Unified book storage format design
 
-Status: **proposal 2026-08-24** — awaiting owner decisions on §7 (storage
-location for originals, migration of the `format` column, styling of
-converted text chapters).
+Status: **approved 2026-08-24** — owner decisions recorded in §7:
+(1) originals on disk (`data/files/`); (2) reparse is an upgrade-time
+**manual migration command** (no HTTP endpoint); (3) converted text
+chapters merge into the epub styling (no `data-origin` marker);
+(4) originals reuse the existing upload size limit.
 
 ## 1. Problem
 
@@ -111,12 +113,13 @@ roomier paragraph rhythm readers are used to from txt (§7.3).
 - **`GET /api/files/{id}/download`** — streams the original with its
   natural mime; authorization identical to chapter reads
   (owner/admin/public). `Content-Disposition` uses the book title.
-- **`POST /api/files/{id}/reparse`** (owner/admin, requires stored
-  original): re-runs the current parser over the stored bytes and
-  replaces `chapters` + `book_files.toc` in one transaction. Sessions
-  are kept; `chapter_idx`/`fraction` are clamped to the new chapter
-  count. This is the tool for "parser got better, refresh old books"
-  (and per-book, unlike the old re-upload workaround).
+- **`POST /api/files/{id}/reparse`** — **rejected by owner decision**: no
+  HTTP endpoint. Instead, reparse is an **upgrade-time manual migration**:
+  a one-shot CLI mode (`bookshelf-server --reparse-originals`) that
+  re-runs the current parser over every stored original and replaces
+  chapters + toc in place (sessions kept, positions clamped), then
+  exits. The operator runs it deliberately after deploying a parser
+  improvement; the running server exposes nothing.
 
 ### 4.3 What plugins see
 
@@ -133,8 +136,8 @@ slot in later without touching this design.
   `npm run api-types`). One release note: "all chapters are html now".
 - `FileMeta` — gains `original: {size, sha256} | null` so the UI can
   show a download button only when an original exists.
-- New `GET /api/files/{id}/download` (binary response) and
-  `POST /api/files/{id}/reparse` (returns the refreshed `FileDetail`).
+- New `GET /api/files/{id}/download` (binary response). No reparse
+  endpoint (§4.2: CLI migration instead).
 
 ## 6. Migration
 
@@ -160,36 +163,32 @@ Sessions/shares need no migration: they reference files, and fraction
 progress tolerates the (small) layout shift of txt chapters gaining real
 paragraph margins.
 
-## 7. Open questions (owner decisions)
+## 7. Owner decisions (2026-08-24)
 
-1. **Originals on disk vs BLOB** — §4.2 recommends `data/files/` on
-   disk; BLOB keeps the "everything in one SQLite file" property if the
-   owner values that more.
-2. **Reparse trigger** — manual per-book button (recommended) vs
-   automatic reparse-all on version upgrade (riskier: a parser regression
-   would rewrite whole libraries at once).
-3. **Styling of converted text chapters** — keep the txt reading feel
-   (`data-origin="text"` → wider line-height, no justify) or unify
-   visually with epub styling (justified paragraphs)? Recommend the
-   former; the flag costs one attribute.
-4. **Size cap for retained originals** — reuse the existing upload size
-   limit (recommended) or a separate `BOOKSHELF_ORIG_MAX_BYTES`.
+1. **Originals on disk** — `data/files/{file_id}.{ext}`, as recommended.
+2. **Reparse = upgrade-time manual migration, no API.** A one-shot CLI
+   mode (`--reparse-originals`) re-parses every stored original; no HTTP
+   endpoint exists.
+3. **Converted text chapters merge into the epub styling** — no
+   `data-origin` marker; one paragraph style everywhere.
+4. **Size cap** — reuse the existing upload size limit.
 
 ## 8. Implementation plan
 
 - **P1 — originals (G2, independent value):** migration 0007 columns,
-  write-on-upload, file-mode cache, `download` + `reparse` endpoints,
-  OpenAPI + generated types, frontend download/reparse buttons on
-  managed file cards, e2e (upload → download roundtrip sha-equal →
-  reparse → chapters/toc replaced → sessions clamped; 409 for
-  pre-retention rows; authz matrix).
+  write-on-upload, file-mode cache, `download` endpoint,
+  OpenAPI + generated types, frontend download button on managed file
+  cards, e2e (upload → download roundtrip sha-equal; authz matrix).
+- **P1b — reparse CLI:** one-shot `--reparse-originals` mode (replaces
+  the rejected HTTP endpoint; owner decision 2), e2e via a temp
+  instance (reparse → chapters/toc replaced → sessions clamped).
 - **P2 — canonical ingest (G1):** txt→html and plugin-text→html
   converters in `bookshelf-formats` (unit tests: escaping, blank-line
   paragraphs, convention expansion, URL validation), wired into upload
   parsing and plugin materialization; new rows all `'html'`.
 - **P3 — backfill + single render path (G3/G4):** startup backfill,
   `Chapter.format` removed from the contract, frontend `TextChapter` +
-  format branch deleted, `.epub-content`/`data-origin` styling, e2e
+  format branch deleted, unified epub styling (owner decision 3), e2e
   regression on the wenku8 illustration flow (plate chapter + inline
   marks render as images from stored HTML).
 - **P4 — cleanup:** migration 0008 drops `chapters.format`; dead
