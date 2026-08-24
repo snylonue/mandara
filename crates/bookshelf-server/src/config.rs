@@ -53,6 +53,13 @@ pub struct Config {
     /// `/` when present.
     #[arg(long, env = "BOOKSHELF_FRONTEND_DIR", default_value = "frontend")]
     pub frontend_dir: PathBuf,
+
+    /// One-shot upgrade migration: re-run the current parser over every
+    /// retained original (data/files/) and replace the stored chapters +
+    /// toc, then exit. No HTTP endpoint — run manually after deploying a
+    /// parser improvement.
+    #[arg(long, env = "BOOKSHELF_REPARSE_ORIGINALS", default_value_t = false)]
+    pub reparse_originals: bool,
 }
 
 impl Config {

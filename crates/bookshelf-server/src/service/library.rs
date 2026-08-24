@@ -17,7 +17,7 @@
 //! Visibility is per file: `private` = owner + admins only, `public` =
 //! visible to every logged-in user.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Context as _;
@@ -1106,7 +1106,7 @@ impl Library {
 
     /// Disk path of a file's retained original bytes.
     fn original_path(&self, file_id: &str, ext: &str) -> PathBuf {
-        self.files_dir.join(format!("{file_id}.{ext}"))
+        original_path(&self.files_dir, file_id, ext)
     }
 
     /// Load a file's retained original bytes (for download / reparse).
@@ -2173,6 +2173,87 @@ fn volume_slices(volumes: &[SourceVolume], total: u32) -> Option<Vec<(String, u3
         last.2 += total - start;
     }
     Some(out)
+}
+
+/// Disk path of a file's retained original bytes
+/// (`{files_dir}/{file_id}.{ext}`).
+fn original_path(files_dir: &Path, file_id: &str, ext: &str) -> PathBuf {
+    files_dir.join(format!("{file_id}.{ext}"))
+}
+
+/// One-shot upgrade migration (`--reparse-originals`, owner decision:
+/// manual, no HTTP endpoint): re-run the current parser over every
+/// retained original and replace the stored chapters + toc in one
+/// transaction per file. Sessions are kept; `chapter_idx` is clamped to
+/// the new chapter count. Returns (reparsed, failed).
+pub async fn reparse_originals(
+    db: &SqlitePool,
+    files_dir: &Path,
+) -> anyhow::Result<(usize, usize)> {
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT id, orig_ext FROM book_files WHERE orig_ext IS NOT NULL ORDER BY created_at",
+    )
+    .fetch_all(db)
+    .await?;
+    let mut ok = 0usize;
+    let mut failed = 0usize;
+    for (file_id, ext) in rows {
+        let path = original_path(files_dir, &file_id, &ext);
+        let bytes = match tokio::fs::read(&path).await {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                warn!(file = %file_id, path = %path.display(), error = %e, "reparse: original unreadable");
+                failed += 1;
+                continue;
+            }
+        };
+        let parsed = match bookshelf_formats::parse(&bytes, &format!("original.{ext}")) {
+            Ok(parsed) => parsed,
+            Err(e) => {
+                warn!(file = %file_id, ext = %ext, error = %e, "reparse: parse failed");
+                failed += 1;
+                continue;
+            }
+        };
+        let toc_json = serde_json::to_string(&parsed.toc).unwrap_or_else(|_| "[]".into());
+        let count = parsed.chapters.len() as i64;
+        let mut tx = db.begin().await?;
+        sqlx::query("DELETE FROM chapters WHERE file_id = ?")
+            .bind(&file_id)
+            .execute(&mut *tx)
+            .await?;
+        for (idx, chapter) in parsed.chapters.iter().enumerate() {
+            sqlx::query(
+                "INSERT INTO chapters (file_id, idx, title, format, content) VALUES (?, ?, ?, ?, ?)",
+            )
+            .bind(&file_id)
+            .bind(idx as i64)
+            .bind(&chapter.title)
+            .bind(chapter.format.as_str())
+            .bind(&chapter.content)
+            .execute(&mut *tx)
+            .await?;
+        }
+        sqlx::query("UPDATE book_files SET chapter_count = ?, toc = ? WHERE id = ?")
+            .bind(count)
+            .bind(&toc_json)
+            .bind(&file_id)
+            .execute(&mut *tx)
+            .await?;
+        // Keep every session; clamp positions into the new chapter range.
+        sqlx::query(
+            "UPDATE sessions SET chapter_idx = MIN(chapter_idx, ?), fraction = MIN(fraction, 1.0) \
+             WHERE file_id = ?",
+        )
+        .bind((count - 1).max(0))
+        .bind(&file_id)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        info!(file = %file_id, ext = %ext, chapters = count, "reparse: replaced chapters + toc");
+        ok += 1;
+    }
+    Ok((ok, failed))
 }
 
 /// Parse a stored `authors` JSON array (as read back from the DB).

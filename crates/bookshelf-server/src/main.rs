@@ -50,6 +50,16 @@ async fn main() -> anyhow::Result<()> {
     let pool = db::connect(&cfg).await?;
     db::seed_local_user(&pool, cfg.auth_enabled).await?;
 
+    // One-shot upgrade migration (`--reparse-originals`): re-parse every
+    // retained original with the current parser, then exit. Runs before
+    // plugin loading — it needs neither wasm nor the HTTP stack.
+    if cfg.reparse_originals {
+        let files_dir = data_dir.join("files");
+        let (ok, failed) = service::library::reparse_originals(&pool, &files_dir).await?;
+        tracing::info!(reparsed = ok, failed, "reparse-originals finished");
+        return Ok(());
+    }
+
     // Outbound HTTP policy of every plugin's `fetch` import
     // (BOOKSHELF_PLUGIN_FETCH_* env vars; empty allow list = all fetches
     // denied). Plugin calls run on blocking threads, so a slow source
