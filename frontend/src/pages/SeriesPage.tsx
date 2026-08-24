@@ -63,6 +63,7 @@ function VolumeCard({
       {canManage && (
         <div className="series-card-actions">
           <button
+            className="mini-btn"
             disabled={orderIndex === 0}
             onClick={() => onMove(orderIndex, orderIndex - 1)}
             title={t("series.moveUp")}
@@ -70,13 +71,14 @@ function VolumeCard({
             ↑
           </button>
           <button
+            className="mini-btn"
             disabled={orderIndex === total - 1}
             onClick={() => onMove(orderIndex, orderIndex + 1)}
             title={t("series.moveDown")}
           >
             ↓
           </button>
-          <button className="danger" onClick={() => onRemove(orderIndex)}>
+          <button className="mini-btn danger" onClick={() => onRemove(orderIndex)}>
             {t("series.remove")}
           </button>
         </div>

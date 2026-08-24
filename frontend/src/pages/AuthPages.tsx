@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { useAuth } from "../auth";
+import { LogoMark } from "../components/icons";
 import type { AuthResp } from "../types";
 
 function AuthForm({ mode }: { mode: "login" | "register" }) {
@@ -34,9 +35,17 @@ function AuthForm({ mode }: { mode: "login" | "register" }) {
 
   if (health && !health.auth_enabled) {
     return (
-      <div className="card">
-        <p>{t("auth.localModeDesc")}</p>
-        <Link to="/">{t("auth.backToShelf")}</Link>
+      <div className="auth-wrap">
+        <div className="card auth-card">
+          <div className="auth-brand">
+            <LogoMark size={30} className="brand-mark" />
+          </div>
+          <p className="center">{t("auth.localModeDesc")}</p>
+          <Link to="/" className="btn-primary">
+            {t("auth.backToShelf")}
+          </Link>
+        </div>
+        <p className="hint center">{t("auth.tagline")}</p>
       </div>
     );
   }
@@ -46,6 +55,9 @@ function AuthForm({ mode }: { mode: "login" | "register" }) {
   return (
     <div className="auth-wrap">
       <form className="card auth-card" onSubmit={submit}>
+        <div className="auth-brand">
+          <LogoMark size={30} className="brand-mark" />
+        </div>
         <h1>{isLogin ? t("auth.loginTitle") : t("auth.registerTitle")}</h1>
         <label>
           {t("auth.username")}

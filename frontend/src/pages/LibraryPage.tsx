@@ -121,11 +121,15 @@ export function LibraryPage() {
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
+        {user?.role === "admin" && (
+          <span className="hint admin-note" title={t("library.adminHint")}>
+            {t("library.adminHint")}
+          </span>
+        )}
         <button className="primary" onClick={() => setAddOpen(true)}>
           {t("library.addBook")}
         </button>
       </div>
-      {user?.role === "admin" && <p className="hint admin-note">{t("library.adminHint")}</p>}
       {entries === null && (
         <div className="book-grid">
           {Array.from({ length: 8 }, (_, i) => (

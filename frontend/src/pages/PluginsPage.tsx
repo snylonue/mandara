@@ -7,7 +7,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api, ApiError } from "../api";
-import { useAuth } from "../auth";
 import { useToast } from "../components/toast";
 import type {
   ConfigError,
@@ -195,7 +194,6 @@ function ConfigForm({
 }
 
 export function PluginsPage() {
-  const { user } = useAuth();
   const { t } = useTranslation();
   const toast = useToast();
   const [instances, setInstances] = useState<PluginInstance[]>([]);
@@ -280,72 +278,80 @@ export function PluginsPage() {
     }
   }
 
-  const caps = (c: string[]) =>
-    c.length ? c.join(" · ") : t("plugin.noCapabilities");
+  const caps = (c: string[]) => c.join(" · ");
 
   return (
     <div>
       <div className="toolbar">
         <h2>{t("plugin.manageTitle")}</h2>
-        <span className="hint">{user?.username}</span>
       </div>
-      <section className="card">
-        <h3>{t("plugin.registerTitle")}</h3>
-        <p className="hint">{t("plugin.registerHint")}</p>
-        <div className="inline-form">
-          <select value={regFile} onChange={(e) => setRegFile(e.target.value)}>
-            <option value="">{t("plugin.pickWasmFile")}</option>
-            {wasmFiles.map((f) => (
-              <option key={f} value={f}>
-                {f}
-              </option>
-            ))}
-          </select>
-          <input
-            placeholder={t("plugin.idPlaceholder")}
-            value={regId}
-            onChange={(e) => setRegId(e.target.value)}
-          />
-          <button className="primary" disabled={regBusy} onClick={() => void register()}>
-            {regBusy ? t("common.loading") : t("plugin.register")}
-          </button>
+
+      <section className="detail-section">
+        <h2>{t("plugin.registerTitle")}</h2>
+        <div className="panel-box">
+          <p className="hint">{t("plugin.registerHint")}</p>
+          <div className="inline-form">
+            <select value={regFile} onChange={(e) => setRegFile(e.target.value)}>
+              <option value="">{t("plugin.pickWasmFile")}</option>
+              {wasmFiles.map((f) => (
+                <option key={f} value={f}>
+                  {f}
+                </option>
+              ))}
+            </select>
+            <input
+              placeholder={t("plugin.idPlaceholder")}
+              value={regId}
+              onChange={(e) => setRegId(e.target.value)}
+            />
+            <button className="primary" disabled={regBusy} onClick={() => void register()}>
+              {regBusy ? t("common.loading") : t("plugin.register")}
+            </button>
+          </div>
         </div>
       </section>
 
-      <section className="card">
-        <h3>{t("plugin.instancesTitle")}</h3>
+      <section className="detail-section">
+        <h2>
+          {t("plugin.instancesTitle")}
+          <span className="count">{instances.length}</span>
+        </h2>
         {instances.length === 0 && <p className="hint">{t("plugin.noInstances")}</p>}
         {instances.map((instance) => (
-          <div key={instance.id} className="plugin-instance">
+          <div key={instance.id} className="file-card">
             <div className="file-head">
-              <div>
-                <span className="strong">{instance.name}</span>
+              <div className="file-title">
+                <span className="file-label">{instance.name}</span>
                 <span className="tag">{instance.id}</span>
-                <span className="tag">{instance.wasm_file}</span>
                 <span className={`tag ${instance.enabled ? "tag-public" : ""}`}>
                   {instance.enabled ? t("plugin.enabled") : t("plugin.disabled")}
                 </span>
               </div>
               <div className="row-actions">
                 <button
-                  className="link-btn"
+                  className="mini-btn"
                   onClick={() => void setEnabled(instance, !instance.enabled)}
                 >
                   {instance.enabled ? t("plugin.disable") : t("plugin.enable")}
                 </button>
-                <button className="link-btn" onClick={() => void syncInstance(instance)}>
+                <button className="mini-btn" onClick={() => void syncInstance(instance)}>
                   {t("plugin.resync")}
                 </button>
-                <button className="link-btn" onClick={() => setConfigFor(instance.id)}>
+                <button className="mini-btn" onClick={() => setConfigFor(instance.id)}>
                   {t("plugin.configure")}
                 </button>
-                <button className="link-btn danger" onClick={() => void deleteInstance(instance)}>
+                <button className="mini-btn danger" onClick={() => void deleteInstance(instance)}>
                   {t("book.delete")}
                 </button>
               </div>
             </div>
-            <div className="file-meta hint">
-              {t("plugin.capabilities")}: {caps(instance.capabilities)}
+            <div className="hint file-sub">
+              {instance.wasm_file}
+              {instance.capabilities.length > 0 && (
+                <span>
+                  · {caps(instance.capabilities)}
+                </span>
+              )}
             </div>
             {configFor === instance.id && (
               <ConfigForm

@@ -193,7 +193,6 @@
     "resync": "重新同步",
     "configure": "配置",
     "capabilities": "能力",
-    "noCapabilities": "无",
     "confirmDelete": "确认删除实例 {{id}}？删除前需先删除引用它的文件。",
     "registered": "实例已注册。",
     "synced": "同步完成：{{n}} 本书。",
