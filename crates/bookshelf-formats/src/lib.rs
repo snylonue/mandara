@@ -4,6 +4,7 @@
 //! ([`ParsedBook`]), which the server then stores in the central library.
 
 pub mod epub;
+pub mod htmlize;
 pub mod txt;
 
 use std::path::Path;
@@ -76,7 +77,7 @@ mod tests {
         let book = parse(b"hello world", "book.txt").unwrap();
         assert_eq!(book.title, "book");
         assert_eq!(book.chapters.len(), 1);
-        assert_eq!(book.chapters[0].content, "hello world");
-        assert_eq!(book.chapters[0].format, ChapterFormat::Text);
+        assert_eq!(book.chapters[0].content, "<p>hello world</p>\n");
+        assert_eq!(book.chapters[0].format, ChapterFormat::Html);
     }
 }

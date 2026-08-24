@@ -418,8 +418,9 @@ impl Library {
     ) -> Result<(), ApiError> {
         let mut tx = self.db.begin().await?;
         for (idx, chapter) in chapters.iter().enumerate() {
+            let content = bookshelf_formats::htmlize::plugin_text_to_html(&chapter.content);
             sqlx::query(
-                "INSERT INTO chapters (file_id, idx, title, format, content) VALUES (?, ?, ?, 'text', ?) \
+                "INSERT INTO chapters (file_id, idx, title, format, content) VALUES (?, ?, ?, 'html', ?) \
                  ON CONFLICT (file_id, idx) DO UPDATE SET \
                    title = excluded.title, \
                    content = CASE WHEN excluded.content = '' THEN chapters.content ELSE excluded.content END",
@@ -427,7 +428,7 @@ impl Library {
             .bind(file_id)
             .bind(idx as i64)
             .bind(chapter.title.trim())
-            .bind(&chapter.content)
+            .bind(&content)
             .execute(&mut *tx)
             .await?;
         }
@@ -845,7 +846,7 @@ impl Library {
             for (idx, t) in slice.iter().enumerate() {
                 sqlx::query(
                     "INSERT INTO chapters (file_id, idx, title, format, content) \
-                     VALUES (?, ?, ?, 'text', '')",
+                     VALUES (?, ?, ?, 'html', '')",
                 )
                 .bind(&file_id)
                 .bind(idx as i64)
@@ -2003,7 +2004,9 @@ impl Library {
 
         // Chapter mode (lazy per-chapter pulls from the content source).
         // For a volume file, the plugin index is the volume's chapter
-        // shifted by the persisted flat `volume_offset`.
+        // shifted by the persisted flat `volume_offset`. Plugin text is
+        // normalized to canonical HTML at the ingest boundary (including
+        // the illustration conventions; see bookshelf_formats::htmlize).
         let Some(chapter) = self
             .plugins
             .get_chapter(source_id, external_id, idx + file.volume_offset)
@@ -2011,21 +2014,22 @@ impl Library {
         else {
             return Ok(None);
         };
+        let content = bookshelf_formats::htmlize::plugin_text_to_html(&chapter.content);
         sqlx::query(
-            "INSERT INTO chapters (file_id, idx, title, format, content) VALUES (?, ?, ?, 'text', ?) \
-             ON CONFLICT (file_id, idx) DO UPDATE SET title = excluded.title, content = excluded.content",
+            "INSERT INTO chapters (file_id, idx, title, format, content) VALUES (?, ?, ?, 'html', ?) \
+             ON CONFLICT (file_id, idx) DO UPDATE SET title = excluded.title, format = 'html', content = excluded.content",
         )
         .bind(&file.id)
         .bind(idx as i64)
         .bind(&chapter.title)
-        .bind(&chapter.content)
+        .bind(&content)
         .execute(&self.db)
         .await?;
         Ok(Some(Chapter {
             idx,
             title: chapter.title,
-            format: ChapterFormat::Text,
-            content: chapter.content,
+            format: ChapterFormat::Html,
+            content,
         }))
     }
 
@@ -2039,7 +2043,7 @@ impl Library {
         for (idx, title) in titles.iter().enumerate() {
             sqlx::query(
                 "INSERT INTO chapters (file_id, idx, title, format, content) \
-                 VALUES (?, ?, ?, 'text', '') \
+                 VALUES (?, ?, ?, 'html', '') \
                  ON CONFLICT (file_id, idx) DO UPDATE SET title = excluded.title \
                  WHERE chapters.content = ''",
             )

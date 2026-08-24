@@ -6,7 +6,7 @@
 use bookshelf_core::error::{Error, Result};
 use bookshelf_core::model::{ChapterFormat, TocNode};
 
-use crate::{ParsedBook, ParsedChapter};
+use crate::{ParsedBook, ParsedChapter, htmlize};
 
 const HEADING_SUFFIXES: [char; 7] = ['章', '节', '回', '卷', '部', '篇', '集'];
 const EXACT_HEADINGS: [&str; 12] = [
@@ -85,10 +85,11 @@ fn split_chapters(text: &str, filename: &str) -> (String, Vec<ParsedChapter>) {
         let trimmed = line.trim();
         if is_heading(trimmed) && char_count(trimmed) <= 60 {
             if heading_seen {
+                let content = std::mem::take(&mut cur);
                 chapters.push(ParsedChapter {
                     title: std::mem::take(&mut cur_title),
-                    format: ChapterFormat::Text,
-                    content: std::mem::take(&mut cur),
+                    format: ChapterFormat::Html,
+                    content: htmlize::text_to_html(&content),
                 });
             }
             heading_seen = true;
@@ -99,10 +100,11 @@ fn split_chapters(text: &str, filename: &str) -> (String, Vec<ParsedChapter>) {
         }
     }
     if heading_seen {
+        let content = std::mem::take(&mut cur);
         chapters.push(ParsedChapter {
             title: std::mem::take(&mut cur_title),
-            format: ChapterFormat::Text,
-            content: std::mem::take(&mut cur),
+            format: ChapterFormat::Html,
+            content: htmlize::text_to_html(&content),
         });
     }
 
@@ -115,8 +117,8 @@ fn split_chapters(text: &str, filename: &str) -> (String, Vec<ParsedChapter>) {
     if chapters.is_empty() {
         chapters.push(ParsedChapter {
             title: title.clone(),
-            format: ChapterFormat::Text,
-            content: text.to_string(),
+            format: ChapterFormat::Html,
+            content: htmlize::text_to_html(text),
         });
     }
     (title, chapters)
@@ -193,9 +195,9 @@ mod tests {
         let (_t, chapters) = split_chapters(text, "book.txt");
         assert_eq!(chapters.len(), 2);
         assert_eq!(chapters[0].title, "第1章 开始");
-        assert_eq!(chapters[0].content, "正文一\n正文二\n\n");
+        assert_eq!(chapters[0].content, "<p>正文一<br/>正文二</p>\n");
         assert_eq!(chapters[1].title, "第十二章 结束");
-        assert_eq!(chapters[1].content, "正文三\n");
+        assert_eq!(chapters[1].content, "<p>正文三</p>\n");
     }
 
     #[test]
@@ -204,7 +206,7 @@ mod tests {
         let (title, chapters) = split_chapters(text, "novel.txt");
         assert_eq!(title, "novel");
         assert_eq!(chapters.len(), 1);
-        assert_eq!(chapters[0].content, text);
+        assert_eq!(chapters[0].content, htmlize::text_to_html(text));
     }
 
     #[test]
