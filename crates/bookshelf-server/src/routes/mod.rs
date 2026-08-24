@@ -127,6 +127,7 @@ pub fn router(state: St) -> Router {
                 .delete(delete(files::delete_file)),
         )
         .route("/api/files/{id}/chapters/{idx}", get(files::get_chapter))
+        .route("/api/files/{id}/download", get(files::download_file))
         .route(
             "/api/files/{id}/content-source",
             post(files::set_content_source),

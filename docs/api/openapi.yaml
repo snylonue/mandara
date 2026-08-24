@@ -932,6 +932,34 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+
+  /api/files/{id}/download:
+    get:
+      tags: [files]
+      summary: Download the retained original file bytes
+      operationId: downloadFile
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: The original bytes (epub or txt)
+          content:
+            application/epub+zip:
+              schema: {type: string, format: binary}
+            text/plain:
+              schema: {type: string, format: binary}
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: No original retained for this file
+
   /api/files/{id}/content-source:
     post:
       tags: [files]
@@ -1434,6 +1462,22 @@ components:
             chapter pulls use `volume_offset + idx`.
           type: integer
           minimum: 0
+        original:
+          description: |
+            Retained original file bytes (`data/files/`, served by
+            `GET /api/files/{id}/download`). null = plugin chapter-mode
+            files and uploads made before original retention.
+          type: object
+          nullable: true
+          required: [ext, size, sha256]
+          properties:
+            ext:
+              description: File extension without the dot (epub / txt)
+              type: string
+            size:
+              type: integer
+            sha256:
+              type: string
 
     ChapterMeta:
       type: object

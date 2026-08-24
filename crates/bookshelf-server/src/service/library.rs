@@ -17,8 +17,10 @@
 //! Visibility is per file: `private` = owner + admins only, `public` =
 //! visible to every logged-in user.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
+use anyhow::Context as _;
 use sqlx::SqlitePool;
 use tracing::{info, warn};
 
@@ -103,11 +105,18 @@ pub struct AcquireOutcome {
 pub struct Library {
     db: SqlitePool,
     plugins: Arc<PluginService>,
+    /// Directory for retained original file bytes
+    /// (`data/files/{file_id}.{ext}`; see docs/storage-unification-design.md).
+    files_dir: PathBuf,
 }
 
 impl Library {
-    pub fn new(db: SqlitePool, plugins: Arc<PluginService>) -> Self {
-        Library { db, plugins }
+    pub fn new(db: SqlitePool, plugins: Arc<PluginService>, files_dir: PathBuf) -> Self {
+        Library {
+            db,
+            plugins,
+            files_dir,
+        }
     }
 
     /// The plugin instance service (instance management, config, calls).
@@ -246,17 +255,26 @@ impl Library {
         let format = detect_format(&book_file.filename);
         let toc_json = serde_json::to_string(&parsed.toc).unwrap_or_else(|_| "[]".into());
         let label = format!("{source} 下载");
+        // Cache the fetched bytes as the file's original: the source may
+        // disappear later; download/reparse should not depend on it.
+        let (orig_ext, orig_sha256, orig_size) = self
+            .store_original(&file_id, format, &book_file.bytes)
+            .await?;
 
         // Rewrite the virtual row into a stored file: self-contained
         // (no content indirection), real format/toc/chapter count.
         sqlx::query(
             "UPDATE book_files SET format = ?, label = ?, toc = ?, content_source = NULL, \
-             content_external_id = NULL, chapter_count = ? WHERE id = ?",
+             content_external_id = NULL, chapter_count = ?, orig_ext = ?, orig_sha256 = ?, orig_size = ? \
+             WHERE id = ?",
         )
         .bind(format)
         .bind(&label)
         .bind(toc_json)
         .bind(parsed.chapters.len() as i64)
+        .bind(&orig_ext)
+        .bind(&orig_sha256)
+        .bind(orig_size)
         .bind(&file_id)
         .execute(&self.db)
         .await?;
@@ -425,7 +443,8 @@ impl Library {
     ) -> Result<Option<FileMeta>, ApiError> {
         let row: Option<FileRow> = sqlx::query_as(
             "SELECT id, book_id, source, external_id, content_source, content_external_id, format, \
-             label, visibility, owner_id, chapter_count, created_at, volume_no, volume_offset \
+             label, visibility, owner_id, chapter_count, created_at, volume_no, volume_offset, \
+             orig_ext, orig_sha256, orig_size \
              FROM book_files WHERE source = ? AND external_id = ?",
         )
         .bind(source)
@@ -495,7 +514,9 @@ impl Library {
                     self.store_cover_if_missing(book_id, cover).await?;
                 }
                 let file = self
-                    .store_local_file(&parsed, book_id, &user.id, filename, visibility, label)
+                    .store_local_file(
+                        &parsed, bytes, book_id, &user.id, filename, visibility, label,
+                    )
                     .await?;
                 (book_id.to_string(), file)
             }
@@ -584,7 +605,7 @@ impl Library {
                         let parsed = bookshelf_formats::parse(bytes, filename)?;
                         let file = self
                             .store_local_file(
-                                &parsed, &book_id, &user.id, filename, visibility, label,
+                                &parsed, bytes, &book_id, &user.id, filename, visibility, label,
                             )
                             .await?;
                         (book_id, file)
@@ -631,7 +652,9 @@ impl Library {
                     None => self.create_book(&parsed, &user.id, overrides).await?,
                 };
                 let file = self
-                    .store_local_file(&parsed, &book_id, &user.id, filename, visibility, label)
+                    .store_local_file(
+                        &parsed, bytes, &book_id, &user.id, filename, visibility, label,
+                    )
                     .await?;
                 (book_id, file)
             }
@@ -858,6 +881,7 @@ impl Library {
                     created_at: String::new(),
                     volume_no,
                     volume_offset: *start,
+                    original: None,
                 },
             ));
         }
@@ -1060,11 +1084,62 @@ impl Library {
         }))
     }
 
+    /// Retain the original file bytes on disk
+    /// (`data/files/{file_id}.{ext}`, storage-unification design §4.2)
+    /// and return the `book_files` columns `orig_ext, orig_sha256,
+    /// orig_size`.
+    async fn store_original(
+        &self,
+        file_id: &str,
+        ext: &str,
+        bytes: &[u8],
+    ) -> Result<(String, String, i64), ApiError> {
+        tokio::fs::create_dir_all(&self.files_dir)
+            .await
+            .with_context(|| format!("create files dir {}", self.files_dir.display()))?;
+        let path = self.original_path(file_id, ext);
+        tokio::fs::write(&path, bytes)
+            .await
+            .with_context(|| format!("write original {}", path.display()))?;
+        Ok((ext.to_string(), sha256_hex(bytes), bytes.len() as i64))
+    }
+
+    /// Disk path of a file's retained original bytes.
+    fn original_path(&self, file_id: &str, ext: &str) -> PathBuf {
+        self.files_dir.join(format!("{file_id}.{ext}"))
+    }
+
+    /// Load a file's retained original bytes (for download / reparse).
+    pub async fn get_original(
+        &self,
+        file: &FileMeta,
+    ) -> Result<Option<(Vec<u8>, String)>, ApiError> {
+        let Some(orig) = &file.original else {
+            return Ok(None);
+        };
+        let path = self.original_path(&file.id, &orig.ext);
+        match tokio::fs::read(&path).await {
+            Ok(bytes) => Ok(Some((bytes, orig.ext.clone()))),
+            // A DB row without its bytes (deleted by hand, restore from
+            // backup mismatch) is a recoverable 409, not a 500.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                warn!(file = %file.id, path = %path.display(), "original missing on disk");
+                Err(ApiError::Conflict(
+                    "original file missing on disk (restore data/files/ from backup)".into(),
+                ))
+            }
+            Err(e) => Err(anyhow::Error::new(e).context("read original").into()),
+        }
+    }
+
     /// Store an uploaded file (chapters + TOC) under the given metadata
     /// entry. The file's `external_id` equals its own id for local files.
+    /// The raw upload bytes are retained on disk (original retention).
+    #[allow(clippy::too_many_arguments)]
     async fn store_local_file(
         &self,
         parsed: &bookshelf_formats::ParsedBook,
+        bytes: &[u8],
         book_id: &str,
         owner_id: &str,
         filename: &str,
@@ -1074,11 +1149,13 @@ impl Library {
         let file_id = uuid::Uuid::new_v4().simple().to_string();
         let format = detect_format(filename);
         let toc_json = serde_json::to_string(&parsed.toc).unwrap_or_else(|_| "[]".into());
+        let (orig_ext, orig_sha256, orig_size) =
+            self.store_original(&file_id, format, bytes).await?;
 
         let mut tx = self.db.begin().await?;
         sqlx::query(
-            "INSERT INTO book_files (id, book_id, source, external_id, format, label, visibility, owner_id, chapter_count, toc) \
-             VALUES (?, ?, 'local', ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO book_files (id, book_id, source, external_id, format, label, visibility, owner_id, chapter_count, toc, orig_ext, orig_sha256, orig_size) \
+             VALUES (?, ?, 'local', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&file_id)
         .bind(book_id)
@@ -1089,6 +1166,9 @@ impl Library {
         .bind(owner_id)
         .bind(parsed.chapters.len() as i64)
         .bind(toc_json)
+        .bind(&orig_ext)
+        .bind(&orig_sha256)
+        .bind(orig_size)
         .execute(&mut *tx)
         .await?;
 
@@ -1640,7 +1720,7 @@ impl Library {
         // always-true bound flag.
         let rows: Vec<FileRow> = sqlx::query_as(
             "SELECT id, book_id, source, external_id, content_source, content_external_id, format, label, visibility, owner_id, \
-             chapter_count, created_at, volume_no, volume_offset FROM book_files WHERE book_id = ? \
+             chapter_count, created_at, volume_no, volume_offset, orig_ext, orig_sha256, orig_size FROM book_files WHERE book_id = ? \
              AND (? OR visibility = 'public' OR owner_id = ?) ORDER BY created_at DESC",
         )
         .bind(book_id)
@@ -1654,7 +1734,7 @@ impl Library {
     pub async fn get_file(&self, id: &str) -> Result<Option<FileMeta>, ApiError> {
         let row: Option<FileRow> = sqlx::query_as(
             "SELECT id, book_id, source, external_id, content_source, content_external_id, format, label, visibility, owner_id, \
-             chapter_count, created_at, volume_no, volume_offset FROM book_files WHERE id = ?",
+             chapter_count, created_at, volume_no, volume_offset, orig_ext, orig_sha256, orig_size FROM book_files WHERE id = ?",
         )
         .bind(id)
         .fetch_optional(&self.db)
@@ -1722,6 +1802,17 @@ impl Library {
     }
 
     pub async fn delete_file(&self, id: &str) -> Result<(), ApiError> {
+        // Remove the retained original first (best effort — a leftover
+        // disk file without a row is harmless garbage).
+        if let Some(file) = self.get_file(id).await? {
+            let orig = file.original.map(|o| self.original_path(id, &o.ext));
+            if let Some(path) = orig
+                && let Err(e) = tokio::fs::remove_file(&path).await
+                && e.kind() != std::io::ErrorKind::NotFound
+            {
+                warn!(file = %id, path = %path.display(), error = %e, "failed to remove original");
+            }
+        }
         let result = sqlx::query("DELETE FROM book_files WHERE id = ?")
             .bind(id)
             .execute(&self.db)
@@ -2221,6 +2312,7 @@ mod tests {
             created_at: String::new(),
             volume_no: 0,
             volume_offset: 0,
+            original: None,
         }
     }
 }

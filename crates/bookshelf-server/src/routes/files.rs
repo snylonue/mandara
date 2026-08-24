@@ -3,7 +3,7 @@
 
 use axum::Json;
 use axum::extract::{Path, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 
@@ -64,6 +64,50 @@ pub async fn get_chapter(
         Some(chapter) => Ok(Json(chapter)),
         None => Err(ApiError::not_found("chapter")),
     }
+}
+
+// GET /api/files/{id}/download ------------------------------------------------
+//
+// Streams the retained original bytes (upload or plugin file-mode pull).
+// Authorization is identical to chapter reads (owner/admin/public).
+// Files without a retained original (plugin chapter-mode, pre-retention
+// uploads) answer 404.
+pub async fn download_file(
+    State(st): State<St>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let user = current_user(&st, &headers).await?;
+    let file = load_visible_file(&st, &user, &id).await?;
+    let (bytes, ext) = st
+        .library
+        .get_original(&file)
+        .await?
+        .ok_or_else(|| ApiError::not_found("original"))?;
+    let mime = match ext.as_str() {
+        "epub" => "application/epub+zip",
+        _ => "text/plain; charset=utf-8",
+    };
+    // Filename: the book title (sanitized), falling back to the file id.
+    let book = st
+        .library
+        .get_book(&file.book_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("book"))?;
+    let safe_title: String = book
+        .title
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    let filename = format!("{}.{}", safe_title.trim_matches('_'), ext);
+    let disposition = format!("attachment; filename=\"{filename}\"");
+    Ok((
+        [
+            (header::CONTENT_TYPE, mime.to_string()),
+            (header::CONTENT_DISPOSITION, disposition),
+        ],
+        bytes,
+    ))
 }
 
 // PATCH /api/files/{id} -------------------------------------------------------

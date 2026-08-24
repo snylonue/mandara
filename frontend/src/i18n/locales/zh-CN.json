@@ -98,6 +98,8 @@
     "setPublic": "设为公开",
     "setPrivate": "设为隐藏",
     "share": "分享",
+    "download": "下载",
+    "downloadOriginal": "下载原始文件",
     "shareProgress": "分享进度",
     "delete": "删除",
     "confirmDeleteFile": "删除文件「{{label}}」？该文件的所有章节与会话将被删除。",

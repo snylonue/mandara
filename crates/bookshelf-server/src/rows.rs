@@ -4,8 +4,8 @@ use anyhow::anyhow;
 use sqlx::FromRow;
 
 use bookshelf_core::model::{
-    BookMeta, Chapter, ChapterFormat, ChapterMeta, FileMeta, Position, ReadingSession, Role,
-    SeriesMeta, Share, ShareKind, User, Visibility,
+    BookMeta, Chapter, ChapterFormat, ChapterMeta, FileMeta, OriginalInfo, Position,
+    ReadingSession, Role, SeriesMeta, Share, ShareKind, User, Visibility,
 };
 
 use crate::error::ApiError;
@@ -100,6 +100,9 @@ pub struct FileRow {
     pub created_at: String,
     pub volume_no: i64,
     pub volume_offset: i64,
+    pub orig_ext: Option<String>,
+    pub orig_sha256: Option<String>,
+    pub orig_size: Option<i64>,
 }
 
 impl FileRow {
@@ -119,6 +122,14 @@ impl FileRow {
             created_at: self.created_at,
             volume_no: self.volume_no.max(0) as u32,
             volume_offset: self.volume_offset.max(0) as u32,
+            original: match (self.orig_ext, self.orig_sha256, self.orig_size) {
+                (Some(ext), Some(sha), Some(size)) => Some(OriginalInfo {
+                    ext,
+                    size: size.max(0) as u64,
+                    sha256: sha,
+                }),
+                _ => None,
+            },
         })
     }
 }

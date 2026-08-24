@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type ChangeEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { ApiError, api } from "../api";
+import { ApiError, api, downloadBinary } from "../api";
 import { useAuth } from "../auth";
 import { BookCover } from "../components/BookCover";
 import {
@@ -145,6 +145,22 @@ function FileSection({
           <button className="mini-btn" onClick={() => void onShare(file.id, "book")}>
             {t("book.share")}
           </button>
+          {file.original && (
+            <button
+              className="mini-btn"
+              title={t("book.downloadOriginal")}
+              onClick={() =>
+                void downloadBinary(
+                  `/files/${file.id}/download`,
+                  `${file.label || file.format}.${file.original!.ext}`,
+                ).catch((err) =>
+                  toast.push("error", err instanceof Error ? err.message : t("book.opFailed")),
+                )
+              }
+            >
+              {t("book.download")}
+            </button>
+          )}
           {canManage && file.source === "local" && (
             <>
               <button className="mini-btn" onClick={() => void toggleVisibility()}>

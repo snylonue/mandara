@@ -136,6 +136,20 @@ pub struct FileMeta {
     /// Flat chapter index of this volume's first chapter inside the
     /// source (persisted because the plugin is stateless).
     pub volume_offset: u32,
+    /// Retained original file bytes (`data/files/{id}.{ext}`), when the
+    /// content came with one (uploads, plugin file-mode pulls). Enables
+    /// `GET /api/files/{id}/download` and `--reparse-originals`.
+    /// `None` = plugin chapter-mode files and pre-retention uploads.
+    pub original: Option<OriginalInfo>,
+}
+
+/// Metadata of a file's retained original bytes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OriginalInfo {
+    /// Original file extension without the dot (`epub` / `txt`).
+    pub ext: String,
+    pub size: u64,
+    pub sha256: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

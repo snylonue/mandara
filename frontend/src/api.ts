@@ -44,3 +44,20 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
 }
+
+/// Download a binary endpoint (e.g. the retained original at
+/// `/files/{id}/download`) as a file, carrying the auth token.
+export async function downloadBinary(path: string, filename: string): Promise<void> {
+  const headers: Record<string, string> = {};
+  const token = getToken();
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const res = await fetch(`/api${path}`, { headers });
+  if (!res.ok) throw new Error(res.statusText);
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}

@@ -471,6 +471,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/files/{id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download the retained original file bytes */
+        get: operations["downloadFile"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/files/{id}/content-source": {
         parameters: {
             query?: never;
@@ -686,6 +703,17 @@ export interface components {
              *     chapter pulls use `volume_offset + idx`.
              */
             volume_offset: number;
+            /**
+             * @description Retained original file bytes (`data/files/`, served by
+             *     `GET /api/files/{id}/download`). null = plugin chapter-mode
+             *     files and uploads made before original retention.
+             */
+            original?: {
+                /** @description File extension without the dot (epub / txt) */
+                ext: string;
+                size: number;
+                sha256: string;
+            } | null;
         };
         ChapterMeta: {
             idx: number;
@@ -1897,6 +1925,38 @@ export interface operations {
             };
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+        };
+    };
+    downloadFile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The original bytes (epub or txt) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/epub+zip": string;
+                    "text/plain": string;
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description No original retained for this file */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     setContentSource: {
