@@ -149,7 +149,7 @@ pub async fn update_session(
     let position = Position {
         chapter_idx: req.chapter_idx.unwrap_or(row.chapter_idx.max(0) as u32),
         offset: req.offset.unwrap_or(row.offset.max(0) as u32),
-        fraction: req.fraction.unwrap_or(f64::from(row.fraction)),
+        fraction: req.fraction.unwrap_or(row.fraction),
     }
     .clamped(chapter_count);
 
@@ -160,9 +160,9 @@ pub async fn update_session(
         .to_string();
     diesel::update(sessions::table.find(&session_id))
         .set((
-            sessions::chapter_idx.eq(position.chapter_idx as i32),
-            sessions::offset.eq(position.offset as i32),
-            sessions::fraction.eq(position.fraction as f32),
+            sessions::chapter_idx.eq(i64::from(position.chapter_idx)),
+            sessions::offset.eq(i64::from(position.offset)),
+            sessions::fraction.eq(position.fraction),
             sessions::updated_at.eq(now),
         ))
         .execute(&mut conn)

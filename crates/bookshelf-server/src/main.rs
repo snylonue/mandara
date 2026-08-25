@@ -59,7 +59,7 @@ async fn main() -> anyhow::Result<()> {
     // plugin loading — it needs neither wasm nor the HTTP stack.
     if cfg.reparse_originals {
         let files_dir = data_dir.join("files");
-        let (ok, failed) = service::library::reparse_originals(&pool, &files_dir).await?;
+        let (ok, failed) = service::library::reparse_originals(&diesel_db, &files_dir).await?;
         tracing::info!(reparsed = ok, failed, "reparse-originals finished");
         return Ok(());
     }
@@ -80,7 +80,7 @@ async fn main() -> anyhow::Result<()> {
     // the plugins' `store-image` import.
     let files_dir = data_dir.join("files");
     tokio::fs::create_dir_all(&files_dir).await?;
-    let image_store = service::images::DbImageStore::new(pool.clone(), files_dir.clone());
+    let image_store = service::images::DbImageStore::new(diesel_db.clone(), files_dir.clone());
     let wasms = load_dir(&cfg.plugins_dir, fetch_policy, image_store)?;
     tracing::info!(files = wasms.len(), "loaded wasm plugin files");
 

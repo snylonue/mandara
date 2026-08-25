@@ -204,7 +204,7 @@ impl PluginService {
         use diesel_async::RunQueryDsl as _;
 
         let mut conn = self.diesel_db.get().await?;
-        let rows: Vec<(String, String, String, i32)> = crate::schema::plugin_instances::table
+        let rows: Vec<(String, String, String, i64)> = crate::schema::plugin_instances::table
             .order(crate::schema::plugin_instances::created_at.asc())
             .select((
                 crate::schema::plugin_instances::id,
@@ -232,7 +232,7 @@ impl PluginService {
         use diesel_async::RunQueryDsl as _;
 
         let mut conn = self.diesel_db.get().await?;
-        let row: Option<(String, String, String, i32)> = crate::schema::plugin_instances::table
+        let row: Option<(String, String, String, i64)> = crate::schema::plugin_instances::table
             .find(id)
             .select((
                 crate::schema::plugin_instances::id,
@@ -376,7 +376,7 @@ impl PluginService {
 
         let mut conn = self.diesel_db.get().await?;
         let result = diesel::update(crate::schema::plugin_instances::table.find(id))
-            .set(crate::schema::plugin_instances::enabled.eq(enabled as i32))
+            .set(crate::schema::plugin_instances::enabled.eq(enabled as i64))
             .execute(&mut conn)
             .await?;
         if result == 0 {

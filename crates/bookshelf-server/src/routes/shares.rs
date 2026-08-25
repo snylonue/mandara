@@ -234,7 +234,7 @@ pub async fn get_share(
     let mut session = None;
     if let Some(sid) = &share.session_id {
         let mut conn = st.diesel_db.get().await?;
-        let srow: Option<(String, Option<String>, i32, i32, f32, String)> = sessions::table
+        let srow: Option<(String, Option<String>, i64, i64, f64, String)> = sessions::table
             .left_join(users::table)
             .filter(sessions::id.eq(sid))
             .select((
@@ -252,7 +252,7 @@ pub async fn get_share(
             let position = Position {
                 chapter_idx: chapter_idx.max(0) as u32,
                 offset: offset.max(0) as u32,
-                fraction: f64::from(fraction).clamp(0.0, 1.0),
+                fraction: fraction.clamp(0.0, 1.0),
             };
             session = Some(ShareSessionView {
                 id: sid.clone(),

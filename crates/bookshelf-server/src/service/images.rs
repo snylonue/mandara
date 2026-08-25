@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use sqlx::SqlitePool;
+use crate::db::DieselDb;
 
 use super::library::store_image;
 
@@ -17,13 +17,13 @@ use super::library::store_image;
 /// content — identical bytes return the same id.
 #[derive(Clone)]
 pub struct DbImageStore {
-    db: SqlitePool,
+    db: DieselDb,
     files_dir: PathBuf,
     rt: tokio::runtime::Handle,
 }
 
 impl DbImageStore {
-    pub fn new(db: SqlitePool, files_dir: PathBuf) -> Arc<Self> {
+    pub fn new(db: DieselDb, files_dir: PathBuf) -> Arc<Self> {
         Arc::new(Self {
             db,
             files_dir,

@@ -31,7 +31,8 @@ impl UserRow {
     }
 }
 
-#[derive(Debug, FromRow)]
+#[derive(Debug, sqlx::FromRow, diesel::prelude::Queryable, diesel::prelude::Selectable)]
+#[diesel(table_name = crate::schema::series, check_for_backend(diesel::sqlite::Sqlite))]
 pub struct SeriesRow {
     pub id: String,
     pub title: String,
@@ -56,7 +57,8 @@ impl SeriesRow {
     }
 }
 
-#[derive(Debug, FromRow)]
+#[derive(Debug, sqlx::FromRow, diesel::prelude::Queryable, diesel::prelude::Selectable)]
+#[diesel(table_name = crate::schema::books, check_for_backend(diesel::sqlite::Sqlite))]
 pub struct BookRow {
     pub id: String,
     pub title: String,
@@ -85,7 +87,8 @@ impl BookRow {
     }
 }
 
-#[derive(Debug, FromRow)]
+#[derive(Debug, sqlx::FromRow, diesel::prelude::Queryable, diesel::prelude::Selectable)]
+#[diesel(table_name = crate::schema::book_files, check_for_backend(diesel::sqlite::Sqlite))]
 pub struct FileRow {
     pub id: String,
     pub book_id: String,
@@ -135,7 +138,8 @@ impl FileRow {
     }
 }
 
-#[derive(Debug, FromRow)]
+#[derive(Debug, sqlx::FromRow, diesel::prelude::Queryable, diesel::prelude::Selectable)]
+#[diesel(table_name = crate::schema::chapters, check_for_backend(diesel::sqlite::Sqlite))]
 pub struct ChapterRow {
     pub idx: i64,
     pub title: String,
@@ -174,11 +178,9 @@ pub struct SessionRow {
     pub user_id: String,
     pub file_id: String,
     pub label: String,
-    // SQLite INTEGER columns map to i32 in Diesel's sqlite backend.
-    pub chapter_idx: i32,
-    pub offset: i32,
-    // REAL maps to f32; the model widens to f64 (progress fraction).
-    pub fraction: f32,
+    pub chapter_idx: i64,
+    pub offset: i64,
+    pub fraction: f64,
     pub updated_at: String,
 }
 
@@ -192,7 +194,7 @@ impl SessionRow {
             position: Position {
                 chapter_idx: self.chapter_idx.max(0) as u32,
                 offset: self.offset.max(0) as u32,
-                fraction: f64::from(self.fraction).clamp(0.0, 1.0),
+                fraction: self.fraction.clamp(0.0, 1.0),
             },
             updated_at: self.updated_at,
         }

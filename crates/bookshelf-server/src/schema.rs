@@ -1,7 +1,10 @@
 //! Diesel schema, generated from the SQL migrations in `migrations/`.
 //!
 //! Regenerate after every migration with `just schema`
-//! (`DATABASE_URL=<scratch db> diesel print-schema > src/schema.rs`).
+//! (`DATABASE_URL=<scratch db> diesel print-schema > src/schema.rs`),
+//! then widen `Integer` → `BigInt` and `Float` → `Double`: SQLite's
+//! dynamic typing makes both valid, and 64-bit widths match the row
+//! structs/models without casts at every boundary.
 
 // @generated automatically by Diesel CLI.
 
@@ -17,14 +20,14 @@ diesel::table! {
         label -> Text,
         visibility -> Text,
         owner_id -> Nullable<Text>,
-        chapter_count -> Integer,
+        chapter_count -> BigInt,
         toc -> Text,
         created_at -> Text,
-        volume_no -> Integer,
-        volume_offset -> Integer,
+        volume_no -> BigInt,
+        volume_offset -> BigInt,
         orig_ext -> Nullable<Text>,
         orig_sha256 -> Nullable<Text>,
-        orig_size -> Nullable<Integer>,
+        orig_size -> Nullable<BigInt>,
     }
 }
 
@@ -40,14 +43,14 @@ diesel::table! {
         cover -> Nullable<Binary>,
         cover_mime -> Nullable<Text>,
         series_id -> Nullable<Text>,
-        volume_no -> Integer,
+        volume_no -> BigInt,
     }
 }
 
 diesel::table! {
     chapters (file_id, idx) {
         file_id -> Text,
-        idx -> Integer,
+        idx -> BigInt,
         title -> Text,
         content -> Text,
     }
@@ -57,7 +60,7 @@ diesel::table! {
     images (id) {
         id -> Text,
         mime -> Text,
-        size -> Integer,
+        size -> BigInt,
         created_at -> Text,
     }
 }
@@ -67,7 +70,7 @@ diesel::table! {
         id -> Text,
         wasm_file -> Text,
         config -> Text,
-        enabled -> Integer,
+        enabled -> BigInt,
         created_at -> Text,
     }
 }
@@ -90,11 +93,11 @@ diesel::table! {
         user_id -> Text,
         file_id -> Text,
         label -> Text,
-        chapter_idx -> Integer,
+        chapter_idx -> BigInt,
         /// `offset` is a Diesel keyword; the column keeps its SQL name.
         #[sql_name = "offset"]
-        offset -> Integer,
-        fraction -> Float,
+        offset -> BigInt,
+        fraction -> Double,
         updated_at -> Text,
     }
 }
