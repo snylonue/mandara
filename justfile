@@ -20,6 +20,17 @@ test:
 fmt:
     cargo fmt --all
 
+# Regenerate crates/bookshelf-server/src/schema.rs from the SQL migrations
+# (run after EVERY new migration; the file is the Diesel compile-time schema).
+schema:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	db=$(mktemp -d)/schema.db
+	for f in crates/bookshelf-server/migrations/*.sql; do sqlite3 "$db" < "$f"; done
+	cd crates/bookshelf-server && DATABASE_URL="$db" diesel print-schema > src/schema.rs 2>/dev/null \
+		|| echo "diesel CLI not found — update src/schema.rs by hand (see the header note)"
+	echo "schema.rs regenerated"
+
 # Build the demo wasm plugins -> plugins-built/{hello,wiki,reader}.wasm
 # Deploy: cp plugins-built/*.wasm data/plugins/
 plugin-build:

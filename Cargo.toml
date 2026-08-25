@@ -43,6 +43,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 async-trait = "0.1"
 # note: sqlx queries in this project use the runtime (`sqlx::query*`) API,
 # so no DATABASE_URL is needed at compile time.
+diesel = { version = "2.3", features = ["sqlite"] }
+diesel-async = { version = "0.9", features = ["sqlite", "deadpool", "sync-connection-wrapper"] }
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros", "derive"] }
 jsonwebtoken = { version = "11", features = ["rust_crypto"] }
 argon2 = "0.5"

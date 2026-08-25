@@ -106,6 +106,18 @@ impl From<sqlx::Error> for ApiError {
     }
 }
 
+impl From<diesel::result::Error> for ApiError {
+    fn from(e: diesel::result::Error) -> Self {
+        ApiError::Internal(anyhow::Error::new(e))
+    }
+}
+
+impl From<diesel_async::pooled_connection::PoolError> for ApiError {
+    fn from(e: diesel_async::pooled_connection::PoolError) -> Self {
+        ApiError::Internal(anyhow::Error::new(e))
+    }
+}
+
 impl From<anyhow::Error> for ApiError {
     fn from(e: anyhow::Error) -> Self {
         ApiError::Internal(e)

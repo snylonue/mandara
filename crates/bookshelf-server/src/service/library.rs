@@ -104,6 +104,11 @@ pub struct AcquireOutcome {
 
 pub struct Library {
     db: SqlitePool,
+    /// Diesel pool (compile-time-checked queries); runs alongside `db`
+    /// during the sqlx→Diesel translation (docs/sql-refactor-plan.md).
+    /// Unused until the first module moves in P2.
+    #[allow(dead_code)]
+    diesel_db: crate::db::DieselDb,
     plugins: Arc<PluginService>,
     /// Directory for retained original file bytes
     /// (`data/files/{file_id}.{ext}`; see docs/storage-unification-design.md).
@@ -111,9 +116,15 @@ pub struct Library {
 }
 
 impl Library {
-    pub fn new(db: SqlitePool, plugins: Arc<PluginService>, files_dir: PathBuf) -> Self {
+    pub fn new(
+        db: SqlitePool,
+        diesel_db: crate::db::DieselDb,
+        plugins: Arc<PluginService>,
+        files_dir: PathBuf,
+    ) -> Self {
         Library {
             db,
+            diesel_db,
             plugins,
             files_dir,
         }

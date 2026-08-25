@@ -6,6 +6,9 @@ mod db;
 mod error;
 mod routes;
 mod rows;
+/// Diesel schema (generated from the migrations; see `just schema`).
+#[allow(dead_code, unused_imports)]
+mod schema;
 mod service;
 mod state;
 
@@ -81,7 +84,8 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(files = wasms.len(), "loaded wasm plugin files");
 
     let plugins = Arc::new(PluginService::new(pool.clone(), wasms));
-    let library = service::Library::new(pool.clone(), plugins, files_dir);
+    let diesel_db = db::connect_diesel(&cfg.db)?;
+    let library = service::Library::new(pool.clone(), diesel_db, plugins, files_dir);
     // Startup sync materializes the catalog of every enabled
     // `declare`-capable instance; search/lookup-only instances stay lazy.
     match library.sync_plugins().await {
