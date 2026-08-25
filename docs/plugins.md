@@ -192,6 +192,12 @@ Caps: 20 MiB per image, 96 MiB per call; exceeding them traps. A failed
 download should fall back to the remote URL (degraded rendering, retried
 on the next re-materialization) — see the wenku8 plugin.)
 
+**Epoch budget note.** Every `fetch` (pages *and* images) spends the
+same call budget (`BOOKSHELF_PLUGIN_FETCH_TIMEOUT_MS`, default 30 s).
+A plate-heavy chapter fetched over a slow CDN can need more: the wenku8
+verification measured ~7 s per plate, ≈2 min for a 16-plate 插图 chapter.
+Sources that store images should run with a raised fetch-timeout cap.
+
 ## HTTP acquisition (`http.fetch`)
 
 `http.fetch` is the one way to reach an external source. The host
