@@ -167,15 +167,18 @@ impl ChapterTitleRow {
     }
 }
 
-#[derive(Debug, FromRow)]
+#[derive(Debug, sqlx::FromRow, diesel::prelude::Queryable, diesel::prelude::Selectable)]
+#[diesel(table_name = crate::schema::sessions, check_for_backend(diesel::sqlite::Sqlite))]
 pub struct SessionRow {
     pub id: String,
     pub user_id: String,
     pub file_id: String,
     pub label: String,
-    pub chapter_idx: i64,
-    pub offset: i64,
-    pub fraction: f64,
+    // SQLite INTEGER columns map to i32 in Diesel's sqlite backend.
+    pub chapter_idx: i32,
+    pub offset: i32,
+    // REAL maps to f32; the model widens to f64 (progress fraction).
+    pub fraction: f32,
     pub updated_at: String,
 }
 
@@ -189,14 +192,15 @@ impl SessionRow {
             position: Position {
                 chapter_idx: self.chapter_idx.max(0) as u32,
                 offset: self.offset.max(0) as u32,
-                fraction: self.fraction.clamp(0.0, 1.0),
+                fraction: f64::from(self.fraction).clamp(0.0, 1.0),
             },
             updated_at: self.updated_at,
         }
     }
 }
 
-#[derive(Debug, FromRow)]
+#[derive(Debug, sqlx::FromRow, diesel::prelude::Queryable, diesel::prelude::Selectable)]
+#[diesel(table_name = crate::schema::shares, check_for_backend(diesel::sqlite::Sqlite))]
 pub struct ShareRow {
     pub token: String,
     pub kind: String,

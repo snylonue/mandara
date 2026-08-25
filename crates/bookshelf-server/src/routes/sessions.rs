@@ -9,9 +9,17 @@ use serde::{Deserialize, Serialize};
 
 use bookshelf_core::model::{Position, ReadingSession};
 
+use diesel::ExpressionMethods as _;
+use diesel::OptionalExtension as _;
+use diesel::QueryDsl as _;
+use diesel::prelude::SelectableHelper as _;
+use diesel_async::RunQueryDsl as _;
+
 use crate::error::ApiError;
 use crate::routes::{St, current_user, load_visible_file};
 use crate::rows::SessionRow;
+#[allow(unused_imports)]
+use crate::schema::sessions;
 
 #[derive(Serialize)]
 pub struct SessionsResponse {
@@ -30,14 +38,15 @@ pub async fn list_sessions(
     let user = current_user(&st, &headers).await?;
     let file = load_visible_file(&st, &user, &file_id).await?;
 
-    let rows: Vec<SessionRow> = sqlx::query_as(
-        "SELECT id, user_id, file_id, label, chapter_idx, offset, fraction, updated_at \
-         FROM sessions WHERE user_id = ? AND file_id = ? ORDER BY updated_at DESC",
-    )
-    .bind(&user.id)
-    .bind(&file_id)
-    .fetch_all(&st.db)
-    .await?;
+    let mut conn = st.diesel_db.get().await?;
+    let rows: Vec<SessionRow> = sessions::table
+        .filter(sessions::user_id.eq(&user.id))
+        .filter(sessions::file_id.eq(&file_id))
+        .order(sessions::updated_at.desc())
+        .select(SessionRow::as_select())
+        .load(&mut conn)
+        .await?;
+    drop(conn);
     let book_title = st
         .library
         .get_book(&file.book_id)
@@ -77,26 +86,26 @@ pub async fn create_session(
     }
 
     let id = uuid::Uuid::new_v4().simple().to_string();
-    sqlx::query(
-        "INSERT INTO sessions (id, user_id, file_id, label) VALUES (?, ?, ?, ?) \
-         ON CONFLICT (user_id, file_id, label) DO NOTHING",
-    )
-    .bind(&id)
-    .bind(&user.id)
-    .bind(&file_id)
-    .bind(label)
-    .execute(&st.db)
-    .await?;
+    let mut conn = st.diesel_db.get().await?;
+    diesel::insert_into(sessions::table)
+        .values((
+            sessions::id.eq(&id),
+            sessions::user_id.eq(&user.id),
+            sessions::file_id.eq(&file_id),
+            sessions::label.eq(label),
+        ))
+        .on_conflict((sessions::user_id, sessions::file_id, sessions::label))
+        .do_nothing()
+        .execute(&mut conn)
+        .await?;
 
-    let row: SessionRow = sqlx::query_as(
-        "SELECT id, user_id, file_id, label, chapter_idx, offset, fraction, updated_at \
-         FROM sessions WHERE user_id = ? AND file_id = ? AND label = ?",
-    )
-    .bind(&user.id)
-    .bind(&file_id)
-    .bind(label)
-    .fetch_one(&st.db)
-    .await?;
+    let row: SessionRow = sessions::table
+        .filter(sessions::user_id.eq(&user.id))
+        .filter(sessions::file_id.eq(&file_id))
+        .filter(sessions::label.eq(label))
+        .select(SessionRow::as_select())
+        .first(&mut conn)
+        .await?;
     Ok((StatusCode::CREATED, Json(row.into_model())))
 }
 
@@ -117,13 +126,13 @@ pub async fn update_session(
 ) -> Result<impl IntoResponse, ApiError> {
     let user = current_user(&st, &headers).await?;
 
-    let row: Option<SessionRow> = sqlx::query_as(
-        "SELECT id, user_id, file_id, label, chapter_idx, offset, fraction, updated_at \
-         FROM sessions WHERE id = ?",
-    )
-    .bind(&session_id)
-    .fetch_optional(&st.db)
-    .await?;
+    let mut conn = st.diesel_db.get().await?;
+    let row: Option<SessionRow> = sessions::table
+        .find(&session_id)
+        .select(SessionRow::as_select())
+        .first(&mut conn)
+        .await
+        .optional()?;
     let Some(row) = row else {
         return Err(ApiError::not_found("session"));
     };
@@ -140,28 +149,30 @@ pub async fn update_session(
     let position = Position {
         chapter_idx: req.chapter_idx.unwrap_or(row.chapter_idx.max(0) as u32),
         offset: req.offset.unwrap_or(row.offset.max(0) as u32),
-        fraction: req.fraction.unwrap_or(row.fraction),
+        fraction: req.fraction.unwrap_or(f64::from(row.fraction)),
     }
     .clamped(chapter_count);
 
-    sqlx::query(
-        "UPDATE sessions SET chapter_idx = ?, offset = ?, fraction = ?, \
-         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
-    )
-    .bind(position.chapter_idx as i64)
-    .bind(position.offset as i64)
-    .bind(position.fraction)
-    .bind(&session_id)
-    .execute(&st.db)
-    .await?;
+    // Timestamp generated on the Rust side (same format as the SQLite
+    // strftime default; the DB clock is no longer consulted for updates).
+    let now = chrono::Utc::now()
+        .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+        .to_string();
+    diesel::update(sessions::table.find(&session_id))
+        .set((
+            sessions::chapter_idx.eq(position.chapter_idx as i32),
+            sessions::offset.eq(position.offset as i32),
+            sessions::fraction.eq(position.fraction as f32),
+            sessions::updated_at.eq(now),
+        ))
+        .execute(&mut conn)
+        .await?;
 
-    let updated: SessionRow = sqlx::query_as(
-        "SELECT id, user_id, file_id, label, chapter_idx, offset, fraction, updated_at \
-         FROM sessions WHERE id = ?",
-    )
-    .bind(&session_id)
-    .fetch_one(&st.db)
-    .await?;
+    let updated: SessionRow = sessions::table
+        .find(&session_id)
+        .select(SessionRow::as_select())
+        .first(&mut conn)
+        .await?;
     Ok(Json(updated.into_model()))
 }
 
@@ -173,19 +184,21 @@ pub async fn delete_session(
     Path(session_id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
     let user = current_user(&st, &headers).await?;
-    let row: Option<(String,)> = sqlx::query_as("SELECT user_id FROM sessions WHERE id = ?")
-        .bind(&session_id)
-        .fetch_optional(&st.db)
-        .await?;
-    let Some((owner,)) = row else {
+    let mut conn = st.diesel_db.get().await?;
+    let owner: Option<String> = sessions::table
+        .find(&session_id)
+        .select(sessions::user_id)
+        .first(&mut conn)
+        .await
+        .optional()?;
+    let Some(owner) = owner else {
         return Err(ApiError::not_found("session"));
     };
     if owner != user.id && user.role != bookshelf_core::model::Role::Admin {
         return Err(ApiError::Forbidden);
     }
-    sqlx::query("DELETE FROM sessions WHERE id = ?")
-        .bind(&session_id)
-        .execute(&st.db)
+    diesel::delete(sessions::table.find(&session_id))
+        .execute(&mut conn)
         .await?;
     Ok(StatusCode::NO_CONTENT)
 }

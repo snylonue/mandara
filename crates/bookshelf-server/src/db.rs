@@ -175,3 +175,48 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+#[cfg(test)]
+mod join_tests {
+    use super::*;
+    use diesel::ExpressionMethods as _;
+    use diesel::OptionalExtension as _;
+    use diesel::QueryDsl as _;
+    use diesel::expression_methods::NullableExpressionMethods as _;
+    use diesel_async::RunQueryDsl as _;
+
+    #[tokio::test]
+    async fn left_join_sessions_users_compiles() {
+        let dir = std::env::temp_dir().join(format!(
+            "bookshelf-join-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pool = connect_diesel(&dir.join("t.db")).unwrap();
+        let mut conn = pool.get().await.unwrap();
+        use diesel_async::SimpleAsyncConnection as _;
+        conn.batch_execute(
+            "CREATE TABLE users (id TEXT PRIMARY KEY NOT NULL, username TEXT NOT NULL UNIQUE);\
+             CREATE TABLE sessions (id TEXT PRIMARY KEY NOT NULL, user_id TEXT NOT NULL, \
+             file_id TEXT NOT NULL, label TEXT NOT NULL DEFAULT '');",
+        )
+        .await
+        .unwrap();
+        let r: Option<(String, Option<String>)> = crate::schema::sessions::table
+            .left_join(crate::schema::users::table)
+            .select((
+                crate::schema::sessions::label,
+                crate::schema::users::username.nullable(),
+            ))
+            .filter(crate::schema::sessions::id.eq("nope"))
+            .first(&mut conn)
+            .await
+            .optional()
+            .unwrap();
+        assert!(r.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

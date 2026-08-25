@@ -8,11 +8,20 @@ use axum::response::IntoResponse;
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
 
+use diesel::ExpressionMethods as _;
+use diesel::OptionalExtension as _;
+use diesel::QueryDsl as _;
+use diesel::expression_methods::NullableExpressionMethods as _;
+use diesel::prelude::SelectableHelper as _;
+use diesel_async::RunQueryDsl as _;
+
 use bookshelf_core::model::{ChapterMeta, Position, Share, ShareKind, TocNode, User, Visibility};
 
 use crate::error::ApiError;
 use crate::routes::{St, can_manage_file, current_user, load_visible_file};
 use crate::rows::ShareRow;
+#[allow(unused_imports)]
+use crate::schema::{sessions, shares, users};
 
 fn now() -> String {
     Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
@@ -46,13 +55,13 @@ impl ShareResponse {
 }
 
 async fn load_share(st: &St, token: &str) -> Result<ShareRow, ApiError> {
-    let row: Option<ShareRow> = sqlx::query_as(
-        "SELECT token, kind, mode, file_id, session_id, created_by, expires_at, created_at \
-         FROM shares WHERE token = ?",
-    )
-    .bind(token)
-    .fetch_optional(&st.db)
-    .await?;
+    let mut conn = st.diesel_db.get().await?;
+    let row: Option<ShareRow> = shares::table
+        .find(token)
+        .select(ShareRow::as_select())
+        .first(&mut conn)
+        .await
+        .optional()?;
     let Some(row) = row else {
         return Err(ApiError::not_found("share"));
     };
@@ -109,11 +118,12 @@ pub async fn create_share(
             .session_id
             .ok_or_else(|| ApiError::bad_request("session_id required for session shares"))?;
         // session must exist, belong to the caller and point at this file
-        let row: Option<(String, String, String)> =
-            sqlx::query_as("SELECT user_id, file_id, label FROM sessions WHERE id = ?")
-                .bind(&sid)
-                .fetch_optional(&st.db)
-                .await?;
+        let row: Option<(String, String, String)> = sessions::table
+            .find(&sid)
+            .select((sessions::user_id, sessions::file_id, sessions::label))
+            .first(&mut st.diesel_db.get().await?)
+            .await
+            .optional()?;
         let Some((owner, sfile, _label)) = row else {
             return Err(ApiError::not_found("session"));
         };
@@ -134,30 +144,28 @@ pub async fn create_share(
             .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
     });
 
-    sqlx::query(
-        "INSERT INTO shares (token, kind, mode, file_id, session_id, created_by, expires_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&token)
-    .bind(match kind {
-        ShareKind::Book => "book",
-        ShareKind::Session => "session",
-    })
-    .bind(mode)
-    .bind(&file_id)
-    .bind(&session_id)
-    .bind(&user.id)
-    .bind(&expires_at)
-    .execute(&st.db)
-    .await?;
+    let mut conn = st.diesel_db.get().await?;
+    diesel::insert_into(shares::table)
+        .values((
+            shares::token.eq(&token),
+            shares::kind.eq(match kind {
+                ShareKind::Book => "book",
+                ShareKind::Session => "session",
+            }),
+            shares::mode.eq(mode),
+            shares::file_id.eq(&file_id),
+            shares::session_id.eq(&session_id),
+            shares::created_by.eq(&user.id),
+            shares::expires_at.eq(&expires_at),
+        ))
+        .execute(&mut conn)
+        .await?;
 
-    let row: ShareRow = sqlx::query_as(
-        "SELECT token, kind, mode, file_id, session_id, created_by, expires_at, created_at \
-         FROM shares WHERE token = ?",
-    )
-    .bind(&token)
-    .fetch_one(&st.db)
-    .await?;
+    let row: ShareRow = shares::table
+        .find(&token)
+        .select(ShareRow::as_select())
+        .first(&mut conn)
+        .await?;
     Ok((
         StatusCode::CREATED,
         Json(ShareResponse::from_share(row.into_model()?)),
@@ -225,23 +233,31 @@ pub async fn get_share(
 
     let mut session = None;
     if let Some(sid) = &share.session_id {
-        let srow: Option<(String, String, i64, i64, f64, String, String)> = sqlx::query_as(
-            "SELECT s.label, u.username, s.chapter_idx, s.offset, s.fraction, s.updated_at, s.id \
-             FROM sessions s LEFT JOIN users u ON u.id = s.user_id WHERE s.id = ?",
-        )
-        .bind(sid)
-        .fetch_optional(&st.db)
-        .await?;
-        if let Some((label, owner, chapter_idx, offset, fraction, updated_at, _id)) = srow {
+        let mut conn = st.diesel_db.get().await?;
+        let srow: Option<(String, Option<String>, i32, i32, f32, String)> = sessions::table
+            .left_join(users::table)
+            .filter(sessions::id.eq(sid))
+            .select((
+                sessions::label,
+                users::username.nullable(),
+                sessions::chapter_idx,
+                sessions::offset,
+                sessions::fraction,
+                sessions::updated_at,
+            ))
+            .first(&mut conn)
+            .await
+            .optional()?;
+        if let Some((label, owner, chapter_idx, offset, fraction, updated_at)) = srow {
             let position = Position {
                 chapter_idx: chapter_idx.max(0) as u32,
                 offset: offset.max(0) as u32,
-                fraction: fraction.clamp(0.0, 1.0),
+                fraction: f64::from(fraction).clamp(0.0, 1.0),
             };
             session = Some(ShareSessionView {
                 id: sid.clone(),
                 label,
-                owner_username: owner,
+                owner_username: owner.unwrap_or_default(),
                 position,
                 percent: position.percent(),
                 updated_at,
@@ -353,9 +369,9 @@ pub async fn delete_share(
     if !is_creator && user.role != bookshelf_core::model::Role::Admin {
         return Err(ApiError::Forbidden);
     }
-    sqlx::query("DELETE FROM shares WHERE token = ?")
-        .bind(&token)
-        .execute(&st.db)
+    let mut conn = st.diesel_db.get().await?;
+    diesel::delete(shares::table.find(&token))
+        .execute(&mut conn)
         .await?;
     Ok(StatusCode::NO_CONTENT)
 }
