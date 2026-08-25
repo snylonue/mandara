@@ -28,6 +28,7 @@ use bookshelf_core::model::{
     BookMeta, Chapter, ChapterMeta, FileMeta, Role, SeriesMeta, TocNode, User, Visibility,
 };
 use bookshelf_core::source::{SourceBook, SourceBookFile, SourceChapter, SourceVolume};
+use bookshelf_formats::ParsedBook;
 
 use crate::error::ApiError;
 use crate::rows::{BookRow, ChapterRow, ChapterTitleRow, FileRow, SeriesRow};
@@ -240,7 +241,8 @@ impl Library {
         book_file: &SourceBookFile,
         book_id: &str,
     ) -> Result<FileMeta, ApiError> {
-        let parsed = bookshelf_formats::parse(&book_file.bytes, &book_file.filename)?;
+        let mut parsed = bookshelf_formats::parse(&book_file.bytes, &book_file.filename)?;
+        ingest_parsed_book(&self.db, &self.files_dir, &mut parsed).await?;
         // The virtual row for (source, external_id) under `book_id` was
         // created by `ensure_plugin_book` / `attach_plugin_file`; rewrite
         // it into a stored file: self-contained (no content indirection),
@@ -496,7 +498,8 @@ impl Library {
         let (book_id, file) = match (content, metadata) {
             // ---- attach an uploaded file to existing metadata -----------
             (AcquireContent::File { bytes, filename }, AcquireMetadata::Attach { book_id }) => {
-                let parsed = bookshelf_formats::parse(bytes, filename)?;
+                let mut parsed = bookshelf_formats::parse(bytes, filename)?;
+                ingest_parsed_book(&self.db, &self.files_dir, &mut parsed).await?;
                 // The caller must be able to see the book (its owner, an
                 // admin, or via a public file).
                 let _ = self
@@ -600,7 +603,8 @@ impl Library {
                 }
                 match content {
                     AcquireContent::File { bytes, filename } => {
-                        let parsed = bookshelf_formats::parse(bytes, filename)?;
+                        let mut parsed = bookshelf_formats::parse(bytes, filename)?;
+                        ingest_parsed_book(&self.db, &self.files_dir, &mut parsed).await?;
                         let file = self
                             .store_local_file(
                                 &parsed, bytes, &book_id, &user.id, filename, visibility, label,
@@ -622,7 +626,8 @@ impl Library {
             // otherwise create metadata parsed from the file. `overrides`
             // correct the produced metadata in both cases.
             (AcquireContent::File { bytes, filename }, AcquireMetadata::New { overrides }) => {
-                let parsed = bookshelf_formats::parse(bytes, filename)?;
+                let mut parsed = bookshelf_formats::parse(bytes, filename)?;
+                ingest_parsed_book(&self.db, &self.files_dir, &mut parsed).await?;
                 let hash = sha256_hex(bytes);
                 let book_id = match self.plugins.identify_upload(filename, &hash).await? {
                     Some((source, entry)) => {
@@ -1909,10 +1914,11 @@ impl Library {
             if self.plugins.declares(source_id, "book-file").await?
                 && let Some(book_file) = self.plugins.get_book_file(source_id, external_id).await?
             {
-                if let (Some(entry), Ok(parsed)) = (
-                    entry.as_ref(),
-                    bookshelf_formats::parse(&book_file.bytes, &book_file.filename),
-                ) {
+                let parsed = bookshelf_formats::parse(&book_file.bytes, &book_file.filename)
+                    .inspect_err(|e| warn!(error = %e, "file-mode reparse failed"))
+                    .ok();
+                if let (Some(entry), Some(mut parsed)) = (entry.as_ref(), parsed) {
+                    ingest_parsed_book(&self.db, &self.files_dir, &mut parsed).await?;
                     // Rewrite this row like `materialize_file_mode`
                     // (metadata stays; content becomes self-contained).
                     let toc_json =
@@ -2184,6 +2190,65 @@ const IMAGE_TIMEOUT_SECS: u64 = 30;
 const IMAGE_MAX_BYTES: u64 = 20 * 1024 * 1024;
 const IMAGE_CONCURRENCY: usize = 4;
 
+/// Store image bytes in the content-addressed image store: id = sha256 hex,
+/// bytes at `{files_dir}/images/{id}`, row in the `images` table. Duplicate
+/// bytes are a no-op (same id). Returns the id for referencing the image as
+/// `/api/images/{id}`.
+async fn store_image(
+    db: &SqlitePool,
+    files_dir: &Path,
+    bytes: &[u8],
+    mime: &str,
+) -> anyhow::Result<String> {
+    let id = sha256_hex(bytes);
+    let dir = files_dir.join("images");
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .with_context(|| format!("create images dir {}", dir.display()))?;
+    let path = dir.join(&id);
+    if !path.exists() {
+        tokio::fs::write(&path, bytes)
+            .await
+            .with_context(|| format!("write image {}", path.display()))?;
+    }
+    sqlx::query("INSERT OR IGNORE INTO images (id, mime, size) VALUES (?, ?, ?)")
+        .bind(&id)
+        .bind(mime)
+        .bind(bytes.len() as i64)
+        .execute(db)
+        .await?;
+    Ok(id)
+}
+
+/// Ingest boundary for parsed book files: stores every extracted image in
+/// the image store and rewrites the parser's ingest placeholders
+/// (`src="image:{n}"`) to canonical `/api/images/{id}` references, so all
+/// stored chapter HTML — uploads and plugin materializations alike — uses
+/// one image reference format.
+pub async fn ingest_parsed_book(
+    db: &SqlitePool,
+    files_dir: &Path,
+    parsed: &mut ParsedBook,
+) -> anyhow::Result<()> {
+    if parsed.images.is_empty() {
+        return Ok(());
+    }
+    let mut ids = Vec::with_capacity(parsed.images.len());
+    for image in &parsed.images {
+        ids.push(store_image(db, files_dir, &image.bytes, &image.mime).await?);
+    }
+    for chapter in &mut parsed.chapters {
+        for (n, id) in ids.iter().enumerate() {
+            let placeholder = format!("src=\"image:{n}\"");
+            let reference = format!("src=\"/api/images/{id}\"");
+            if chapter.content.contains(&placeholder) {
+                chapter.content = chapter.content.replace(&placeholder, &reference);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Extract the remote image URLs referenced by a chapter's HTML
 /// (`<img src="http(s)://…">`; data URIs are left alone), deduplicated
 /// in order of first appearance.
@@ -2294,15 +2359,13 @@ impl Library {
                     warn!(path = %path.display(), error = %e, "cannot write image");
                     continue;
                 }
-                if let Err(e) = sqlx::query(
-                    "INSERT OR IGNORE INTO images (id, url, mime, size) VALUES (?, ?, ?, ?)",
-                )
-                .bind(&id)
-                .bind(&url)
-                .bind(&mime)
-                .bind(bytes.len() as i64)
-                .execute(&self.db)
-                .await
+                if let Err(e) =
+                    sqlx::query("INSERT OR IGNORE INTO images (id, mime, size) VALUES (?, ?, ?)")
+                        .bind(&id)
+                        .bind(&mime)
+                        .bind(bytes.len() as i64)
+                        .execute(&self.db)
+                        .await
                 {
                     warn!(url = %url, error = %e, "cannot record image");
                     continue;
@@ -2401,7 +2464,7 @@ pub async fn reparse_originals(
                 continue;
             }
         };
-        let parsed = match bookshelf_formats::parse(&bytes, &format!("original.{ext}")) {
+        let mut parsed = match bookshelf_formats::parse(&bytes, &format!("original.{ext}")) {
             Ok(parsed) => parsed,
             Err(e) => {
                 warn!(file = %file_id, ext = %ext, error = %e, "reparse: parse failed");
@@ -2409,6 +2472,11 @@ pub async fn reparse_originals(
                 continue;
             }
         };
+        if let Err(e) = ingest_parsed_book(db, files_dir, &mut parsed).await {
+            warn!(file = %file_id, ext = %ext, error = %e, "reparse: image ingest failed");
+            failed += 1;
+            continue;
+        }
         let toc_json = serde_json::to_string(&parsed.toc).unwrap_or_else(|_| "[]".into());
         let count = parsed.chapters.len() as i64;
         let mut tx = db.begin().await?;
@@ -2468,6 +2536,8 @@ fn sha256_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bookshelf_formats::ParsedImage;
+    use std::str::FromStr;
 
     fn vol(title: &str, n: u32) -> SourceVolume {
         SourceVolume {
@@ -2594,5 +2664,79 @@ mod tests {
             volume_offset: 0,
             original: None,
         }
+    }
+
+    #[tokio::test]
+    async fn ingest_stores_images_and_rewrites_placeholders() {
+        let opts = sqlx::sqlite::SqliteConnectOptions::from_str("sqlite::memory:")
+            .unwrap()
+            .create_if_missing(true);
+        let db = SqlitePool::connect_with(opts).await.unwrap();
+        sqlx::query(
+            "CREATE TABLE images (id TEXT PRIMARY KEY NOT NULL, mime TEXT NOT NULL, \
+             size INTEGER NOT NULL, created_at TEXT NOT NULL DEFAULT '')",
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+
+        let dir = std::env::temp_dir().join(format!(
+            "bookshelf-ingest-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+
+        // Two distinct images; the first is referenced twice (dedup by id).
+        let img_a = vec![1u8, 2, 3, 4];
+        let img_b = vec![9u8, 8, 7];
+        let mut parsed = ParsedBook {
+            title: "t".into(),
+            authors: vec![],
+            description: None,
+            cover_url: None,
+            cover: None,
+            images: vec![
+                ParsedImage {
+                    bytes: img_a.clone(),
+                    mime: "image/png".into(),
+                },
+                ParsedImage {
+                    bytes: img_b,
+                    mime: "image/jpeg".into(),
+                },
+            ],
+            chapters: vec![bookshelf_formats::ParsedChapter {
+                title: "c0".into(),
+                content: "<p><img src=\"image:1\"/></p><figure><img src=\"image:0\"/></figure>\
+                     <p><img src=\"image:0\"/></p>"
+                    .into(),
+            }],
+            toc: vec![],
+        };
+        ingest_parsed_book(&db, &dir, &mut parsed).await.unwrap();
+
+        // Both placeholders rewritten to the canonical reference form.
+        let content = &parsed.chapters[0].content;
+        assert!(!content.contains("src=\"image:"));
+        assert_eq!(content.matches("/api/images/").count(), 3);
+
+        // Rows + bytes stored, deduped by content (two ids total).
+        let rows: Vec<(String, String, i64)> =
+            sqlx::query_as("SELECT id, mime, size FROM images ORDER BY id")
+                .fetch_all(&db)
+                .await
+                .unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|(_, _, size)| *size > 0));
+        for row in &rows {
+            assert!(dir.join("images").join(&row.0).exists());
+        }
+        let id_a = sha256_hex(&img_a);
+        assert!(content.contains(&format!("/api/images/{id_a}")));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

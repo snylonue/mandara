@@ -22,6 +22,12 @@ pub struct ParsedBook {
     /// Cover image extracted from the source file (epub only), stored by
     /// the server and served via `GET /api/books/{id}/cover`.
     pub cover: Option<CoverImage>,
+    /// Embedded raster images extracted from the source (epub only), in
+    /// first-reference order. Chapter HTML references them by placeholder
+    /// (`src="image:{n}"`, `n` = index here); the server stores each image
+    /// in the content-addressed image store at ingest and rewrites the
+    /// placeholders to `/api/images/{id}`.
+    pub images: Vec<ParsedImage>,
     pub chapters: Vec<ParsedChapter>,
     /// Hierarchical table of contents per the ebook's nav/NCX. `idx`
     /// references entries of `chapters`; pure group nodes have `None`.
@@ -31,6 +37,13 @@ pub struct ParsedBook {
 /// Cover image bytes with their content type (e.g. `image/jpeg`).
 #[derive(Debug, Clone)]
 pub struct CoverImage {
+    pub bytes: Vec<u8>,
+    pub mime: String,
+}
+
+/// An embedded chapter image extracted from the source file.
+#[derive(Debug, Clone)]
+pub struct ParsedImage {
     pub bytes: Vec<u8>,
     pub mime: String,
 }

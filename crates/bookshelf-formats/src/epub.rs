@@ -23,7 +23,7 @@ use std::io::{Read, Seek};
 use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use base64::Engine;
+use crate::ParsedImage;
 use bookshelf_core::error::{Error, Result};
 use bookshelf_core::model::TocNode;
 use ego_tree::NodeRef;
@@ -176,6 +176,10 @@ fn parse_path(path: &Path) -> Result<ParsedBook> {
 
     let mut chapters = Vec::new();
     let mut kept_spine = Vec::new(); // spine positions that became chapters
+    // Embedded images, in first-reference order; the same container
+    // resource referenced from several documents becomes one entry.
+    let mut images: Vec<ParsedImage> = Vec::new();
+    let mut seen_images: HashMap<String, usize> = HashMap::new();
     for (chapter_idx, (id, mime, resource_path)) in spine.into_iter().enumerate() {
         if !XHTML_MIMES.contains(&mime.as_str()) {
             continue;
@@ -194,7 +198,13 @@ fn parse_path(path: &Path) -> Result<ParsedBook> {
         if !in_toc && heading.is_none() {
             continue;
         }
-        let content = clean_xhtml(&mut doc, &html, &resource_path);
+        let content = clean_xhtml(
+            &mut doc,
+            &html,
+            &resource_path,
+            &mut images,
+            &mut seen_images,
+        );
         if !has_readable_content(&content) {
             continue;
         }
@@ -243,6 +253,7 @@ fn parse_path(path: &Path) -> Result<ParsedBook> {
         description,
         cover_url: None,
         cover,
+        images,
         chapters,
         toc,
     })
@@ -588,10 +599,17 @@ fn remap_branches(
 /// - drops scripts, styles, forms, foreign content and any event handler /
 ///   `style` attribute (whitelist approach);
 /// - unknown tags are unwrapped (their text content survives);
-/// - inlines referenced container images as `data:` URIs;
+/// - extracts referenced container images into `images` and rewrites their
+///   `src` to an ingest placeholder (`image:{n}`, n = index in `images`);
 /// - drops cross-document links (chapter-local anchors and http(s)/mailto
 ///   links survive).
-fn clean_xhtml<R: Read + Seek>(doc: &mut EpubDoc<R>, html: &str, doc_path: &Path) -> String {
+fn clean_xhtml<R: Read + Seek>(
+    doc: &mut EpubDoc<R>,
+    html: &str,
+    doc_path: &Path,
+    images: &mut Vec<ParsedImage>,
+    seen: &mut HashMap<String, usize>,
+) -> String {
     let parsed = Html::parse_document(html);
     let body = parsed
         .select(&Selector::parse("body").expect("static selector"))
@@ -601,7 +619,7 @@ fn clean_xhtml<R: Read + Seek>(doc: &mut EpubDoc<R>, html: &str, doc_path: &Path
 
     let mut out = String::with_capacity(html.len());
     for child in body.children() {
-        sanitize_node(&mut out, &child, doc, base);
+        sanitize_node(&mut out, &child, doc, base, images, seen);
     }
     out
 }
@@ -611,6 +629,8 @@ fn sanitize_node<R: Read + Seek>(
     node: &NodeRef<'_, scraper::node::Node>,
     doc: &mut EpubDoc<R>,
     base: &Path,
+    images: &mut Vec<ParsedImage>,
+    seen: &mut HashMap<String, usize>,
 ) {
     match node.value() {
         Node::Text(t) => escape_html(out, &t.text),
@@ -628,7 +648,8 @@ fn sanitize_node<R: Read + Seek>(
                     if !allowed_attrs(&tag).contains(&name.as_str()) {
                         continue;
                     }
-                    let Some(value) = rewrite_attr(doc, base, &tag, &name, value) else {
+                    let Some(value) = rewrite_attr(doc, base, &tag, &name, value, images, seen)
+                    else {
                         continue;
                     };
                     out.push(' ');
@@ -640,7 +661,7 @@ fn sanitize_node<R: Read + Seek>(
                 out.push('>');
             }
             for child in node.children() {
-                sanitize_node(out, &child, doc, base);
+                sanitize_node(out, &child, doc, base, images, seen);
             }
             if allowed && !VOID_TAGS.contains(&tag.as_str()) {
                 out.push_str("</");
@@ -661,23 +682,33 @@ fn rewrite_attr<R: Read + Seek>(
     tag: &str,
     name: &str,
     value: &str,
+    images: &mut Vec<ParsedImage>,
+    seen: &mut HashMap<String, usize>,
 ) -> Option<String> {
     match (tag, name) {
-        ("img", "src") => inline_image(doc, base, value),
+        ("img", "src") => extract_image(doc, base, value, images, seen),
         ("a", "href") if !keep_link(value) => None,
         _ => Some(value.to_string()),
     }
 }
 
 /// Resolve a (possibly relative) epub image reference against the current
-/// document's directory and inline it as a `data:` URI. Non-container
-/// schemes (http, …) are left untouched.
-fn inline_image<R: Read + Seek>(doc: &mut EpubDoc<R>, base: &Path, src: &str) -> Option<String> {
+/// document's directory, extract the bytes into `images` (deduplicated by
+/// container path) and return an ingest placeholder reference. Non-container
+/// schemes are left untouched (`data:`) or dropped (remote URLs — the
+/// reader must not leak its IP to third-party hosts).
+fn extract_image<R: Read + Seek>(
+    doc: &mut EpubDoc<R>,
+    base: &Path,
+    src: &str,
+    images: &mut Vec<ParsedImage>,
+    seen: &mut HashMap<String, usize>,
+) -> Option<String> {
     if src.starts_with("data:") {
         return Some(src.to_string());
     }
     if src.starts_with("http://") || src.starts_with("https://") {
-        return None; // don't leak the reader's IP to third-party hosts
+        return None;
     }
     let path = if let Some(rel) = src.strip_prefix('/') {
         // Container-root-relative (non-standard but seen in the wild).
@@ -686,18 +717,23 @@ fn inline_image<R: Read + Seek>(doc: &mut EpubDoc<R>, base: &Path, src: &str) ->
         base.join(src)
     };
     let key = path_key(&path);
+    if let Some(n) = seen.get(&key) {
+        return Some(format!("image:{n}"));
+    }
     let Some(bytes) = doc.get_resource_by_path(&key) else {
         return None; // broken reference: drop the image rather than a 404 icon
     };
     let mime = doc
         .get_resource_mime_by_path(&key)
         .unwrap_or_else(|| "image/png".to_string());
-    // Restrict to raster images we can render inline.
+    // Restrict to raster images.
     if !(mime.starts_with("image/") && !mime.contains("svg")) {
         return None;
     }
-    let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
-    Some(format!("data:{mime};base64,{b64}"))
+    let n = images.len();
+    images.push(ParsedImage { bytes, mime });
+    seen.insert(key, n);
+    Some(format!("image:{n}"))
 }
 
 /// Which `href` values survive sanitization: in-page anchors and
@@ -1033,8 +1069,13 @@ mod tests {
         assert!(!c0.content.contains("svg"));
         assert!(c0.content.contains("<table>"));
 
-        // Inline image becomes a data URI.
-        assert!(c0.content.contains("data:image/png;base64,"));
+        // Embedded image becomes an ingest placeholder; the bytes land in
+        // `book.images` for the server's image store.
+        let placeholder = "image:0";
+        assert!(c0.content.contains(&format!(r#"src="{placeholder}""#)));
+        assert_eq!(book.images.len(), 1);
+        assert!(book.images[0].mime.starts_with("image/"));
+        assert!(!book.images[0].bytes.is_empty());
         // Links: in-page anchor and http survive; cross-chapter href is
         // dropped (the reader renders one chapter at a time).
         assert!(c0.content.contains(r##"<a href="#sec1">"##));
@@ -1077,7 +1118,8 @@ mod tests {
         assert_eq!(book.toc[1].children[0].title, "终章");
         assert_eq!(book.toc[1].children[0].idx, Some(2));
         assert!(book.chapters[0].content.contains("<h1>正文标题 1</h1>"));
-        assert!(book.chapters[0].content.contains("data:image/png;base64,"));
+        assert!(book.chapters[0].content.contains("src=\"image:0\""));
+        assert!(!book.images.is_empty());
     }
 
     /// Deep fixture: 卷 spans (href-less groups) at every level above the

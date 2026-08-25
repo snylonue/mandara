@@ -281,7 +281,6 @@ dependencies = [
 name = "bookshelf-formats"
 version = "0.1.0"
 dependencies = [
- "base64",
  "bookshelf-core",
  "ego-tree",
  "encoding_rs",
