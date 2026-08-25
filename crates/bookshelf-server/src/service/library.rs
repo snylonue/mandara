@@ -2179,8 +2179,7 @@ fn original_path(files_dir: &Path, file_id: &str, ext: &str) -> PathBuf {
 /// Hard caps for host-side chapter-image downloads. Images referenced by
 /// plugin chapter text are fetched by the host at materialization time
 /// (browsers often cannot load the source CDN directly, e.g. wenku8's
-/// pic host); any public host is allowed, guarded by an SSRF resolve
-/// check.
+/// pic host).
 const IMAGE_TIMEOUT_SECS: u64 = 30;
 const IMAGE_MAX_BYTES: u64 = 20 * 1024 * 1024;
 const IMAGE_CONCURRENCY: usize = 4;
@@ -2204,53 +2203,13 @@ fn remote_image_urls(html: &str) -> Vec<String> {
     out
 }
 
-/// SSRF guard for host-side image fetches: every resolved address must be
-/// a public unicast address (blocks loopback / private / link-local /
-/// unspecified targets, v4 and v6).
-fn is_public_socket_addr(addr: &std::net::SocketAddr) -> bool {
-    use std::net::IpAddr;
-    match addr.ip() {
-        IpAddr::V4(v4) => {
-            !(v4.is_loopback()
-                || v4.is_private()
-                || v4.is_link_local()
-                || v4.is_unspecified()
-                || v4.is_broadcast()
-                || v4.is_documentation())
-        }
-        IpAddr::V6(v6) => {
-            !(v6.is_loopback()
-                || v6.is_unspecified()
-                || (v6.segments()[0] & 0xfe00) == 0xfc00 // unique local
-                || (v6.segments()[0] & 0xffc0) == 0xfe80) // link local
-        }
-    }
-}
-
 /// Download one image (blocking; runs on the blocking pool). Returns the
 /// sha256 hex and mime type; the caller stores bytes + DB row.
+/// Download one image (blocking; runs on the blocking pool). Returns the
+/// bytes and mime type; the caller stores them + the DB row. URL
+/// validation (scheme, well-formedness) is ureq's job — it errors on
+/// anything it cannot request.
 fn download_image(url: &str) -> anyhow::Result<(Vec<u8>, String)> {
-    use std::net::ToSocketAddrs;
-
-    let (scheme, rest) = url
-        .split_once("://")
-        .ok_or_else(|| anyhow::anyhow!("no scheme"))?;
-    if scheme != "https" && scheme != "http" {
-        anyhow::bail!("unsupported scheme `{scheme}`");
-    }
-    let authority = rest.split('/').next().unwrap_or_default();
-    let host = authority.split('@').next_back().unwrap_or(authority);
-    let host = host.split(':').next().unwrap_or(host);
-    let port = if scheme == "https" { 443 } else { 80 };
-    // Resolve-time SSRF check: every resolved address must be public.
-    let addrs: Vec<_> = (host, port).to_socket_addrs()?.collect();
-    if addrs.is_empty() {
-        anyhow::bail!("host `{host}` does not resolve");
-    }
-    if let Some(bad) = addrs.iter().find(|a| !is_public_socket_addr(a)) {
-        anyhow::bail!("refusing non-public address {bad}");
-    }
-
     let agent = ureq::AgentBuilder::new()
         .timeout(std::time::Duration::from_secs(IMAGE_TIMEOUT_SECS))
         .redirects(5)
@@ -2523,21 +2482,6 @@ mod tests {
 <p><img src=\"data:image/png;base64,AAAA\"/></p><img src=\"https://pic.example/a.jpg\">\
 <img src=\"/api/images/abc\">";
         assert_eq!(remote_image_urls(html), vec!["https://pic.example/a.jpg"]);
-    }
-
-    #[test]
-    fn ssf_guard_rejects_non_public_addresses() {
-        use std::net::{IpAddr, SocketAddr};
-        let f = |ip: IpAddr| is_public_socket_addr(&SocketAddr::new(ip, 443));
-        assert!(!f("127.0.0.1".parse().unwrap()));
-        assert!(!f("10.0.0.5".parse().unwrap()));
-        assert!(!f("192.168.1.1".parse().unwrap()));
-        assert!(!f("169.254.169.254".parse().unwrap()));
-        assert!(!f("::1".parse().unwrap()));
-        assert!(!f("fd00::5".parse().unwrap()));
-        assert!(!f("fe80::1".parse().unwrap()));
-        assert!(f("93.184.216.34".parse().unwrap()));
-        assert!(f("2606:2800:220:1:248:1893:25c8:1946".parse().unwrap()));
     }
 
     #[test]

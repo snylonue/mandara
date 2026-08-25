@@ -676,7 +676,7 @@ fn inline_image<R: Read + Seek>(doc: &mut EpubDoc<R>, base: &Path, src: &str) ->
     if src.starts_with("data:") {
         return Some(src.to_string());
     }
-    if src.starts_with("http://") || src.starts_with("https://") {
+    if has_web_scheme(src) {
         return None; // don't leak the reader's IP to third-party hosts
     }
     let path = if let Some(rel) = src.strip_prefix('/') {
@@ -704,10 +704,19 @@ fn inline_image<R: Read + Seek>(doc: &mut EpubDoc<R>, base: &Path, src: &str) ->
 /// http(s)/mailto links (opened by the reader in a new tab).
 fn keep_link(href: &str) -> bool {
     let h = href.trim();
-    h.starts_with('#')
-        || h.starts_with("http://")
-        || h.starts_with("https://")
-        || h.starts_with("mailto:")
+    h.starts_with('#') || has_web_scheme(h) || h.starts_with("mailto:")
+}
+
+/// `true` when `s` starts with an http/https scheme (case-insensitive —
+/// schemes are case-insensitive per RFC 3986, and real-world files do
+/// occasionally carry `HTTP://`).
+fn has_web_scheme(s: &str) -> bool {
+    match s.split_once(':') {
+        Some((scheme, _)) => {
+            scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
+        }
+        None => false,
+    }
 }
 
 /// Escape a text/attribute value for safe inclusion in HTML.
