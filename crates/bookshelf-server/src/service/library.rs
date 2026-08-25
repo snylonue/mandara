@@ -415,6 +415,7 @@ impl Library {
         let mut tx = self.db.begin().await?;
         for (idx, chapter) in chapters.iter().enumerate() {
             let content = bookshelf_formats::htmlize::plugin_text_to_html(&chapter.content);
+            let content = self.localize_images(&content).await;
             sqlx::query(
                 "INSERT INTO chapters (file_id, idx, title, content) VALUES (?, ?, ?, ?) \
                  ON CONFLICT (file_id, idx) DO UPDATE SET \
@@ -2004,6 +2005,7 @@ impl Library {
             return Ok(None);
         };
         let content = bookshelf_formats::htmlize::plugin_text_to_html(&chapter.content);
+        let content = self.localize_images(&content).await;
         sqlx::query(
             "INSERT INTO chapters (file_id, idx, title, content) VALUES (?, ?, ?, ?) \
              ON CONFLICT (file_id, idx) DO UPDATE SET title = excluded.title, content = excluded.content",
@@ -2172,6 +2174,215 @@ fn original_path(files_dir: &Path, file_id: &str, ext: &str) -> PathBuf {
     files_dir.join(format!("{file_id}.{ext}"))
 }
 
+// ---- chapter image localization ------------------------------------------
+
+/// Hard caps for host-side chapter-image downloads. Images referenced by
+/// plugin chapter text are fetched by the host at materialization time
+/// (browsers often cannot load the source CDN directly, e.g. wenku8's
+/// pic host); any public host is allowed, guarded by an SSRF resolve
+/// check.
+const IMAGE_TIMEOUT_SECS: u64 = 30;
+const IMAGE_MAX_BYTES: u64 = 20 * 1024 * 1024;
+const IMAGE_CONCURRENCY: usize = 4;
+
+/// Extract the remote image URLs referenced by a chapter's HTML
+/// (`<img src="http(s)://…">`; data URIs are left alone), deduplicated
+/// in order of first appearance.
+fn remote_image_urls(html: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = html;
+    while let Some(pos) = rest.find("<img src=\"") {
+        rest = &rest[pos + "<img src=\"".len()..];
+        let Some(end) = rest.find('"') else { break };
+        let url = &rest[..end];
+        if (url.starts_with("https://") || url.starts_with("http://"))
+            && !out.iter().any(|u| u == url)
+        {
+            out.push(url.to_string());
+        }
+    }
+    out
+}
+
+/// SSRF guard for host-side image fetches: every resolved address must be
+/// a public unicast address (blocks loopback / private / link-local /
+/// unspecified targets, v4 and v6).
+fn is_public_socket_addr(addr: &std::net::SocketAddr) -> bool {
+    use std::net::IpAddr;
+    match addr.ip() {
+        IpAddr::V4(v4) => {
+            !(v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.is_broadcast()
+                || v4.is_documentation())
+        }
+        IpAddr::V6(v6) => {
+            !(v6.is_loopback()
+                || v6.is_unspecified()
+                || (v6.segments()[0] & 0xfe00) == 0xfc00 // unique local
+                || (v6.segments()[0] & 0xffc0) == 0xfe80) // link local
+        }
+    }
+}
+
+/// Download one image (blocking; runs on the blocking pool). Returns the
+/// sha256 hex and mime type; the caller stores bytes + DB row.
+fn download_image(url: &str) -> anyhow::Result<(Vec<u8>, String)> {
+    use std::net::ToSocketAddrs;
+
+    let (scheme, rest) = url
+        .split_once("://")
+        .ok_or_else(|| anyhow::anyhow!("no scheme"))?;
+    if scheme != "https" && scheme != "http" {
+        anyhow::bail!("unsupported scheme `{scheme}`");
+    }
+    let authority = rest.split('/').next().unwrap_or_default();
+    let host = authority.split('@').next_back().unwrap_or(authority);
+    let host = host.split(':').next().unwrap_or(host);
+    let port = if scheme == "https" { 443 } else { 80 };
+    // Resolve-time SSRF check: every resolved address must be public.
+    let addrs: Vec<_> = (host, port).to_socket_addrs()?.collect();
+    if addrs.is_empty() {
+        anyhow::bail!("host `{host}` does not resolve");
+    }
+    if let Some(bad) = addrs.iter().find(|a| !is_public_socket_addr(a)) {
+        anyhow::bail!("refusing non-public address {bad}");
+    }
+
+    let agent = ureq::AgentBuilder::new()
+        .timeout(std::time::Duration::from_secs(IMAGE_TIMEOUT_SECS))
+        .redirects(5)
+        .build();
+    let resp = agent.get(url).call()?;
+    let mime = resp
+        .header("content-type")
+        .unwrap_or("image/jpeg")
+        .split(';')
+        .next()
+        .unwrap_or("image/jpeg")
+        .trim()
+        .to_string();
+    let mut bytes = Vec::new();
+    use std::io::Read;
+    resp.into_reader()
+        .take(IMAGE_MAX_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > IMAGE_MAX_BYTES {
+        anyhow::bail!("image exceeds {IMAGE_MAX_BYTES} bytes");
+    }
+    Ok((bytes, mime))
+}
+
+impl Library {
+    /// Rewrite remote image references in chapter HTML to local
+    /// `/api/images/{id}` endpoints: every referenced URL is downloaded
+    /// once (deduped by URL across chapters/books via the `images` table,
+    /// bytes stored under `data/files/images/{sha256}`), then the `src`
+    /// is replaced. URLs that fail to download keep their remote form
+    /// (graceful degradation; the next re-materialization retries).
+    async fn localize_images(&self, html: &str) -> String {
+        let urls = remote_image_urls(html);
+        if urls.is_empty() {
+            return html.to_string();
+        }
+
+        // Resolve known URLs from the DB first (no download).
+        let mut mapping: Vec<(String, String)> = Vec::new(); // (url, id)
+        let mut pending: Vec<String> = Vec::new();
+        for url in &urls {
+            let known: Option<String> = sqlx::query_scalar("SELECT id FROM images WHERE url = ?")
+                .bind(url)
+                .fetch_optional(&self.db)
+                .await
+                .ok()
+                .flatten();
+            match known {
+                Some(id) => mapping.push((url.clone(), id)),
+                None => pending.push(url.clone()),
+            }
+        }
+
+        // Download the misses, bounded concurrency, on blocking threads.
+        let images_dir = self.files_dir.join("images");
+        let mut set = tokio::task::JoinSet::new();
+        for chunk in pending.chunks(IMAGE_CONCURRENCY) {
+            for url in chunk {
+                let url = url.clone();
+                set.spawn_blocking(move || download_image(&url).map(|result| (url, result)));
+            }
+            while let Some(joined) = set.join_next().await {
+                let resolved = match joined {
+                    Ok(Ok(pair)) => pair,
+                    Ok(Err(e)) => {
+                        warn!(error = %e, "image download failed");
+                        continue;
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "image download task panicked");
+                        continue;
+                    }
+                };
+                let (url, (bytes, mime)) = resolved;
+                let id = sha256_hex(&bytes);
+                if let Err(e) = tokio::fs::create_dir_all(&images_dir).await {
+                    warn!(error = %e, "cannot create images dir");
+                    continue;
+                }
+                let path = images_dir.join(&id);
+                if let Err(e) = tokio::fs::write(&path, &bytes).await {
+                    warn!(path = %path.display(), error = %e, "cannot write image");
+                    continue;
+                }
+                if let Err(e) = sqlx::query(
+                    "INSERT OR IGNORE INTO images (id, url, mime, size) VALUES (?, ?, ?, ?)",
+                )
+                .bind(&id)
+                .bind(&url)
+                .bind(&mime)
+                .bind(bytes.len() as i64)
+                .execute(&self.db)
+                .await
+                {
+                    warn!(url = %url, error = %e, "cannot record image");
+                    continue;
+                }
+                info!(url = %url, id = %id, size = bytes.len(), "image localized");
+                mapping.push((url, id));
+            }
+        }
+
+        // Rewrite the HTML.
+        let mut out = html.to_string();
+        for (url, id) in mapping {
+            out = out.replace(
+                &format!("src=\"{url}\""),
+                &format!("src=\"/api/images/{id}\""),
+            );
+        }
+        out
+    }
+
+    /// The stored mime type of a localized image (by sha256 hex id).
+    pub async fn image_mime(&self, id: &str) -> Result<Option<String>, ApiError> {
+        let mime: Option<String> = sqlx::query_scalar("SELECT mime FROM images WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&self.db)
+            .await?;
+        Ok(mime)
+    }
+
+    /// Read a localized image's bytes (by sha256 hex id).
+    pub async fn image_bytes(&self, id: &str) -> Result<Option<Vec<u8>>, ApiError> {
+        match tokio::fs::read(self.files_dir.join("images").join(id)).await {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(anyhow::Error::new(e).context("read image").into()),
+        }
+    }
+}
+
 /// Startup backfill (storage unification P3): convert legacy plain-text
 /// chapter rows to canonical HTML. Idempotent — after one pass no row has
 /// `format='text'` and subsequent boots are a no-op. Returns the number
@@ -2304,6 +2515,29 @@ mod tests {
             title: title.into(),
             chapter_count: n,
         }
+    }
+
+    #[test]
+    fn extracts_only_remote_image_urls() {
+        let html = "<p>x</p><figure><img src=\"https://pic.example/a.jpg\"/></figure>\
+<p><img src=\"data:image/png;base64,AAAA\"/></p><img src=\"https://pic.example/a.jpg\">\
+<img src=\"/api/images/abc\">";
+        assert_eq!(remote_image_urls(html), vec!["https://pic.example/a.jpg"]);
+    }
+
+    #[test]
+    fn ssf_guard_rejects_non_public_addresses() {
+        use std::net::{IpAddr, SocketAddr};
+        let f = |ip: IpAddr| is_public_socket_addr(&SocketAddr::new(ip, 443));
+        assert!(!f("127.0.0.1".parse().unwrap()));
+        assert!(!f("10.0.0.5".parse().unwrap()));
+        assert!(!f("192.168.1.1".parse().unwrap()));
+        assert!(!f("169.254.169.254".parse().unwrap()));
+        assert!(!f("::1".parse().unwrap()));
+        assert!(!f("fd00::5".parse().unwrap()));
+        assert!(!f("fe80::1".parse().unwrap()));
+        assert!(f("93.184.216.34".parse().unwrap()));
+        assert!(f("2606:2800:220:1:248:1893:25c8:1946".parse().unwrap()));
     }
 
     #[test]

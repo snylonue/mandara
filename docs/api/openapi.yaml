@@ -933,6 +933,31 @@ paths:
           $ref: "#/components/responses/NotFound"
 
 
+  /api/images/{id}:
+    get:
+      tags: [files]
+      summary: A localized chapter image (public, no auth)
+      description: |
+        Serves an illustration that plugin chapter text referenced; the
+        host downloaded it at materialization time and rewrote the
+        chapter HTML to this endpoint. `id` is the sha256 of the image
+        bytes (unguessable, same capability-like model as book covers —
+        `<img>` tags cannot send the Authorization header).
+      operationId: getImage
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: {type: string, pattern: "[0-9a-f]{64}"}
+      responses:
+        "200":
+          description: The image bytes
+          content:
+            image/*:
+              schema: {type: string, format: binary}
+        "404":
+          description: Unknown image id
+
   /api/files/{id}/download:
     get:
       tags: [files]

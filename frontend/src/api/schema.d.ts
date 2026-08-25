@@ -471,6 +471,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/images/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A localized chapter image (public, no auth)
+         * @description Serves an illustration that plugin chapter text referenced; the
+         *     host downloaded it at materialization time and rewrote the
+         *     chapter HTML to this endpoint. `id` is the sha256 of the image
+         *     bytes (unguessable, same capability-like model as book covers —
+         *     `<img>` tags cannot send the Authorization header).
+         */
+        get: operations["getImage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/files/{id}/download": {
         parameters: {
             query?: never;
@@ -1924,6 +1948,35 @@ export interface operations {
             };
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+        };
+    };
+    getImage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The image bytes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/*": string;
+                };
+            };
+            /** @description Unknown image id */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     downloadFile: {

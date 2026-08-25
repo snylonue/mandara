@@ -170,6 +170,16 @@ does not match a convention (no URL, non-http URL) stays plain text —
 when in doubt, emit the resolved `[插图NN] URL` form and the host does
 the rest.
 
+**Image localization.** Remote image URLs in chapter HTML are fetched by
+the host at materialization time and stored under `data/files/images/`
+(deduped by URL across chapters/books); the chapter HTML is rewritten to
+the local `GET /api/images/{sha256}` endpoint, so readers never need
+direct access to the source CDN (which browsers often cannot load —
+hotlink checks, regional blocks). Downloads are SSRF-guarded (public
+addresses only), capped at 20 MiB / 30 s per image, 4 in parallel; a
+failed download keeps the remote URL in place and is retried on the
+next re-materialization (rebind / clear + re-read).
+
 ## HTTP acquisition (`http.fetch`)
 
 `http.fetch` is the one way to reach an external source. The host enforces
