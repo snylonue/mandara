@@ -50,7 +50,7 @@ async fn main() -> anyhow::Result<()> {
             .with_context(|| format!("create plugins dir {}", cfg.plugins_dir.display()))?;
     }
 
-    let pool = db::connect(&cfg).await?;
+    db::run_migrations(&cfg.db).await?;
     let diesel_db = db::connect_diesel(&cfg.db)?;
     db::seed_local_user(&diesel_db, cfg.auth_enabled).await?;
 
@@ -84,8 +84,8 @@ async fn main() -> anyhow::Result<()> {
     let wasms = load_dir(&cfg.plugins_dir, fetch_policy, image_store)?;
     tracing::info!(files = wasms.len(), "loaded wasm plugin files");
 
-    let plugins = Arc::new(PluginService::new(pool.clone(), diesel_db.clone(), wasms));
-    let library = service::Library::new(pool.clone(), diesel_db.clone(), plugins, files_dir);
+    let plugins = Arc::new(PluginService::new(diesel_db.clone(), wasms));
+    let library = service::Library::new(diesel_db.clone(), plugins, files_dir);
     // Startup sync materializes the catalog of every enabled
     // `declare`-capable instance; search/lookup-only instances stay lazy.
     match library.sync_plugins().await {
@@ -96,7 +96,6 @@ async fn main() -> anyhow::Result<()> {
     let auth = auth::AuthService::new(cfg.auth_enabled, cfg.allow_register, &cfg.jwt_secret);
     let state = Arc::new(AppState {
         cfg: cfg.clone(),
-        db: pool,
         diesel_db,
         auth,
         library,

@@ -21,7 +21,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Context as _;
-use sqlx::SqlitePool;
 use tracing::{info, warn};
 
 use bookshelf_core::model::{
@@ -35,6 +34,23 @@ use bookshelf_formats::ParsedBook;
 diesel::define_sql_function! {
     #[sql_name = "NULLIF"]
     fn nullif(x: diesel::sql_types::Text, y: diesel::sql_types::Text) -> diesel::sql_types::Nullable<diesel::sql_types::Text>;
+}
+
+// `COALESCE(?, col)` for optional string updates: `None` keeps the
+// stored value.
+diesel::define_sql_function! {
+    #[sql_name = "COALESCE"]
+    fn coalesce_opt(
+        x: diesel::sql_types::Nullable<diesel::sql_types::Text>,
+    ) -> diesel::sql_types::Nullable<diesel::sql_types::Text>;
+}
+
+// Same, for NOT NULL columns.
+diesel::define_sql_function! {
+    #[sql_name = "COALESCE"]
+    fn coalesce_opt_nn(
+        x: diesel::sql_types::Nullable<diesel::sql_types::Text>,
+    ) -> diesel::sql_types::Text;
 }
 
 // `LEAST(a, b)` — declared like the other SQLite builtins Diesel lacks.
@@ -76,8 +92,9 @@ use diesel::BoolExpressionMethods as _;
 use diesel::ExpressionMethods as _;
 use diesel::OptionalExtension as _;
 use diesel::QueryDsl as _;
+use diesel::expression_methods::NullableExpressionMethods as _;
+use diesel::expression_methods::TextExpressionMethods as _;
 use diesel::prelude::SelectableHelper as _;
-use diesel_async::AsyncConnection as _;
 use diesel_async::RunQueryDsl as _;
 
 use crate::error::ApiError;
@@ -153,11 +170,6 @@ pub struct AcquireOutcome {
 }
 
 pub struct Library {
-    db: SqlitePool,
-    /// Diesel pool (compile-time-checked queries); runs alongside `db`
-    /// during the sqlx→Diesel translation (docs/sql-refactor-plan.md).
-    /// Unused until the first module moves in P2.
-    #[allow(dead_code)]
     diesel_db: crate::db::DieselDb,
     plugins: Arc<PluginService>,
     /// Directory for retained original file bytes
@@ -167,13 +179,11 @@ pub struct Library {
 
 impl Library {
     pub fn new(
-        db: SqlitePool,
         diesel_db: crate::db::DieselDb,
         plugins: Arc<PluginService>,
         files_dir: PathBuf,
     ) -> Self {
         Library {
-            db,
             diesel_db,
             plugins,
             files_dir,
@@ -1031,29 +1041,35 @@ impl Library {
         book: &SourceBook,
         book_id: &str,
     ) -> Result<String, ApiError> {
-        if let Some(file_id) =
-            sqlx::query_scalar("SELECT id FROM book_files WHERE source = ? AND external_id = ?")
-                .bind(source)
-                .bind(&book.id)
-                .fetch_optional(&self.db)
-                .await?
-        {
+        let existing: Option<String> = schema::book_files::table
+            .filter(
+                schema::book_files::source
+                    .eq(source)
+                    .and(schema::book_files::external_id.eq(&book.id)),
+            )
+            .select(schema::book_files::id)
+            .first(&mut self.diesel_db.get().await?)
+            .await
+            .optional()?;
+        if let Some(file_id) = existing {
             return Ok(file_id);
         }
         let file_id = uuid::Uuid::new_v4().simple().to_string();
-        sqlx::query(
-            "INSERT INTO book_files (id, book_id, source, external_id, content_source, content_external_id, format, label, visibility, owner_id, chapter_count) \
-             VALUES (?, ?, ?, ?, ?, ?, 'plugin', '', 'public', ?, 0)",
-        )
-        .bind(&file_id)
-        .bind(book_id)
-        .bind(source)
-        .bind(&book.id)
-        .bind(&book.content_source)
-        .bind(&book.content_id)
-        .bind(owner)
-        .execute(&self.db)
-        .await?;
+        diesel::insert_into(schema::book_files::table)
+            .values((
+                schema::book_files::id.eq(&file_id),
+                schema::book_files::book_id.eq(book_id),
+                schema::book_files::source.eq(source),
+                schema::book_files::external_id.eq(&book.id),
+                schema::book_files::content_source.eq(&book.content_source),
+                schema::book_files::content_external_id.eq(&book.content_id),
+                schema::book_files::format.eq("plugin"),
+                schema::book_files::visibility.eq("public"),
+                schema::book_files::owner_id.eq(owner),
+                schema::book_files::chapter_count.eq(0),
+            ))
+            .execute(&mut self.diesel_db.get().await?)
+            .await?;
         Ok(file_id)
     }
 
@@ -1090,16 +1106,14 @@ impl Library {
                 .chapter_titles(content_inst, content_id)
                 .await?;
             if !titles.is_empty() {
-                sqlx::query(
-                    "UPDATE book_files SET chapter_count = ?, content_source = ?, content_external_id = ? \
-                     WHERE id = ?",
-                )
-                .bind(titles.len() as i64)
-                .bind(&entry.content_source)
-                .bind(&entry.content_id)
-                .bind(&file.id)
-                .execute(&self.db)
-                .await?;
+                diesel::update(schema::book_files::table.find(&file.id))
+                    .set((
+                        schema::book_files::chapter_count.eq(titles.len() as i64),
+                        schema::book_files::content_source.eq(&entry.content_source),
+                        schema::book_files::content_external_id.eq(&entry.content_id),
+                    ))
+                    .execute(&mut self.diesel_db.get().await?)
+                    .await?;
                 self.upsert_placeholder_titles(&file.id, &titles).await?;
             }
         } else {
@@ -1123,35 +1137,28 @@ impl Library {
             Some(a) => serde_json::to_string(a).unwrap_or_else(|_| "[]".into()),
             None => serde_json::to_string(&parsed.authors).unwrap_or_else(|_| "[]".into()),
         };
-        sqlx::query(
-            "INSERT INTO books (id, title, authors, description, cover_url, cover, cover_mime, created_by) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(&book_id)
-        .bind(
-            overrides
-                .title
-                .clone()
-                .unwrap_or_else(|| parsed.title.clone()),
-        )
-        .bind(authors)
-        .bind(
-            overrides
-                .description
-                .clone()
-                .or_else(|| parsed.description.clone()),
-        )
-        .bind(
-            overrides
-                .cover_url
-                .clone()
-                .or_else(|| parsed.cover_url.clone()),
-        )
-        .bind(parsed.cover.as_ref().map(|c| c.bytes.clone()))
-        .bind(parsed.cover.as_ref().map(|c| c.mime.clone()))
-        .bind(owner_id)
-        .execute(&self.db)
-        .await?;
+        diesel::insert_into(schema::books::table)
+            .values((
+                schema::books::id.eq(&book_id),
+                schema::books::title.eq(overrides
+                    .title
+                    .clone()
+                    .unwrap_or_else(|| parsed.title.clone())),
+                schema::books::authors.eq(authors),
+                schema::books::description.eq(overrides
+                    .description
+                    .clone()
+                    .or_else(|| parsed.description.clone())),
+                schema::books::cover_url.eq(overrides
+                    .cover_url
+                    .clone()
+                    .or_else(|| parsed.cover_url.clone())),
+                schema::books::cover.eq(parsed.cover.as_ref().map(|c| c.bytes.clone())),
+                schema::books::cover_mime.eq(parsed.cover.as_ref().map(|c| c.mime.clone())),
+                schema::books::created_by.eq(owner_id),
+            ))
+            .execute(&mut self.diesel_db.get().await?)
+            .await?;
         Ok(book_id)
     }
 
@@ -1162,25 +1169,25 @@ impl Library {
         book_id: &str,
         cover: &bookshelf_formats::CoverImage,
     ) -> Result<(), ApiError> {
-        sqlx::query(
-            "UPDATE books SET cover = ?, cover_mime = ? \
-             WHERE id = ? AND cover IS NULL",
-        )
-        .bind(&cover.bytes)
-        .bind(&cover.mime)
-        .bind(book_id)
-        .execute(&self.db)
-        .await?;
+        diesel::update(schema::books::table.find(book_id))
+            .filter(schema::books::cover.is_null())
+            .set((
+                schema::books::cover.eq(cover.bytes.clone()),
+                schema::books::cover_mime.eq(cover.mime.clone()),
+            ))
+            .execute(&mut self.diesel_db.get().await?)
+            .await?;
         Ok(())
     }
 
     /// The stored cover image of a metadata entry (bytes, mime), if any.
     pub async fn get_cover(&self, book_id: &str) -> Result<Option<(Vec<u8>, String)>, ApiError> {
-        let row: Option<(Option<Vec<u8>>, Option<String>)> =
-            sqlx::query_as("SELECT cover, cover_mime FROM books WHERE id = ?")
-                .bind(book_id)
-                .fetch_optional(&self.db)
-                .await?;
+        let row: Option<(Option<Vec<u8>>, Option<String>)> = schema::books::table
+            .find(book_id)
+            .select((schema::books::cover, schema::books::cover_mime))
+            .first(&mut self.diesel_db.get().await?)
+            .await
+            .optional()?;
         Ok(row.and_then(|(bytes, mime)| match (bytes, mime) {
             (Some(bytes), Some(mime)) if !bytes.is_empty() => Some((bytes, mime)),
             _ => None,
@@ -1255,36 +1262,37 @@ impl Library {
         let (orig_ext, orig_sha256, orig_size) =
             self.store_original(&file_id, format, bytes).await?;
 
-        let mut tx = self.db.begin().await?;
-        sqlx::query(
-            "INSERT INTO book_files (id, book_id, source, external_id, format, label, visibility, owner_id, chapter_count, toc, orig_ext, orig_sha256, orig_size) \
-             VALUES (?, ?, 'local', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(&file_id)
-        .bind(book_id)
-        .bind(&file_id)
-        .bind(format)
-        .bind(label)
-        .bind(visibility.as_str())
-        .bind(owner_id)
-        .bind(parsed.chapters.len() as i64)
-        .bind(toc_json)
-        .bind(&orig_ext)
-        .bind(&orig_sha256)
-        .bind(orig_size)
-        .execute(&mut *tx)
-        .await?;
+        let mut tx = self.diesel_db.get().await?;
+        diesel::insert_into(schema::book_files::table)
+            .values((
+                schema::book_files::id.eq(&file_id),
+                schema::book_files::book_id.eq(book_id),
+                schema::book_files::source.eq("local"),
+                schema::book_files::external_id.eq(&file_id),
+                schema::book_files::format.eq(format),
+                schema::book_files::label.eq(label),
+                schema::book_files::visibility.eq(visibility.as_str()),
+                schema::book_files::owner_id.eq(owner_id),
+                schema::book_files::chapter_count.eq(parsed.chapters.len() as i64),
+                schema::book_files::toc.eq(toc_json),
+                schema::book_files::orig_ext.eq(&orig_ext),
+                schema::book_files::orig_sha256.eq(&orig_sha256),
+                schema::book_files::orig_size.eq(orig_size),
+            ))
+            .execute(&mut tx)
+            .await?;
 
         for (idx, chapter) in parsed.chapters.iter().enumerate() {
-            sqlx::query("INSERT INTO chapters (file_id, idx, title, content) VALUES (?, ?, ?, ?)")
-                .bind(&file_id)
-                .bind(idx as i64)
-                .bind(&chapter.title)
-                .bind(&chapter.content)
-                .execute(&mut *tx)
+            diesel::insert_into(schema::chapters::table)
+                .values((
+                    schema::chapters::file_id.eq(&file_id),
+                    schema::chapters::idx.eq(idx as i64),
+                    schema::chapters::title.eq(&chapter.title),
+                    schema::chapters::content.eq(&chapter.content),
+                ))
+                .execute(&mut tx)
                 .await?;
         }
-        tx.commit().await?;
 
         self.get_file(&file_id)
             .await?
@@ -1303,31 +1311,69 @@ impl Library {
     ) -> Result<Vec<(BookMeta, Vec<FileMeta>)>, ApiError> {
         let pattern = format!("%{}%", query.unwrap_or("").trim());
         let is_admin = user.role == bookshelf_core::model::Role::Admin;
+        let mut conn = self.diesel_db.get().await?;
 
-        // Static SQL with parameterized switches (no dynamic assembly):
-        // `source` filters only when non-null; the visibility clause is
-        // bypassed for admins via an always-true bound flag. Series first
-        // (in volume order), then standalone books, newest first.
-        let rows: Vec<BookRow> = sqlx::query_as(
-            "SELECT DISTINCT b.id, b.title, b.authors, b.description, b.cover_url, b.created_by, \
-             b.created_at, b.series_id, b.volume_no FROM books b JOIN book_files f ON f.book_id = b.id \
-             WHERE b.title LIKE ? \
-             AND (f.source = ? OR ? IS NULL) \
-             AND (? OR f.visibility = 'public' OR f.owner_id = ?) \
-             ORDER BY (b.series_id IS NOT NULL) DESC, b.series_id, b.volume_no, b.created_at DESC",
-        )
-        .bind(pattern)
-        .bind(source)
-        .bind(source)
-        .bind(is_admin)
-        .bind(&user.id)
-        .fetch_all(&self.db)
-        .await?;
+        // Books owning at least one visible file. Optional filters are
+        // assembled in Rust (type-checked builder) instead of the old
+        // parameterized switches. Series first (in volume order), then
+        // standalone books, newest first.
+        let mut book_q = schema::books::table
+            .inner_join(schema::book_files::table)
+            .filter(schema::books::title.like(&pattern))
+            .select(BookRow::as_select())
+            .distinct()
+            .into_boxed();
+        if let Some(source) = source {
+            book_q = book_q.filter(schema::book_files::source.eq(source));
+        }
+        if !is_admin {
+            book_q = book_q.filter(
+                schema::book_files::visibility
+                    .eq("public")
+                    .or(schema::book_files::owner_id.eq(&user.id)),
+            );
+        }
+        let rows: Vec<BookRow> = book_q
+            .order((
+                schema::books::series_id.is_not_null().desc(),
+                schema::books::series_id.asc(),
+                schema::books::volume_no.asc(),
+                schema::books::created_at.desc(),
+            ))
+            .load(&mut conn)
+            .await?;
+
+        // Batch-load the visible files of all listed books in one query
+        // (fixes the per-book N+1 of the sqlx version). Source filtering
+        // only decides which books are listed; every file of a listed
+        // book is shown, like the old files_of_book loop.
+        let ids: Vec<String> = rows.iter().map(|b| b.id.clone()).collect();
+        let mut file_q = schema::book_files::table
+            .filter(schema::book_files::book_id.eq_any(ids))
+            .order(schema::book_files::created_at.desc())
+            .select(FileRow::as_select())
+            .into_boxed();
+        if !is_admin {
+            file_q = file_q.filter(
+                schema::book_files::visibility
+                    .eq("public")
+                    .or(schema::book_files::owner_id.eq(&user.id)),
+            );
+        }
+        let file_rows: Vec<FileRow> = file_q.load(&mut conn).await?;
+        drop(conn);
+
+        let mut by_book: std::collections::HashMap<String, Vec<FileMeta>> =
+            std::collections::HashMap::new();
+        for row in file_rows {
+            let meta = row.into_model()?;
+            by_book.entry(meta.book_id.clone()).or_default().push(meta);
+        }
 
         let mut books = Vec::new();
         for row in rows {
             let book = row.into_model()?;
-            let files = self.files_of_book(&book.id, user).await?;
+            let files = by_book.remove(&book.id).unwrap_or_default();
             if !files.is_empty() {
                 books.push((book, files));
             }
@@ -1336,13 +1382,12 @@ impl Library {
     }
 
     pub async fn get_book(&self, id: &str) -> Result<Option<BookMeta>, ApiError> {
-        let row: Option<BookRow> = sqlx::query_as(
-            "SELECT id, title, authors, description, cover_url, created_by, created_at, series_id, \
-             volume_no FROM books WHERE id = ?",
-        )
-        .bind(id)
-        .fetch_optional(&self.db)
-        .await?;
+        let row: Option<BookRow> = schema::books::table
+            .find(id)
+            .select(BookRow::as_select())
+            .first(&mut self.diesel_db.get().await?)
+            .await
+            .optional()?;
         row.map(BookRow::into_model).transpose()
     }
 
@@ -1356,17 +1401,15 @@ impl Library {
     ) -> Result<BookMeta, ApiError> {
         let authors_json =
             authors.map(|a| serde_json::to_string(a).unwrap_or_else(|_| "[]".into()));
-        sqlx::query(
-            "UPDATE books SET title = COALESCE(?, title), description = COALESCE(?, description), \
-             authors = COALESCE(?, authors), cover_url = COALESCE(?, cover_url) WHERE id = ?",
-        )
-        .bind(title)
-        .bind(description)
-        .bind(authors_json)
-        .bind(cover_url)
-        .bind(id)
-        .execute(&self.db)
-        .await?;
+        diesel::update(schema::books::table.find(id))
+            .set((
+                schema::books::title.eq(coalesce_opt_nn(title)),
+                schema::books::description.eq(coalesce_opt(description.map(str::to_string))),
+                schema::books::authors.eq(coalesce_opt_nn(authors_json)),
+                schema::books::cover_url.eq(coalesce_opt(cover_url.map(str::to_string))),
+            ))
+            .execute(&mut self.diesel_db.get().await?)
+            .await?;
         self.get_book(id)
             .await?
             .ok_or_else(|| ApiError::not_found("book"))
@@ -1388,13 +1431,22 @@ impl Library {
         }
 
         // Files of this book backed by a plugin source.
-        let plugin_files: Vec<(String, String, String, i64, i64, i64)> = sqlx::query_as(
-            "SELECT id, source, external_id, volume_no, volume_offset, chapter_count FROM book_files \
-             WHERE book_id = ? AND source != 'local'",
-        )
-        .bind(book_id)
-        .fetch_all(&self.db)
-        .await?;
+        let plugin_files: Vec<(String, String, String, i64, i64, i64)> = schema::book_files::table
+            .filter(
+                schema::book_files::book_id
+                    .eq(book_id)
+                    .and(schema::book_files::source.ne("local")),
+            )
+            .select((
+                schema::book_files::id,
+                schema::book_files::source,
+                schema::book_files::external_id,
+                schema::book_files::volume_no,
+                schema::book_files::volume_offset,
+                schema::book_files::chapter_count,
+            ))
+            .load(&mut self.diesel_db.get().await?)
+            .await?;
         if plugin_files.is_empty() {
             return Err(ApiError::bad_request(
                 "book metadata has no plugin source to refresh from",
@@ -1425,17 +1477,15 @@ impl Library {
                 });
 
             let authors = serde_json::to_string(&entry.authors).unwrap_or_else(|_| "[]".into());
-            sqlx::query(
-                "UPDATE books SET title = ?, authors = ?, description = ?, cover_url = ? \
-                 WHERE id = ?",
-            )
-            .bind(&entry.title)
-            .bind(authors)
-            .bind(&entry.description)
-            .bind(&entry.cover_url)
-            .bind(book_id)
-            .execute(&self.db)
-            .await?;
+            diesel::update(schema::books::table.find(book_id))
+                .set((
+                    schema::books::title.eq(&entry.title),
+                    schema::books::authors.eq(authors),
+                    schema::books::description.eq(&entry.description),
+                    schema::books::cover_url.eq(&entry.cover_url),
+                ))
+                .execute(&mut self.diesel_db.get().await?)
+                .await?;
             // Refresh the chapter-title placeholder rows (never overwrite
             // materialized chapter content). A volume file only owns its
             // slice of the source's flat list.
@@ -1445,16 +1495,14 @@ impl Library {
                 *volume_offset as u32,
                 *chapter_count as u32,
             );
-            sqlx::query(
-                "UPDATE book_files SET chapter_count = ?, content_source = ?, content_external_id = ? \
-                 WHERE id = ?",
-            )
-            .bind(slice.len() as i64)
-            .bind(&entry.content_source)
-            .bind(&entry.content_id)
-            .bind(file_id)
-            .execute(&self.db)
-            .await?;
+            diesel::update(schema::book_files::table.find(file_id))
+                .set((
+                    schema::book_files::chapter_count.eq(slice.len() as i64),
+                    schema::book_files::content_source.eq(&entry.content_source),
+                    schema::book_files::content_external_id.eq(&entry.content_id),
+                ))
+                .execute(&mut self.diesel_db.get().await?)
+                .await?;
             if !slice.is_empty() {
                 self.upsert_placeholder_titles(file_id, slice).await?;
             }
@@ -1470,18 +1518,18 @@ impl Library {
     /// operation: while the book still owns files this returns a conflict
     /// listing them, so metadata deletion never cascades silently.
     pub async fn delete_book(&self, id: &str) -> Result<(), ApiError> {
-        let files: Vec<String> = sqlx::query_scalar("SELECT id FROM book_files WHERE book_id = ?")
-            .bind(id)
-            .fetch_all(&self.db)
+        let files: Vec<String> = schema::book_files::table
+            .filter(schema::book_files::book_id.eq(id))
+            .select(schema::book_files::id)
+            .load(&mut self.diesel_db.get().await?)
             .await?;
         if !files.is_empty() {
             return Err(ApiError::ConflictWithFiles(files));
         }
-        let result = sqlx::query("DELETE FROM books WHERE id = ?")
-            .bind(id)
-            .execute(&self.db)
+        let deleted = diesel::delete(schema::books::table.find(id))
+            .execute(&mut self.diesel_db.get().await?)
             .await?;
-        if result.rows_affected() == 0 {
+        if deleted == 0 {
             return Err(ApiError::not_found("book"));
         }
         Ok(())
@@ -1493,13 +1541,12 @@ impl Library {
     /// visibility is applied per book by the caller; the series itself
     /// is already visibility-checked).
     pub async fn series_member_books(&self, id: &str) -> Result<Vec<BookMeta>, ApiError> {
-        let rows: Vec<BookRow> = sqlx::query_as(
-            "SELECT id, title, authors, description, cover_url, created_by, created_at, series_id, \
-             volume_no FROM books WHERE series_id = ? ORDER BY volume_no",
-        )
-        .bind(id)
-        .fetch_all(&self.db)
-        .await?;
+        let rows: Vec<BookRow> = schema::books::table
+            .filter(schema::books::series_id.eq(id))
+            .order(schema::books::volume_no.asc())
+            .select(BookRow::as_select())
+            .load(&mut self.diesel_db.get().await?)
+            .await?;
         rows.into_iter().map(BookRow::into_model).collect()
     }
 
@@ -1509,42 +1556,47 @@ impl Library {
         if user.role == Role::Admin {
             return Ok(true);
         }
-        let creator: Option<String> =
-            sqlx::query_scalar("SELECT created_by FROM series WHERE id = ?")
-                .bind(series_id)
-                .fetch_optional(&self.db)
-                .await?;
+        let creator: Option<Option<String>> = schema::series::table
+            .find(series_id)
+            .select(schema::series::created_by)
+            .first(&mut self.diesel_db.get().await?)
+            .await
+            .optional()?;
         let creator = creator.ok_or_else(|| ApiError::not_found("series"))?;
-        if creator == user.id {
+        if creator.as_deref() == Some(user.id.as_str()) {
             return Ok(true);
         }
-        let count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM books b JOIN book_files f ON f.book_id = b.id \
-             WHERE b.series_id = ? AND (f.visibility = 'public' OR f.owner_id = ?)",
-        )
-        .bind(series_id)
-        .bind(&user.id)
-        .fetch_one(&self.db)
-        .await?;
+        let count: i64 = schema::books::table
+            .inner_join(schema::book_files::table)
+            .filter(
+                schema::books::series_id.eq(series_id).and(
+                    schema::book_files::visibility
+                        .eq("public")
+                        .or(schema::book_files::owner_id.eq(&user.id)),
+                ),
+            )
+            .count()
+            .get_result(&mut self.diesel_db.get().await?)
+            .await?;
         Ok(count > 0)
     }
 
     pub async fn get_series(&self, id: &str) -> Result<Option<SeriesMeta>, ApiError> {
-        let row: Option<SeriesRow> = sqlx::query_as(
-            "SELECT id, title, authors, description, cover_url, created_by, created_at \
-             FROM series WHERE id = ?",
-        )
-        .bind(id)
-        .fetch_optional(&self.db)
-        .await?;
+        let row: Option<SeriesRow> = schema::series::table
+            .find(id)
+            .select(SeriesRow::as_select())
+            .first(&mut self.diesel_db.get().await?)
+            .await
+            .optional()?;
         Ok(row.map(SeriesRow::into_model))
     }
 
     /// Number of member books of a series (any visibility).
     pub async fn series_volume_count(&self, id: &str) -> Result<u32, ApiError> {
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM books WHERE series_id = ?")
-            .bind(id)
-            .fetch_one(&self.db)
+        let count: i64 = schema::books::table
+            .filter(schema::books::series_id.eq(id))
+            .count()
+            .get_result(&mut self.diesel_db.get().await?)
             .await?;
         Ok(count.max(0) as u32)
     }
@@ -1552,33 +1604,52 @@ impl Library {
     /// All series the caller can see (creator, or ≥1 visible member
     /// file; admins see all), each with its member count.
     pub async fn list_series(&self, user: &User) -> Result<Vec<(SeriesMeta, u32)>, ApiError> {
-        let rows: Vec<SeriesRow> = if user.role == Role::Admin {
-            sqlx::query_as(
-                "SELECT id, title, authors, description, cover_url, created_by, created_at \
-                 FROM series ORDER BY created_at DESC",
-            )
-            .fetch_all(&self.db)
-            .await?
-        } else {
-            sqlx::query_as(
-                "SELECT s.id, s.title, s.authors, s.description, s.cover_url, s.created_by, \
-                 s.created_at FROM series s WHERE s.created_by = ? OR EXISTS ( \
-                     SELECT 1 FROM books b JOIN book_files f ON f.book_id = b.id \
-                     WHERE b.series_id = s.id AND (f.visibility = 'public' OR f.owner_id = ?) \
-                 ) ORDER BY s.created_at DESC",
-            )
-            .bind(&user.id)
-            .bind(&user.id)
-            .fetch_all(&self.db)
-            .await?
-        };
-        let mut out = Vec::with_capacity(rows.len());
-        for row in rows {
-            let series = row.into_model();
-            let count = self.series_volume_count(&series.id).await?;
-            out.push((series, count));
+        let mut rows_q = schema::series::table
+            .select(SeriesRow::as_select())
+            .order(schema::series::created_at.desc())
+            .into_boxed();
+        if user.role != Role::Admin {
+            rows_q = rows_q.filter(
+                schema::series::created_by
+                    .eq(&user.id)
+                    .or(diesel::dsl::exists(
+                        schema::books::table
+                            .inner_join(schema::book_files::table)
+                            .filter(
+                                schema::books::series_id
+                                    .eq(schema::series::id.nullable())
+                                    .and(
+                                        schema::book_files::visibility
+                                            .eq("public")
+                                            .or(schema::book_files::owner_id.eq(&user.id)),
+                                    ),
+                            ),
+                    )),
+            );
         }
-        Ok(out)
+        let rows: Vec<SeriesRow> = rows_q.load(&mut self.diesel_db.get().await?).await?;
+
+        // Member counts in one grouped query (fixes the per-series COUNT
+        // N+1 of the sqlx version).
+        let ids: Vec<String> = rows.iter().map(|r| r.id.clone()).collect();
+        let counts: Vec<(Option<String>, i64)> = schema::books::table
+            .filter(schema::books::series_id.eq_any(ids))
+            .group_by(schema::books::series_id)
+            .select((schema::books::series_id, diesel::dsl::count_star()))
+            .load(&mut self.diesel_db.get().await?)
+            .await?;
+        let mut by_series: std::collections::HashMap<String, i64> = counts
+            .into_iter()
+            .filter_map(|(sid, n)| sid.map(|sid| (sid, n)))
+            .collect();
+
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                let count = by_series.remove(&row.id).unwrap_or(0);
+                (row.into_model(), count.max(0) as u32)
+            })
+            .collect())
     }
 
     /// Create a series (any logged-in user; the creator manages it).
@@ -1592,17 +1663,17 @@ impl Library {
         let id = uuid::Uuid::new_v4().simple().to_string();
         let authors_json =
             authors.map(|a| serde_json::to_string(a).unwrap_or_else(|_| "[]".into()));
-        sqlx::query(
-            "INSERT INTO series (id, title, authors, description, cover_url, created_by) \
-             VALUES (?, ?, ?, ?, NULL, ?)",
-        )
-        .bind(&id)
-        .bind(title)
-        .bind(authors_json)
-        .bind(description)
-        .bind(&user.id)
-        .execute(&self.db)
-        .await?;
+        diesel::insert_into(schema::series::table)
+            .values((
+                schema::series::id.eq(&id),
+                schema::series::title.eq(title),
+                schema::series::authors.eq(authors_json.unwrap_or_else(|| "[]".into())),
+                schema::series::description.eq(description),
+                schema::series::cover_url.eq(Option::<String>::None),
+                schema::series::created_by.eq(&user.id),
+            ))
+            .execute(&mut self.diesel_db.get().await?)
+            .await?;
         self.get_series(&id)
             .await?
             .ok_or_else(|| ApiError::not_found("series"))
@@ -1626,16 +1697,14 @@ impl Library {
         }
         let authors_json =
             authors.map(|a| serde_json::to_string(a).unwrap_or_else(|_| "[]".into()));
-        sqlx::query(
-            "UPDATE series SET title = COALESCE(?, title), description = COALESCE(?, description), \
-             authors = COALESCE(?, authors) WHERE id = ?",
-        )
-        .bind(title)
-        .bind(description)
-        .bind(authors_json)
-        .bind(id)
-        .execute(&self.db)
-        .await?;
+        diesel::update(schema::series::table.find(id))
+            .set((
+                schema::series::title.eq(coalesce_opt_nn(title)),
+                schema::series::description.eq(coalesce_opt(description.map(str::to_string))),
+                schema::series::authors.eq(coalesce_opt_nn(authors_json)),
+            ))
+            .execute(&mut self.diesel_db.get().await?)
+            .await?;
         self.get_series(id)
             .await?
             .ok_or_else(|| ApiError::not_found("series"))
@@ -1650,16 +1719,17 @@ impl Library {
         if series.created_by.as_deref() != Some(user.id.as_str()) && user.role != Role::Admin {
             return Err(ApiError::Forbidden);
         }
-        let mut tx = self.db.begin().await?;
-        sqlx::query("UPDATE books SET series_id = NULL, volume_no = 0 WHERE series_id = ?")
-            .bind(id)
-            .execute(&mut *tx)
+        let mut conn = self.diesel_db.get().await?;
+        diesel::update(schema::books::table.filter(schema::books::series_id.eq(id)))
+            .set((
+                schema::books::series_id.eq(Option::<String>::None),
+                schema::books::volume_no.eq(0),
+            ))
+            .execute(&mut conn)
             .await?;
-        sqlx::query("DELETE FROM series WHERE id = ?")
-            .bind(id)
-            .execute(&mut *tx)
+        diesel::delete(schema::series::table.find(id))
+            .execute(&mut conn)
             .await?;
-        tx.commit().await?;
         Ok(())
     }
 
@@ -1696,20 +1766,23 @@ impl Library {
                 return Err(ApiError::Forbidden);
             }
         }
-        let mut tx = self.db.begin().await?;
-        sqlx::query("UPDATE books SET series_id = NULL, volume_no = 0 WHERE series_id = ?")
-            .bind(id)
-            .execute(&mut *tx)
+        let mut conn = self.diesel_db.get().await?;
+        diesel::update(schema::books::table.filter(schema::books::series_id.eq(id)))
+            .set((
+                schema::books::series_id.eq(Option::<String>::None),
+                schema::books::volume_no.eq(0),
+            ))
+            .execute(&mut conn)
             .await?;
         for (i, bid) in book_ids.iter().enumerate() {
-            sqlx::query("UPDATE books SET series_id = ?, volume_no = ? WHERE id = ?")
-                .bind(id)
-                .bind((i + 1) as i64)
-                .bind(bid)
-                .execute(&mut *tx)
+            diesel::update(schema::books::table.find(bid))
+                .set((
+                    schema::books::series_id.eq(id),
+                    schema::books::volume_no.eq(i as i64 + 1),
+                ))
+                .execute(&mut conn)
                 .await?;
         }
-        tx.commit().await?;
         Ok(())
     }
 
@@ -1750,9 +1823,12 @@ impl Library {
         };
 
         let Some(sid) = target_series else {
-            sqlx::query("UPDATE books SET series_id = NULL, volume_no = 0 WHERE id = ?")
-                .bind(book_id)
-                .execute(&self.db)
+            diesel::update(schema::books::table.find(book_id))
+                .set((
+                    schema::books::series_id.eq(Option::<String>::None),
+                    schema::books::volume_no.eq(0),
+                ))
+                .execute(&mut self.diesel_db.get().await?)
                 .await?;
             return self
                 .get_book(book_id)
@@ -1771,35 +1847,41 @@ impl Library {
         let vol = match target_vol {
             Some(Some(n)) => n,
             Some(None) | None => {
-                let max: Option<i64> = sqlx::query_scalar(
-                    "SELECT MAX(volume_no) FROM books WHERE series_id = ? AND id != ?",
-                )
-                .bind(&sid)
-                .bind(book_id)
-                .fetch_one(&self.db)
-                .await?;
+                let max: Option<i64> = schema::books::table
+                    .filter(
+                        schema::books::series_id
+                            .eq(&sid)
+                            .and(schema::books::id.ne(book_id)),
+                    )
+                    .select(diesel::dsl::max(schema::books::volume_no))
+                    .first(&mut self.diesel_db.get().await?)
+                    .await?;
                 (max.unwrap_or(0).max(0) as u32).saturating_add(1)
             }
         };
         // Volume numbers within a series are unique.
-        let taken: Option<String> = sqlx::query_scalar(
-            "SELECT id FROM books WHERE series_id = ? AND volume_no = ? AND id != ?",
-        )
-        .bind(&sid)
-        .bind(vol as i64)
-        .bind(book_id)
-        .fetch_optional(&self.db)
-        .await?;
+        let taken: Option<String> = schema::books::table
+            .filter(
+                schema::books::series_id
+                    .eq(&sid)
+                    .and(schema::books::volume_no.eq(vol as i64))
+                    .and(schema::books::id.ne(book_id)),
+            )
+            .select(schema::books::id)
+            .first(&mut self.diesel_db.get().await?)
+            .await
+            .optional()?;
         if let Some(other) = taken {
             return Err(ApiError::Conflict(format!(
                 "第{vol}卷 already belongs to book `{other}`; pick another volume number"
             )));
         }
-        sqlx::query("UPDATE books SET series_id = ?, volume_no = ? WHERE id = ?")
-            .bind(&sid)
-            .bind(vol as i64)
-            .bind(book_id)
-            .execute(&self.db)
+        diesel::update(schema::books::table.find(book_id))
+            .set((
+                schema::books::series_id.eq(&sid),
+                schema::books::volume_no.eq(vol as i64),
+            ))
+            .execute(&mut self.diesel_db.get().await?)
             .await?;
         self.get_book(book_id)
             .await?
@@ -1815,29 +1897,29 @@ impl Library {
         user: &User,
     ) -> Result<Vec<FileMeta>, ApiError> {
         let is_admin = user.role == bookshelf_core::model::Role::Admin;
-        // Static SQL; the visibility clause is bypassed for admins via an
-        // always-true bound flag.
-        let rows: Vec<FileRow> = sqlx::query_as(
-            "SELECT id, book_id, source, external_id, content_source, content_external_id, format, label, visibility, owner_id, \
-             chapter_count, created_at, volume_no, volume_offset, orig_ext, orig_sha256, orig_size FROM book_files WHERE book_id = ? \
-             AND (? OR visibility = 'public' OR owner_id = ?) ORDER BY created_at DESC",
-        )
-        .bind(book_id)
-        .bind(is_admin)
-        .bind(&user.id)
-        .fetch_all(&self.db)
-        .await?;
+        let mut q = schema::book_files::table
+            .filter(schema::book_files::book_id.eq(book_id))
+            .order(schema::book_files::created_at.desc())
+            .select(FileRow::as_select())
+            .into_boxed();
+        if !is_admin {
+            q = q.filter(
+                schema::book_files::visibility
+                    .eq("public")
+                    .or(schema::book_files::owner_id.eq(&user.id)),
+            );
+        }
+        let rows: Vec<FileRow> = q.load(&mut self.diesel_db.get().await?).await?;
         rows.into_iter().map(FileRow::into_model).collect()
     }
 
     pub async fn get_file(&self, id: &str) -> Result<Option<FileMeta>, ApiError> {
-        let row: Option<FileRow> = sqlx::query_as(
-            "SELECT id, book_id, source, external_id, content_source, content_external_id, format, label, visibility, owner_id, \
-             chapter_count, created_at, volume_no, volume_offset, orig_ext, orig_sha256, orig_size FROM book_files WHERE id = ?",
-        )
-        .bind(id)
-        .fetch_optional(&self.db)
-        .await?;
+        let row: Option<FileRow> = schema::book_files::table
+            .find(id)
+            .select(FileRow::as_select())
+            .first(&mut self.diesel_db.get().await?)
+            .await
+            .optional()?;
         row.map(FileRow::into_model).transpose()
     }
 
@@ -1847,14 +1929,14 @@ impl Library {
         visibility: Option<Visibility>,
         label: Option<&str>,
     ) -> Result<FileMeta, ApiError> {
-        sqlx::query(
-            "UPDATE book_files SET visibility = COALESCE(?, visibility), label = COALESCE(?, label) WHERE id = ?",
-        )
-        .bind(visibility.map(|v| v.as_str()))
-        .bind(label)
-        .bind(id)
-        .execute(&self.db)
-        .await?;
+        diesel::update(schema::book_files::table.find(id))
+            .set((
+                schema::book_files::visibility
+                    .eq(coalesce_opt_nn(visibility.map(|v| v.as_str().to_string()))),
+                schema::book_files::label.eq(coalesce_opt_nn(label.map(str::to_string))),
+            ))
+            .execute(&mut self.diesel_db.get().await?)
+            .await?;
         self.get_file(id)
             .await?
             .ok_or_else(|| ApiError::not_found("file"))
@@ -1878,19 +1960,18 @@ impl Library {
         self.plugins
             .check_content_target(content_source, &content_external_id)
             .await?;
-        sqlx::query(
-            "UPDATE book_files SET content_source = ?, content_external_id = ? WHERE id = ?",
-        )
-        .bind(content_source)
-        .bind(&content_external_id)
-        .bind(file_id)
-        .execute(&self.db)
-        .await?;
+        diesel::update(schema::book_files::table.find(file_id))
+            .set((
+                schema::book_files::content_source.eq(content_source),
+                schema::book_files::content_external_id.eq(content_external_id),
+            ))
+            .execute(&mut self.diesel_db.get().await?)
+            .await?;
         // Bodies from the previous source must not leak through; keep the
         // title rows as placeholders for the new source.
-        sqlx::query("UPDATE chapters SET content = '' WHERE file_id = ?")
-            .bind(file_id)
-            .execute(&self.db)
+        diesel::update(schema::chapters::table.filter(schema::chapters::file_id.eq(file_id)))
+            .set(schema::chapters::content.eq(""))
+            .execute(&mut self.diesel_db.get().await?)
             .await?;
         let file = self
             .get_file(file_id)
@@ -1912,11 +1993,10 @@ impl Library {
                 warn!(file = %id, path = %path.display(), error = %e, "failed to remove original");
             }
         }
-        let result = sqlx::query("DELETE FROM book_files WHERE id = ?")
-            .bind(id)
-            .execute(&self.db)
+        let deleted = diesel::delete(schema::book_files::table.find(id))
+            .execute(&mut self.diesel_db.get().await?)
             .await?;
-        if result.rows_affected() == 0 {
+        if deleted == 0 {
             return Err(ApiError::not_found("file"));
         }
         Ok(())
@@ -1925,11 +2005,12 @@ impl Library {
     // ---- chapters --------------------------------------------------------
 
     pub async fn chapter_titles(&self, file_id: &str) -> Result<Vec<ChapterMeta>, ApiError> {
-        let rows: Vec<ChapterTitleRow> =
-            sqlx::query_as("SELECT idx, title FROM chapters WHERE file_id = ? ORDER BY idx")
-                .bind(file_id)
-                .fetch_all(&self.db)
-                .await?;
+        let rows: Vec<ChapterTitleRow> = schema::chapters::table
+            .filter(schema::chapters::file_id.eq(file_id))
+            .order(schema::chapters::idx.asc())
+            .select((schema::chapters::idx, schema::chapters::title))
+            .load(&mut self.diesel_db.get().await?)
+            .await?;
         Ok(rows.into_iter().map(|r| r.into_model()).collect())
     }
 
@@ -1937,20 +2018,22 @@ impl Library {
     /// books, legacy uploads) get a flat tree synthesized from the chapter
     /// title rows.
     pub async fn file_toc(&self, file_id: &str) -> Result<Vec<TocNode>, ApiError> {
-        let raw: String = sqlx::query_scalar("SELECT toc FROM book_files WHERE id = ?")
-            .bind(file_id)
-            .fetch_one(&self.db)
+        let raw: String = schema::book_files::table
+            .find(file_id)
+            .select(schema::book_files::toc)
+            .first(&mut self.diesel_db.get().await?)
             .await?;
         if !raw.trim().is_empty()
             && let Ok(toc) = serde_json::from_str::<Vec<TocNode>>(&raw)
         {
             return Ok(toc);
         }
-        let rows: Vec<ChapterTitleRow> =
-            sqlx::query_as("SELECT idx, title FROM chapters WHERE file_id = ? ORDER BY idx")
-                .bind(file_id)
-                .fetch_all(&self.db)
-                .await?;
+        let rows: Vec<ChapterTitleRow> = schema::chapters::table
+            .filter(schema::chapters::file_id.eq(file_id))
+            .order(schema::chapters::idx.asc())
+            .select((schema::chapters::idx, schema::chapters::title))
+            .load(&mut self.diesel_db.get().await?)
+            .await?;
         Ok(rows
             .into_iter()
             .map(|r| TocNode {
@@ -1972,13 +2055,16 @@ impl Library {
         if idx as i64 >= file.chapter_count as i64 {
             return Ok(None);
         }
-        let row: Option<ChapterRow> = sqlx::query_as(
-            "SELECT idx, title, content FROM chapters WHERE file_id = ? AND idx = ?",
-        )
-        .bind(&file.id)
-        .bind(idx as i64)
-        .fetch_optional(&self.db)
-        .await?;
+        let row: Option<ChapterRow> = schema::chapters::table
+            .find((&file.id, idx as i64))
+            .select((
+                schema::chapters::idx,
+                schema::chapters::title,
+                schema::chapters::content,
+            ))
+            .first(&mut self.diesel_db.get().await?)
+            .await
+            .optional()?;
 
         if let Some(row) = row {
             // Title-only placeholder rows are materialized by
@@ -2026,47 +2112,46 @@ impl Library {
                         serde_json::to_string(&parsed.toc).unwrap_or_else(|_| "[]".into());
                     let format = detect_format(&book_file.filename);
                     let label = format!("{source_id} 下载");
-                    sqlx::query(
-                        "UPDATE book_files SET format = ?, label = ?, toc = ?, \
-                             content_source = NULL, content_external_id = NULL, \
-                             chapter_count = ? WHERE id = ?",
+                    let mut conn = self.diesel_db.get().await?;
+                    diesel::update(schema::book_files::table.find(&file.id))
+                        .set((
+                            schema::book_files::format.eq(format),
+                            schema::book_files::label.eq(&label),
+                            schema::book_files::toc.eq(toc_json),
+                            schema::book_files::content_source.eq(Option::<String>::None),
+                            schema::book_files::content_external_id.eq(Option::<String>::None),
+                            schema::book_files::chapter_count.eq(parsed.chapters.len() as i64),
+                        ))
+                        .execute(&mut conn)
+                        .await?;
+                    diesel::delete(
+                        schema::chapters::table.filter(schema::chapters::file_id.eq(&file.id)),
                     )
-                    .bind(format)
-                    .bind(&label)
-                    .bind(toc_json)
-                    .bind(parsed.chapters.len() as i64)
-                    .bind(&file.id)
-                    .execute(&self.db)
+                    .execute(&mut conn)
                     .await?;
-                    sqlx::query("DELETE FROM chapters WHERE file_id = ?")
-                        .bind(&file.id)
-                        .execute(&self.db)
-                        .await?;
                     for (i, chapter) in parsed.chapters.iter().enumerate() {
-                        sqlx::query(
-                            "INSERT INTO chapters (file_id, idx, title, content) VALUES (?, ?, ?, ?)",
-                        )
-                        .bind(&file.id)
-                        .bind(i as i64)
-                        .bind(&chapter.title)
-                        .bind(&chapter.content)
-                        .execute(&self.db)
-                        .await?;
+                        diesel::insert_into(schema::chapters::table)
+                            .values((
+                                schema::chapters::file_id.eq(&file.id),
+                                schema::chapters::idx.eq(i as i64),
+                                schema::chapters::title.eq(&chapter.title),
+                                schema::chapters::content.eq(&chapter.content),
+                            ))
+                            .execute(&mut conn)
+                            .await?;
                     }
                     // Keep the metadata fresh from the source entry.
                     let authors =
                         serde_json::to_string(&entry.authors).unwrap_or_else(|_| "[]".into());
-                    sqlx::query(
-                        "UPDATE books SET title = ?, authors = ?, description = ?, cover_url = ? \
-                             WHERE id = ?",
-                    )
-                    .bind(&entry.title)
-                    .bind(&authors)
-                    .bind(&entry.description)
-                    .bind(&entry.cover_url)
-                    .bind(&file.book_id)
-                    .execute(&self.db)
-                    .await?;
+                    diesel::update(schema::books::table.find(&file.book_id))
+                        .set((
+                            schema::books::title.eq(&entry.title),
+                            schema::books::authors.eq(authors),
+                            schema::books::description.eq(&entry.description),
+                            schema::books::cover_url.eq(&entry.cover_url),
+                        ))
+                        .execute(&mut conn)
+                        .await?;
                     info!(
                         source = %source_id,
                         book = %file.book_id,
@@ -2087,13 +2172,16 @@ impl Library {
         }
 
         // Re-read after a possible file-mode materialization.
-        if let Some(row) = sqlx::query_as::<_, ChapterRow>(
-            "SELECT idx, title, content FROM chapters WHERE file_id = ? AND idx = ?",
-        )
-        .bind(&file.id)
-        .bind(idx as i64)
-        .fetch_optional(&self.db)
-        .await?
+        if let Some(row) = schema::chapters::table
+            .find((&file.id, idx as i64))
+            .select((
+                schema::chapters::idx,
+                schema::chapters::title,
+                schema::chapters::content,
+            ))
+            .first::<ChapterRow>(&mut self.diesel_db.get().await?)
+            .await
+            .optional()?
             && !row.content.is_empty()
         {
             return Ok(Some(row.into_model()));
@@ -2112,16 +2200,21 @@ impl Library {
             return Ok(None);
         };
         let content = bookshelf_formats::htmlize::plugin_text_to_html(&chapter.content);
-        sqlx::query(
-            "INSERT INTO chapters (file_id, idx, title, content) VALUES (?, ?, ?, ?) \
-             ON CONFLICT (file_id, idx) DO UPDATE SET title = excluded.title, content = excluded.content",
-        )
-        .bind(&file.id)
-        .bind(idx as i64)
-        .bind(&chapter.title)
-        .bind(&content)
-        .execute(&self.db)
-        .await?;
+        diesel::insert_into(schema::chapters::table)
+            .values((
+                schema::chapters::file_id.eq(&file.id),
+                schema::chapters::idx.eq(idx as i64),
+                schema::chapters::title.eq(&chapter.title),
+                schema::chapters::content.eq(&content),
+            ))
+            .on_conflict((schema::chapters::file_id, schema::chapters::idx))
+            .do_update()
+            .set((
+                schema::chapters::title.eq(diesel::upsert::excluded(schema::chapters::title)),
+                schema::chapters::content.eq(diesel::upsert::excluded(schema::chapters::content)),
+            ))
+            .execute(&mut self.diesel_db.get().await?)
+            .await?;
         Ok(Some(Chapter {
             idx,
             title: chapter.title,
@@ -2135,20 +2228,37 @@ impl Library {
         file_id: &str,
         titles: &[String],
     ) -> Result<(), ApiError> {
-        let mut tx = self.db.begin().await?;
+        let mut conn = self.diesel_db.get().await?;
+        // Materialized rows are left untouched (the legacy statement had
+        // `DO UPDATE ... WHERE content = ''`; the guard moved here because
+        // Diesel's typed WHERE needs a Bool-typed expression).
+        let has_body: std::collections::HashSet<i64> = schema::chapters::table
+            .filter(schema::chapters::file_id.eq(file_id))
+            .select((schema::chapters::idx, schema::chapters::content))
+            .load::<(i64, String)>(&mut conn)
+            .await?
+            .into_iter()
+            .filter(|(_, c)| !c.is_empty())
+            .map(|(idx, _)| idx)
+            .collect();
         for (idx, title) in titles.iter().enumerate() {
-            sqlx::query(
-                "INSERT INTO chapters (file_id, idx, title, content) VALUES (?, ?, ?, '') \
-                 ON CONFLICT (file_id, idx) DO UPDATE SET title = excluded.title \
-                 WHERE chapters.content = ''",
-            )
-            .bind(file_id)
-            .bind(idx as i64)
-            .bind(title.trim())
-            .execute(&mut *tx)
-            .await?;
+            let idx = idx as i64;
+            if has_body.contains(&idx) {
+                continue;
+            }
+            diesel::insert_into(schema::chapters::table)
+                .values((
+                    schema::chapters::file_id.eq(file_id),
+                    schema::chapters::idx.eq(idx),
+                    schema::chapters::title.eq(title.trim()),
+                    schema::chapters::content.eq(""),
+                ))
+                .on_conflict((schema::chapters::file_id, schema::chapters::idx))
+                .do_update()
+                .set(schema::chapters::title.eq(diesel::upsert::excluded(schema::chapters::title)))
+                .execute(&mut conn)
+                .await?;
         }
-        tx.commit().await?;
         Ok(())
     }
 
@@ -2189,16 +2299,20 @@ impl Library {
         // Placeholder rows beyond the volume's range are stale (previous
         // content source, or a chapter count that shrank); drop the
         // empty ones. Materialized bodies stay untouched.
-        sqlx::query("DELETE FROM chapters WHERE file_id = ? AND content = '' AND idx >= ?")
-            .bind(&file.id)
-            .bind(slice.len() as i64)
-            .execute(&self.db)
-            .await?;
+        diesel::delete(
+            schema::chapters::table.filter(
+                schema::chapters::file_id
+                    .eq(&file.id)
+                    .and(schema::chapters::content.eq(""))
+                    .and(schema::chapters::idx.ge(slice.len() as i64)),
+            ),
+        )
+        .execute(&mut self.diesel_db.get().await?)
+        .await?;
         if slice.len() != file.chapter_count as usize {
-            sqlx::query("UPDATE book_files SET chapter_count = ? WHERE id = ?")
-                .bind(slice.len() as i64)
-                .bind(&file.id)
-                .execute(&self.db)
+            diesel::update(schema::book_files::table.find(&file.id))
+                .set(schema::book_files::chapter_count.eq(slice.len() as i64))
+                .execute(&mut self.diesel_db.get().await?)
                 .await?;
         }
         Ok(())
@@ -2280,6 +2394,28 @@ fn original_path(files_dir: &Path, file_id: &str, ext: &str) -> PathBuf {
     files_dir.join(format!("{file_id}.{ext}"))
 }
 
+impl Library {
+    /// The stored mime type of a stored image (by sha256 hex id).
+    pub async fn image_mime(&self, id: &str) -> Result<Option<String>, ApiError> {
+        let mime: Option<String> = schema::images::table
+            .find(id)
+            .select(schema::images::mime)
+            .first(&mut self.diesel_db.get().await?)
+            .await
+            .optional()?;
+        Ok(mime)
+    }
+
+    /// Read a localized image's bytes (by sha256 hex id).
+    pub async fn image_bytes(&self, id: &str) -> Result<Option<Vec<u8>>, ApiError> {
+        match tokio::fs::read(self.files_dir.join("images").join(id)).await {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(anyhow::Error::new(e).context("read image").into()),
+        }
+    }
+}
+
 // ---- chapter image localization ------------------------------------------
 
 /// Store image bytes in the content-addressed image store: id = sha256 hex,
@@ -2303,7 +2439,6 @@ pub async fn store_image(
             .await
             .with_context(|| format!("write image {}", path.display()))?;
     }
-    use diesel_async::AsyncConnection as _;
     use diesel_async::RunQueryDsl as _;
     diesel::insert_into(schema::images::table)
         .values((
@@ -2344,59 +2479,6 @@ pub async fn ingest_parsed_book(
         }
     }
     Ok(())
-}
-
-impl Library {
-    /// The stored mime type of a stored image (by sha256 hex id).
-    pub async fn image_mime(&self, id: &str) -> Result<Option<String>, ApiError> {
-        let mime: Option<String> = sqlx::query_scalar("SELECT mime FROM images WHERE id = ?")
-            .bind(id)
-            .fetch_optional(&self.db)
-            .await?;
-        Ok(mime)
-    }
-
-    /// Read a localized image's bytes (by sha256 hex id).
-    pub async fn image_bytes(&self, id: &str) -> Result<Option<Vec<u8>>, ApiError> {
-        match tokio::fs::read(self.files_dir.join("images").join(id)).await {
-            Ok(bytes) => Ok(Some(bytes)),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(anyhow::Error::new(e).context("read image").into()),
-        }
-    }
-}
-
-/// Startup backfill (storage unification P3): convert legacy plain-text
-/// chapter rows to canonical HTML. Idempotent — after one pass no row has
-/// `format='text'` and subsequent boots are a no-op. Returns the number
-/// of converted rows. Removed together with the `chapters.format`
-/// column in migration 0008 (P4).
-pub async fn backfill_text_chapters(db: &SqlitePool) -> anyhow::Result<usize> {
-    let mut total = 0usize;
-    loop {
-        let rows: Vec<(String, i64, String)> = sqlx::query_as(
-            "SELECT file_id, idx, content FROM chapters WHERE format = 'text' LIMIT 500",
-        )
-        .fetch_all(db)
-        .await?;
-        if rows.is_empty() {
-            return Ok(total);
-        }
-        let mut tx = db.begin().await?;
-        for (file_id, idx, content) in &rows {
-            let html = bookshelf_formats::htmlize::plugin_text_to_html(content);
-            sqlx::query(
-                "UPDATE chapters SET format = 'html', content = ? WHERE file_id = ? AND idx = ?",
-            )
-            .bind(&html)
-            .bind(file_id)
-            .bind(idx)
-            .execute(&mut *tx)
-            .await?;
-        }
-        tx.commit().await?;
-        total += rows.len();
-    }
 }
 
 /// One-shot upgrade migration (`--reparse-originals`, owner decision:
@@ -2499,7 +2581,6 @@ fn sha256_hex(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use bookshelf_formats::ParsedImage;
-    use std::str::FromStr;
 
     fn vol(title: &str, n: u32) -> SourceVolume {
         SourceVolume {

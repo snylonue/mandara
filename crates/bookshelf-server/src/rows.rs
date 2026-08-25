@@ -1,7 +1,6 @@
 //! Database row structs mapped into core models.
 
 use anyhow::anyhow;
-use sqlx::FromRow;
 
 use bookshelf_core::model::{
     BookMeta, Chapter, ChapterMeta, FileMeta, OriginalInfo, Position, ReadingSession, Role,
@@ -10,7 +9,7 @@ use bookshelf_core::model::{
 
 use crate::error::ApiError;
 
-#[derive(Debug, sqlx::FromRow, diesel::prelude::Queryable, diesel::prelude::Selectable)]
+#[derive(Debug, diesel::prelude::Queryable, diesel::prelude::Selectable)]
 #[diesel(table_name = crate::schema::users, check_for_backend(diesel::sqlite::Sqlite))]
 pub struct UserRow {
     pub id: String,
@@ -31,7 +30,7 @@ impl UserRow {
     }
 }
 
-#[derive(Debug, sqlx::FromRow, diesel::prelude::Queryable, diesel::prelude::Selectable)]
+#[derive(Debug, diesel::prelude::Queryable, diesel::prelude::Selectable)]
 #[diesel(table_name = crate::schema::series, check_for_backend(diesel::sqlite::Sqlite))]
 pub struct SeriesRow {
     pub id: String,
@@ -57,7 +56,7 @@ impl SeriesRow {
     }
 }
 
-#[derive(Debug, sqlx::FromRow, diesel::prelude::Queryable, diesel::prelude::Selectable)]
+#[derive(Debug, diesel::prelude::Queryable, diesel::prelude::Selectable)]
 #[diesel(table_name = crate::schema::books, check_for_backend(diesel::sqlite::Sqlite))]
 pub struct BookRow {
     pub id: String,
@@ -87,7 +86,7 @@ impl BookRow {
     }
 }
 
-#[derive(Debug, sqlx::FromRow, diesel::prelude::Queryable, diesel::prelude::Selectable)]
+#[derive(Debug, diesel::prelude::Queryable, diesel::prelude::Selectable)]
 #[diesel(table_name = crate::schema::book_files, check_for_backend(diesel::sqlite::Sqlite))]
 pub struct FileRow {
     pub id: String,
@@ -138,7 +137,7 @@ impl FileRow {
     }
 }
 
-#[derive(Debug, sqlx::FromRow, diesel::prelude::Queryable, diesel::prelude::Selectable)]
+#[derive(Debug, diesel::prelude::Queryable, diesel::prelude::Selectable)]
 #[diesel(table_name = crate::schema::chapters, check_for_backend(diesel::sqlite::Sqlite))]
 pub struct ChapterRow {
     pub idx: i64,
@@ -156,7 +155,8 @@ impl ChapterRow {
     }
 }
 
-#[derive(Debug, FromRow)]
+#[derive(Debug, diesel::prelude::Queryable, diesel::prelude::Selectable)]
+#[diesel(table_name = crate::schema::chapters, check_for_backend(diesel::sqlite::Sqlite))]
 pub struct ChapterTitleRow {
     pub idx: i64,
     pub title: String,
@@ -171,7 +171,7 @@ impl ChapterTitleRow {
     }
 }
 
-#[derive(Debug, sqlx::FromRow, diesel::prelude::Queryable, diesel::prelude::Selectable)]
+#[derive(Debug, diesel::prelude::Queryable, diesel::prelude::Selectable)]
 #[diesel(table_name = crate::schema::sessions, check_for_backend(diesel::sqlite::Sqlite))]
 pub struct SessionRow {
     pub id: String,
@@ -201,7 +201,7 @@ impl SessionRow {
     }
 }
 
-#[derive(Debug, sqlx::FromRow, diesel::prelude::Queryable, diesel::prelude::Selectable)]
+#[derive(Debug, diesel::prelude::Queryable, diesel::prelude::Selectable)]
 #[diesel(table_name = crate::schema::shares, check_for_backend(diesel::sqlite::Sqlite))]
 pub struct ShareRow {
     pub token: String,

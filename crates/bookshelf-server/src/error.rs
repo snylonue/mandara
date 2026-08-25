@@ -100,12 +100,6 @@ impl std::error::Error for ApiError {
     }
 }
 
-impl From<sqlx::Error> for ApiError {
-    fn from(e: sqlx::Error) -> Self {
-        ApiError::Internal(anyhow::Error::new(e))
-    }
-}
-
 impl From<diesel::result::Error> for ApiError {
     fn from(e: diesel::result::Error) -> Self {
         ApiError::Internal(anyhow::Error::new(e))

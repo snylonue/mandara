@@ -6,10 +6,7 @@ use anyhow::Context;
 use diesel::sqlite::SqliteConnection;
 use diesel_async::pooled_connection::{AsyncDieselConnectionManager, ManagerConfig, deadpool};
 use diesel_async::sync_connection_wrapper::SyncConnectionWrapper;
-use sqlx::SqlitePool;
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
-
-use crate::config::Config;
+use sqlx::sqlite::SqliteConnectOptions;
 
 /// The Diesel connection pool (diesel-async over sync SQLite connections
 /// dispatched to the blocking pool). Runs alongside the legacy sqlx pool
@@ -54,41 +51,24 @@ pub fn connect_diesel(db: &Path) -> anyhow::Result<DieselDb> {
     Ok(pool)
 }
 
-pub async fn connect(cfg: &Config) -> anyhow::Result<SqlitePool> {
-    if let Some(parent) = cfg.db.parent() {
+/// Run the SQL migrations. The only remaining sqlx usage: the migration
+/// runner needs a connection; the app itself runs on Diesel exclusively.
+pub async fn run_migrations(db: &Path) -> anyhow::Result<()> {
+    if let Some(parent) = db.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
     let opts = SqliteConnectOptions::new()
-        .filename(&cfg.db)
-        .create_if_missing(true)
-        .journal_mode(SqliteJournalMode::Wal)
-        .foreign_keys(true);
-    let pool = SqlitePoolOptions::new()
-        .max_connections(10)
-        .connect_with(opts)
+        .filename(db)
+        .create_if_missing(true);
+    use sqlx::Connection as _;
+    let mut conn = sqlx::SqliteConnection::connect_with(&opts)
         .await
         .context("connect to sqlite")?;
-    // Storage unification: legacy plain-text chapters must be converted
-    // to canonical HTML *before* migration 0008 drops the `format`
-    // column (the conversion is real code, not SQL expressions). On a
-    // fresh database the table doesn't exist yet — ignore that error.
-    match crate::service::library::backfill_text_chapters(&pool).await {
-        Ok(0) => {}
-        Ok(n) => tracing::info!(converted = n, "backfilled text chapters to html"),
-        Err(e) => {
-            // Fresh database: the table doesn't exist yet. Already-
-            // migrated database: migration 0008 dropped the format column.
-            let root = e.root_cause().to_string();
-            if !root.contains("no such table") && !root.contains("no such column") {
-                return Err(e);
-            }
-        }
-    }
     sqlx::migrate!("./migrations")
-        .run(&pool)
+        .run(&mut conn)
         .await
         .context("run migrations")?;
-    Ok(pool)
+    Ok(())
 }
 
 /// When auth is disabled the server runs as a single local admin user.
@@ -130,18 +110,19 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let db = dir.join("t.db");
 
-        // Create the schema through the legacy pool (migrations run there).
-        let opts = SqliteConnectOptions::new()
-            .filename(&db)
-            .create_if_missing(true);
-        let sqlx_pool = SqlitePoolOptions::new().connect_with(opts).await.unwrap();
-        sqlx::query(
-            "CREATE TABLE users (id TEXT PRIMARY KEY NOT NULL, username TEXT NOT NULL UNIQUE, \
-             password_hash TEXT NOT NULL DEFAULT '', role TEXT NOT NULL DEFAULT 'user')",
-        )
-        .execute(&sqlx_pool)
-        .await
-        .unwrap();
+        // Create the schema through the Diesel connection (raw batch —
+        // the migrations runner owns the real schema; this is a test).
+        {
+            use diesel_async::SimpleAsyncConnection as _;
+            let pool0 = connect_diesel(&dir.join("t.db")).unwrap();
+            let mut c = pool0.get().await.unwrap();
+            c.batch_execute(
+                "CREATE TABLE users (id TEXT PRIMARY KEY NOT NULL, username TEXT NOT NULL UNIQUE, \
+                 password_hash TEXT NOT NULL DEFAULT '', role TEXT NOT NULL DEFAULT 'user');",
+            )
+            .await
+            .unwrap();
+        }
 
         let pool = connect_diesel(&db).unwrap();
         {

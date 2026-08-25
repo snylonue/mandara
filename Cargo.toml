@@ -41,11 +41,12 @@ tower-http = { version = "0.7", features = ["cors", "trace", "fs", "limit"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 async-trait = "0.1"
-# note: sqlx queries in this project use the runtime (`sqlx::query*`) API,
-# so no DATABASE_URL is needed at compile time.
+
+# note: sqlx is used ONLY as the migration runner (sqlx::migrate!);
+# all queries are Diesel DSL against a committed schema.rs (just schema).
 diesel = { version = "2.3", features = ["sqlite"] }
 diesel-async = { version = "0.9", features = ["sqlite", "deadpool", "sync-connection-wrapper"] }
-sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros", "derive"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
 jsonwebtoken = { version = "11", features = ["rust_crypto"] }
 argon2 = "0.5"
 clap = { version = "4", features = ["derive", "env"] }

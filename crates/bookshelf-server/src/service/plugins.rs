@@ -21,7 +21,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use serde::Serialize;
-use sqlx::SqlitePool;
 
 use bookshelf_core::error::Error as CoreError;
 use bookshelf_core::source::{SourceBook, SourceBookFile, SourceChapter};
@@ -121,10 +120,7 @@ pub struct DeclaredCatalog {
 
 /// Compiled wasm files + the instance registry.
 pub struct PluginService {
-    /// Legacy sqlx pool — removed when the translation completes (P6).
-    #[allow(dead_code)]
-    db: SqlitePool,
-    diesel_db: crate::db::DieselDb,
+    db: crate::db::DieselDb,
     wasm_by_file: HashMap<String, Arc<WasmInfo>>,
 }
 
@@ -133,11 +129,7 @@ impl PluginService {
     /// `name`/`capabilities`/`config-schema` cannot be fetched is kept
     /// with empty capabilities (its exports can never be reached through
     /// the capability gates) and a warning.
-    pub fn new(
-        db: SqlitePool,
-        diesel_db: crate::db::DieselDb,
-        wasms: Vec<Arc<WasmPlugin>>,
-    ) -> Self {
+    pub fn new(db: crate::db::DieselDb, wasms: Vec<Arc<WasmPlugin>>) -> Self {
         let mut wasm_by_file = HashMap::new();
         for wasm in wasms {
             let (name, capabilities, schema, source_info) = match (
@@ -182,11 +174,7 @@ impl PluginService {
                 }),
             );
         }
-        Self {
-            db,
-            diesel_db,
-            wasm_by_file,
-        }
+        Self { db, wasm_by_file }
     }
 
     /// Basenames of the compiled wasm files (for the register form).
@@ -203,7 +191,7 @@ impl PluginService {
         use diesel::QueryDsl as _;
         use diesel_async::RunQueryDsl as _;
 
-        let mut conn = self.diesel_db.get().await?;
+        let mut conn = self.db.get().await?;
         let rows: Vec<(String, String, String, i64)> = crate::schema::plugin_instances::table
             .order(crate::schema::plugin_instances::created_at.asc())
             .select((
@@ -231,7 +219,7 @@ impl PluginService {
         use diesel::QueryDsl as _;
         use diesel_async::RunQueryDsl as _;
 
-        let mut conn = self.diesel_db.get().await?;
+        let mut conn = self.db.get().await?;
         let row: Option<(String, String, String, i64)> = crate::schema::plugin_instances::table
             .find(id)
             .select((
@@ -308,7 +296,7 @@ impl PluginService {
             ApiError::bad_request(format!("no wasm file `{wasm_file}` is loaded"))
         })?;
         let config = self.validate(&wasm, &config)?;
-        let mut conn = self.diesel_db.get().await?;
+        let mut conn = self.db.get().await?;
         use diesel::ExpressionMethods as _;
         use diesel_async::RunQueryDsl as _;
         let result = diesel::insert_into(crate::schema::plugin_instances::table)
@@ -347,7 +335,7 @@ impl PluginService {
         use diesel::QueryDsl as _;
         use diesel_async::RunQueryDsl as _;
 
-        let mut conn = self.diesel_db.get().await?;
+        let mut conn = self.db.get().await?;
         let files: Vec<String> = crate::schema::book_files::table
             .filter(
                 crate::schema::book_files::source
@@ -374,7 +362,7 @@ impl PluginService {
         use diesel::QueryDsl as _;
         use diesel_async::RunQueryDsl as _;
 
-        let mut conn = self.diesel_db.get().await?;
+        let mut conn = self.db.get().await?;
         let result = diesel::update(crate::schema::plugin_instances::table.find(id))
             .set(crate::schema::plugin_instances::enabled.eq(enabled as i64))
             .execute(&mut conn)
@@ -408,7 +396,7 @@ impl PluginService {
         use diesel_async::RunQueryDsl as _;
         diesel::update(crate::schema::plugin_instances::table.find(id))
             .set(crate::schema::plugin_instances::config.eq(config.to_string()))
-            .execute(&mut self.diesel_db.get().await?)
+            .execute(&mut self.db.get().await?)
             .await?;
         let row = self
             .row(id)
