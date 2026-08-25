@@ -60,24 +60,16 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // Outbound HTTP policy of every plugin's `fetch` import
-    // (BOOKSHELF_PLUGIN_FETCH_* env vars; empty allow list = all fetches
-    // denied). Plugin calls run on blocking threads, so a slow source
-    // never stalls a worker.
+    // Operational caps of every plugin's `fetch` import
+    // (BOOKSHELF_PLUGIN_FETCH_* env vars). Plugins get plain network
+    // access; calls run on blocking threads, so a slow source never
+    // stalls a worker.
     let fetch_policy = Arc::new(FetchPolicy::from_env());
-    if fetch_policy.allowed_hosts.is_empty() {
-        tracing::warn!(
-            "plugin fetch allow list is EMPTY: every plugin http.fetch call will be denied \
-             (set BOOKSHELF_PLUGIN_FETCH_ALLOWED_HOSTS)"
-        );
-    } else {
-        tracing::info!(
-            hosts = ?fetch_policy.allowed_hosts,
-            timeout_ms = fetch_policy.timeout_ms,
-            max_bytes = fetch_policy.max_bytes,
-            "plugin fetch policy"
-        );
-    }
+    tracing::info!(
+        timeout_ms = fetch_policy.timeout_ms,
+        max_bytes = fetch_policy.max_bytes,
+        "plugin fetch caps"
+    );
 
     // Load wasm plugins (the wasmtime engine needs no async runtime).
     let wasms = load_dir(&cfg.plugins_dir, fetch_policy)?;

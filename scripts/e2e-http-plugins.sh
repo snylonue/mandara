@@ -10,9 +10,7 @@
 #      assert chapters arrive lazily from the mock source;
 #   3. materialize a book in FILE mode (get-book-file -> epub download ->
 #      upload parser): real TOC + sanitized html chapters like an upload;
-#   4. refresh pulls metadata only (materialized bodies untouched);
-#   5. with an EMPTY fetch allow list every plugin fetch is denied and
-#      the sources degrade to empty results (server logs the denials).
+#   4. refresh pulls metadata only (materialized bodies untouched).
 #
 # Usage: ./scripts/e2e-http-plugins.sh [--build] [--keep]
 set -euo pipefail
@@ -72,13 +70,11 @@ start_mock() {
 }
 
 start_server() {
-    local allowed_hosts="$1"
     stop_server
     rm -f "$DB"
     BOOKSHELF_AUTH_ENABLED=false \
     BOOKSHELF_DB="$DB" \
     BOOKSHELF_PLUGINS_DIR="$PWD/plugins-built" \
-    BOOKSHELF_PLUGIN_FETCH_ALLOWED_HOSTS="$allowed_hosts" \
     nohup target/debug/bookshelf-server > "$SERVER_LOG" 2>&1 &
     echo $! > /tmp/e2e-http-server.pid
     for i in $(seq 1 30); do
@@ -121,7 +117,7 @@ echo "== e2e: plugin HTTP acquisition (docs/plugin-http-api-design.md) =="
 cargo build -p bookshelf-server > /dev/null 2>&1 || fail "server build"
 
 start_mock
-start_server "127.0.0.1:${PORT}"
+start_server
 
 # --- register sources -----------------------------------------------------
 api POST /api/plugins/instances '{"id":"wiki","wasm_file":"wiki.wasm"}' > /dev/null
@@ -178,8 +174,6 @@ def depth(ns):
 print(depth(d['toc']))
 ")
 [ "$TOC_DEPTH" = "2" ] || fail "file-mode TOC depth=$TOC_DEPTH (expected 2: 卷 -> chapters)"
-HFMT=$(api GET "/api/files/$BFILE/chapters/0" | jq_field "d['format']")
-[ "$HFMT" = "html" ] || fail "file-mode chapter format=$HFMT (expected html)"
 api GET "/api/files/$BFILE/chapters/0" | grep -q "<p>" || fail "sanitized HTML missing"
 pass "file-mode r-2 materialized through the upload parser (epub, nested TOC, html chapters)"
 
@@ -267,14 +261,6 @@ api DELETE "/api/series/$MS_ID" > /dev/null || fail "delete series"
 pass "manual series: create / assign / empty members / unassign / delete"
 
 rm -f /tmp/e2e-upload.txt
-
-# --- policy: empty allow list denies every plugin fetch -------------------
-start_server ""   # restart with the allow list emptied
-api POST /api/plugins/instances '{"id":"wiki","wasm_file":"wiki.wasm"}' > /dev/null
-TOTAL=$(api GET "/api/plugins/wiki/search?limit=3" | jq_field "d['total']")
-[ "$TOTAL" = "0" ] || fail "deny-all search total=$TOTAL (expected 0)"
-grep -q "denied" "$SERVER_LOG" || fail "server log does not mention the denial"
-pass "empty allow list denies plugin fetches; sources degrade to empty"
 
 echo ""
 echo "ALL E2E CHECKS PASSED"

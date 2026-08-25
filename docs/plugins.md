@@ -3,7 +3,7 @@
 Bookshelf's wasm plugin system lets users provide custom book and metadata
 sources. Plugins run as **WebAssembly components** inside the host sandbox
 (wasmtime): the only way they touch the outside world is the host's
-`http.fetch` import — under host policy (allow list, SSRF checks, caps).
+`http.fetch` import — plain network access with timeout/size caps.
 No WASI, no filesystem, no ambient network.
 
 See `docs/plugin-v2-design.md` (design, implemented) and
@@ -182,22 +182,16 @@ re-read).
 
 ## HTTP acquisition (`http.fetch`)
 
-`http.fetch` is the one way to reach an external source. The host enforces
-everything; the plugin decides what a status means (4xx/5xx are plain
-`response`s, not errors):
+`http.fetch` is the one way to reach an external source. The host
+provides plain network access — any host, http or https; the plugin
+decides what a status means (4xx/5xx are plain `response`s, not errors):
 
-- **Allow list**: `BOOKSHELF_PLUGIN_FETCH_ALLOWED_HOSTS` — comma-separated
-  `host` or `host:port` entries; **empty = every fetch is denied** (the
-  demo default until you configure it). Allow-listed hosts may resolve to
-  private addresses (e.g. `localhost:8081` for a local source).
-- **Scheme**: http and https; `BOOKSHELF_PLUGIN_FETCH_HTTP=false` turns
-  http off.
-- **SSRF**: at resolve time — the exact addresses the connection uses —
-  private/loopback/link-local/ULA addresses are refused unless the host
-  is allow-listed; redirect hops (max 5) are re-validated; credential-ish
-  headers (`authorization`, `cookie`, `proxy-authorization`, `x-api-key`)
-  are dropped when a hop leaves the original host. URLs with embedded
-  credentials are rejected — put keys in config, not URLs.
+- **Redirects**: at most 5 hops, curl-style method downgrade on 301–303.
+- **Timeout**: overall deadline = `min(requested,
+  BOOKSHELF_PLUGIN_FETCH_TIMEOUT_MS)` (default 30 s).
+- **Size**: response bodies are capped
+  (`BOOKSHELF_PLUGIN_FETCH_MAX_BYTES`, default 64 MiB); oversized
+  responses abort with `size-limit` and no partial data.
 - **Caps**: overall timeout = `min(requested, BOOKSHELF_PLUGIN_FETCH_TIMEOUT_MS)`
   (default 30 s); response bodies ≤ `BOOKSHELF_PLUGIN_FETCH_MAX_BYTES`
   (default 64 MiB, no partial data).
@@ -300,8 +294,6 @@ and, when it has `lookup`, the book id).
   scraping (HTTP 429): transient 403/429/5xx/transport responses are
   retried up to three times per request; a failed chapter read can be
   retried later and, once materialized, is served from the library DB.
-  Needs the host allow list:
-  `BOOKSHELF_PLUGIN_FETCH_ALLOWED_HOSTS=www.wenku8.net`.
   Build: `./scripts/build-plugins.sh wenku8`.
 
 ## Building & running the demos
@@ -317,14 +309,12 @@ and `export!(PluginName)`. The generated core module embeds a
 `component-type` section, so `wasm-tools component new` lifts it into a
 component without adapters (the world imports no wasi interfaces).
 
-End-to-end demo of the HTTP acquisition layer (chapter mode + file mode +
-policy denial):
+End-to-end demo of the HTTP acquisition layer (chapter mode + file mode):
 
 ```sh
 python3 scripts/mock-source.py 8765 &           # the remote source
-BOOKSHELF_PLUGIN_FETCH_ALLOWED_HOSTS=127.0.0.1:8765 \
-    cargo run -p bookshelf-server                # server with the allow list
-./scripts/e2e-http-plugins.sh                    # full automated check
+cargo run -p bookshelf-server                   # the server
+./scripts/e2e-http-plugins.sh                   # full automated check
 ```
 
 The host unit tests embed `plugins-built/hello.wasm` as a fixture — after

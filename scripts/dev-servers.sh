@@ -14,7 +14,6 @@ start)
     BOOKSHELF_AUTH_ENABLED=false \
     BOOKSHELF_DB="${BOOKSHELF_DB:-/tmp/e2e.db}" \
     BOOKSHELF_PLUGINS_DIR="${BOOKSHELF_PLUGINS_DIR:-$PWD/plugins-built}" \
-    BOOKSHELF_PLUGIN_FETCH_ALLOWED_HOSTS="${BOOKSHELF_PLUGIN_FETCH_ALLOWED_HOSTS:-127.0.0.1:8765}" \
     nohup target/debug/bookshelf-server > /tmp/bookshelf-server.log 2>&1 &
     echo "started mock source + bookshelf server (pid $!)"
     for i in $(seq 1 20); do

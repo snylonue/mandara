@@ -1,6 +1,10 @@
 # Plugin HTTP & Book-File API — Design
 
-Status: **proposal** (dev phase; no backward compatibility constraints).
+Status: **implemented, with the fetch policy removed** (owner decision,
+2026-08-25: "wasm 插件的请求不用检查了，提供联网能力就行" — the allow
+list, scheme gate and SSRF resolver below are **gone**; the host
+provides plain network access with timeout/size caps only). The rest of
+this document (book-file acquisition, config-driven base URLs) stands.
 Extends the v2 plugin interface (`crates/bookshelf-plugin/wit/bookshelf.wit`,
 `bookshelf:plugin@0.2.0`). Does **not** replace the config channel, the
 capabilities model, or the lazy catalog policy of `docs/plugin-v2-design.md`.
