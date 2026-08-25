@@ -11,12 +11,17 @@ use axum::http::header::AUTHORIZATION;
 use chrono::Utc;
 use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
 
 use bookshelf_core::model::{Role, User};
 
+use crate::db::DieselDb;
 use crate::error::ApiError;
 use crate::rows::UserRow;
+#[allow(unused_imports)]
+use crate::schema::users;
+use diesel::QueryDsl as _;
+use diesel::prelude::SelectableHelper as _;
+use diesel_async::RunQueryDsl as _;
 
 #[derive(Debug, Clone)]
 pub struct AuthService {
@@ -100,11 +105,7 @@ impl AuthService {
     }
 
     /// Resolve the current user from the Authorization header.
-    pub async fn require_user(
-        &self,
-        headers: &HeaderMap,
-        pool: &SqlitePool,
-    ) -> Result<User, ApiError> {
+    pub async fn require_user(&self, headers: &HeaderMap, db: &DieselDb) -> Result<User, ApiError> {
         if !self.enabled {
             return Ok(self.local_user());
         }
@@ -115,11 +116,14 @@ impl AuthService {
             &Validation::default(),
         )
         .map_err(|_| ApiError::Unauthorized)?;
-        let row: Option<UserRow> =
-            sqlx::query_as("SELECT id, username, role, created_at FROM users WHERE id = ?")
-                .bind(&data.claims.sub)
-                .fetch_optional(pool)
-                .await?;
+        use diesel::OptionalExtension as _;
+        let mut conn = db.get().await?;
+        let row = users::table
+            .find(&data.claims.sub)
+            .select(UserRow::as_select())
+            .first::<UserRow>(&mut conn)
+            .await
+            .optional()?;
         row.map(UserRow::into_model).ok_or(ApiError::Unauthorized)?
     }
 

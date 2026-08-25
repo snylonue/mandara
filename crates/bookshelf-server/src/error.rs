@@ -118,6 +118,12 @@ impl From<diesel_async::pooled_connection::PoolError> for ApiError {
     }
 }
 
+impl From<diesel_async::pooled_connection::deadpool::PoolError> for ApiError {
+    fn from(e: diesel_async::pooled_connection::deadpool::PoolError) -> Self {
+        ApiError::Internal(anyhow::Error::new(e))
+    }
+}
+
 impl From<anyhow::Error> for ApiError {
     fn from(e: anyhow::Error) -> Self {
         ApiError::Internal(e)

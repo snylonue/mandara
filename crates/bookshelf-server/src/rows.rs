@@ -10,7 +10,8 @@ use bookshelf_core::model::{
 
 use crate::error::ApiError;
 
-#[derive(Debug, FromRow)]
+#[derive(Debug, sqlx::FromRow, diesel::prelude::Queryable, diesel::prelude::Selectable)]
+#[diesel(table_name = crate::schema::users, check_for_backend(diesel::sqlite::Sqlite))]
 pub struct UserRow {
     pub id: String,
     pub username: String,

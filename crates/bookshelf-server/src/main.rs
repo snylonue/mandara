@@ -51,7 +51,8 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let pool = db::connect(&cfg).await?;
-    db::seed_local_user(&pool, cfg.auth_enabled).await?;
+    let diesel_db = db::connect_diesel(&cfg.db)?;
+    db::seed_local_user(&diesel_db, cfg.auth_enabled).await?;
 
     // One-shot upgrade migration (`--reparse-originals`): re-parse every
     // retained original with the current parser, then exit. Runs before
@@ -84,8 +85,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(files = wasms.len(), "loaded wasm plugin files");
 
     let plugins = Arc::new(PluginService::new(pool.clone(), wasms));
-    let diesel_db = db::connect_diesel(&cfg.db)?;
-    let library = service::Library::new(pool.clone(), diesel_db, plugins, files_dir);
+    let library = service::Library::new(pool.clone(), diesel_db.clone(), plugins, files_dir);
     // Startup sync materializes the catalog of every enabled
     // `declare`-capable instance; search/lookup-only instances stay lazy.
     match library.sync_plugins().await {
@@ -97,6 +97,7 @@ async fn main() -> anyhow::Result<()> {
     let state = Arc::new(AppState {
         cfg: cfg.clone(),
         db: pool,
+        diesel_db,
         auth,
         library,
     });

@@ -6,11 +6,13 @@ use sqlx::SqlitePool;
 
 use crate::auth::AuthService;
 use crate::config::Config;
+use crate::db::DieselDb;
 use crate::service::library::Library;
 
 pub struct AppState {
     pub cfg: Config,
     pub db: SqlitePool,
+    pub diesel_db: DieselDb,
     pub auth: AuthService,
     pub library: Library,
 }

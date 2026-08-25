@@ -93,16 +93,23 @@ pub async fn connect(cfg: &Config) -> anyhow::Result<SqlitePool> {
 
 /// When auth is disabled the server runs as a single local admin user.
 /// Make sure that user row exists so FKs (sessions, shares) keep working.
-pub async fn seed_local_user(pool: &SqlitePool, auth_enabled: bool) -> anyhow::Result<()> {
-    if auth_enabled {
-        return Ok(());
+pub async fn seed_local_user(db: &DieselDb, auth_enabled: bool) -> anyhow::Result<()> {
+    if !auth_enabled {
+        use crate::schema::users;
+        use diesel::ExpressionMethods as _;
+        use diesel_async::RunQueryDsl as _;
+        let mut conn = db.get().await?;
+        diesel::insert_into(users::table)
+            .values((
+                users::id.eq("local"),
+                users::username.eq("local"),
+                users::password_hash.eq("auth-disabled"),
+                users::role.eq("admin"),
+            ))
+            .on_conflict_do_nothing()
+            .execute(&mut conn)
+            .await?;
     }
-    sqlx::query(
-        "INSERT OR IGNORE INTO users (id, username, password_hash, role) \
-         VALUES ('local', 'local', 'auth-disabled', 'admin')",
-    )
-    .execute(pool)
-    .await?;
     Ok(())
 }
 

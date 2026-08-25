@@ -6,11 +6,19 @@ use axum::http::HeaderMap;
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 
-use bookshelf_core::model::User;
+use diesel::ExpressionMethods as _;
+use diesel::QueryDsl as _;
+use diesel_async::RunQueryDsl as _;
+
+use bookshelf_core::model::{Role, User};
+
+use diesel::OptionalExtension as _;
 
 use crate::error::ApiError;
 use crate::routes::{St, current_user};
 use crate::rows::UserRow;
+#[allow(unused_imports)]
+use crate::schema::users;
 
 #[derive(Deserialize)]
 pub struct Credentials {
@@ -43,17 +51,23 @@ pub async fn register(
     let id = uuid::Uuid::new_v4().simple().to_string();
     let hash = st.auth.hash_password(&req.password)?;
 
-    let result = sqlx::query(
-        "INSERT INTO users (id, username, password_hash, role) VALUES (?, ?, ?, 'user')",
-    )
-    .bind(&id)
-    .bind(&username)
-    .bind(&hash)
-    .execute(&st.db)
-    .await;
-    if let Err(sqlx::Error::Database(e)) = &result
-        && e.is_unique_violation()
-    {
+    let mut conn = st.diesel_db.get().await?;
+    let result = diesel::insert_into(users::table)
+        .values((
+            users::id.eq(&id),
+            users::username.eq(&username),
+            users::password_hash.eq(&hash),
+            users::role.eq(Role::User.as_str()),
+        ))
+        .execute(&mut conn)
+        .await;
+    if matches!(
+        &result,
+        Err(diesel::result::Error::DatabaseError(
+            diesel::result::DatabaseErrorKind::UniqueViolation,
+            _
+        ))
+    ) {
         return Err(ApiError::Conflict("username already taken".into()));
     }
     result?;
@@ -75,12 +89,19 @@ pub async fn login(
     if !st.auth.enabled() {
         return Err(ApiError::bad_request("authentication is disabled"));
     }
-    let row: Option<(String, String, String, String, String)> = sqlx::query_as(
-        "SELECT id, username, role, created_at, password_hash FROM users WHERE username = ?",
-    )
-    .bind(&req.username)
-    .fetch_optional(&st.db)
-    .await?;
+    let mut conn = st.diesel_db.get().await?;
+    let row: Option<(String, String, String, String, String)> = users::table
+        .filter(users::username.eq(&req.username))
+        .select((
+            users::id,
+            users::username,
+            users::role,
+            users::created_at,
+            users::password_hash,
+        ))
+        .first::<(String, String, String, String, String)>(&mut conn)
+        .await
+        .optional()?;
     let Some((id, username, role, created_at, password_hash)) = row else {
         return Err(ApiError::Unauthorized);
     };

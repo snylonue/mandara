@@ -27,7 +27,7 @@ pub use crate::state::St;
 
 /// Resolve the current user (or the local admin when auth is disabled).
 pub async fn current_user(st: &St, headers: &HeaderMap) -> Result<User, ApiError> {
-    st.auth.require_user(headers, &st.db).await
+    st.auth.require_user(headers, &st.diesel_db).await
 }
 
 pub fn can_view_file(user: &User, file: &FileMeta) -> bool {
