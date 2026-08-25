@@ -29,19 +29,48 @@ translation, keep the existing SQL migration files.
 
 ## Key design points
 
-### D1 — Image localization removal
+### D1 — Unified image store (owner decision: server stores, plugins produce)
 
-- Delete `localize_images` + `remote_image_urls` + `download_image`; plugin
-  chapter HTML keeps remote `<img src>` URLs (the frontend already renders
-  them with `referrerPolicy="no-referrer"`).
-- **Keep** `GET /api/images/{id}` for now: already-materialized chapters
-  reference those URLs; deleting the endpoint would break existing wenku8
-  books until re-materialization. Serve from disk, no DB lookup fallback
-  needed (the row is authoritative). A later cleanup commit can drop the
-  table + endpoint once libraries are re-materialized.
-- New migration `0010_drop_images.sql`: `DROP TABLE images;`
-  (bytes on disk under `data/files/images/` are gitignored data, left in
-  place; a note in docs tells operators they can delete the directory).
+The two existing image mechanisms (epub sanitizer data-URI inlining,
+host-side `localize_images` downloading) are replaced by **one storage
+model**: the server is a dumb content-addressed image store; producers
+(epub ingest, wasm plugins) fetch/decode nothing on the host — they hand
+bytes to the store and reference them by id.
+
+**Storage contract**
+
+- Host-side service: `store_image(bytes) -> id`, `id = sha256(bytes)` hex
+  (content-addressed → natural cross-chapter/book dedup), mime + size kept
+  in the `images` table (`url` column dropped — provenance lives with the
+  producer, not the store). Bytes at `data/files/images/{id}`.
+- Canonical in-text reference: `<img src="/api/images/{id}">`. Stored
+  chapter HTML contains only these refs; serving stays the unauthenticated
+  immutable-cache endpoint (already built).
+- No host-side fetching anywhere: `download_image`, `remote_image_urls`,
+  `localize_images` and the SSRF guard are deleted (P0 issue gone with
+  them).
+
+**Producers**
+
+1. *Plugins* — new WIT import (v6): `store.store-image(bytes, mime)
+   -> string` under the existing per-call budget (epoch deadline already
+   covers the extra http.fetch round-trips); host caps per-image/per-call
+   byte totals via env (`BOOKSHELF_PLUGIN_IMAGE_MAX_BYTES`, …). The plugin
+   downloads via `http.fetch` itself (its own retry/referer policy, e.g.
+   wenku8 CDN), calls `store-image`, embeds the returned `/api/images/{id}`
+   ref. Duplicate bytes return the same id.
+2. *Epub/txt uploads* — `bookshelf-formats` stays pure (no DB): the epub
+   sanitizer stops inlining `data:` URIs and instead emits placeholder refs
+   (`src="image:{n}"`) plus a parallel `ParsedBook.images: list<{mime,
+   bytes}>`; the server's ingest boundary stores each entry through the
+   same `store_image` service and rewrites placeholders to real ids. Both
+   producers converge on identical stored text.
+
+**Incompatible old content**: dropped without migration — migration 0010
+rebuilds `images` (no url column) and deletes materialized chapter rows
+whose content references `/api/images/` (plugin chapters lazily
+re-materialize under the new model); epubs uploaded before the change keep
+data URIs (self-contained, still render) until re-uploaded.
 
 ### D2 — Stack
 
@@ -72,10 +101,15 @@ diesel-async = { version = "0.7", features = ["sqlite"] }  # SyncConnectionWrapp
 
 ## Phases (one feature = one commit)
 
-### P0 — `refactor(api)`: remove image localization
-Delete `localize_images` path; migration 0010 drops `images`; keep the
-images endpoint serving existing bytes; update `docs/plugins.md`; e2e
-re-check that wenku8 illustration chapters render from remote URLs.
+### P0 — `feat(api/plugin)`: unified image store (D1)
+Split into three commits:
+- `feat(formats/api)`: image-store service + epub sanitizer placeholder
+  rewrite at ingest (uploads now store images by id, not data URI);
+- `refactor(api)`: delete `localize_images`/`download_image`/SSF guard;
+  migration 0010 (images table rebuild + purge of localized chapters);
+- `feat(plugin)` WIT v6 `store-image` + wenku8 plugin downloads its own
+  plates (http.fetch + store-image, inline `（插图NNN）` marks resolved to
+  stored ids); demo plugins rebuilt; docs/plugins.md updated.
 
 ### P1 — `feat(server)`: Diesel infrastructure
 Dependencies, `just schema` + committed `schema.rs`, pool swap to
@@ -120,7 +154,8 @@ implemented.
   plugin materialize (mock source), session create/update, share flows,
   series split acquisition, visibility matrix.
 - Manual live check (wenku8 3617) after P0 and P4: materialize, lazy
-  chapter pull, illustrations render from remote URLs.
+  chapter pull, illustration plates served from `/api/images/{id}`
+  (plugin-stored), inline marks resolved.
 
 ## Risks
 
