@@ -25,8 +25,7 @@ use sqlx::SqlitePool;
 use tracing::{info, warn};
 
 use bookshelf_core::model::{
-    BookMeta, Chapter, ChapterFormat, ChapterMeta, FileMeta, Role, SeriesMeta, TocNode, User,
-    Visibility,
+    BookMeta, Chapter, ChapterMeta, FileMeta, Role, SeriesMeta, TocNode, User, Visibility,
 };
 use bookshelf_core::source::{SourceBook, SourceBookFile, SourceChapter, SourceVolume};
 
@@ -283,16 +282,13 @@ impl Library {
             .execute(&self.db)
             .await?;
         for (idx, chapter) in parsed.chapters.iter().enumerate() {
-            sqlx::query(
-                "INSERT INTO chapters (file_id, idx, title, format, content) VALUES (?, ?, ?, ?, ?)",
-            )
-            .bind(&file_id)
-            .bind(idx as i64)
-            .bind(&chapter.title)
-            .bind(chapter.format.as_str())
-            .bind(&chapter.content)
-            .execute(&self.db)
-            .await?;
+            sqlx::query("INSERT INTO chapters (file_id, idx, title, content) VALUES (?, ?, ?, ?)")
+                .bind(&file_id)
+                .bind(idx as i64)
+                .bind(&chapter.title)
+                .bind(&chapter.content)
+                .execute(&self.db)
+                .await?;
         }
         info!(
             source = %source,
@@ -420,7 +416,7 @@ impl Library {
         for (idx, chapter) in chapters.iter().enumerate() {
             let content = bookshelf_formats::htmlize::plugin_text_to_html(&chapter.content);
             sqlx::query(
-                "INSERT INTO chapters (file_id, idx, title, format, content) VALUES (?, ?, ?, 'html', ?) \
+                "INSERT INTO chapters (file_id, idx, title, content) VALUES (?, ?, ?, ?) \
                  ON CONFLICT (file_id, idx) DO UPDATE SET \
                    title = excluded.title, \
                    content = CASE WHEN excluded.content = '' THEN chapters.content ELSE excluded.content END",
@@ -845,8 +841,7 @@ impl Library {
             let slice = &titles[*start as usize..(*start + *count) as usize];
             for (idx, t) in slice.iter().enumerate() {
                 sqlx::query(
-                    "INSERT INTO chapters (file_id, idx, title, format, content) \
-                     VALUES (?, ?, ?, 'html', '')",
+                    "INSERT INTO chapters (file_id, idx, title, content) VALUES (?, ?, ?, '')",
                 )
                 .bind(&file_id)
                 .bind(idx as i64)
@@ -1174,17 +1169,13 @@ impl Library {
         .await?;
 
         for (idx, chapter) in parsed.chapters.iter().enumerate() {
-            sqlx::query(
-                "INSERT INTO chapters (file_id, idx, title, format, content) \
-                 VALUES (?, ?, ?, ?, ?)",
-            )
-            .bind(&file_id)
-            .bind(idx as i64)
-            .bind(&chapter.title)
-            .bind(chapter.format.as_str())
-            .bind(&chapter.content)
-            .execute(&mut *tx)
-            .await?;
+            sqlx::query("INSERT INTO chapters (file_id, idx, title, content) VALUES (?, ?, ?, ?)")
+                .bind(&file_id)
+                .bind(idx as i64)
+                .bind(&chapter.title)
+                .bind(&chapter.content)
+                .execute(&mut *tx)
+                .await?;
         }
         tx.commit().await?;
 
@@ -1875,7 +1866,7 @@ impl Library {
             return Ok(None);
         }
         let row: Option<ChapterRow> = sqlx::query_as(
-            "SELECT idx, title, format, content FROM chapters WHERE file_id = ? AND idx = ?",
+            "SELECT idx, title, content FROM chapters WHERE file_id = ? AND idx = ?",
         )
         .bind(&file.id)
         .bind(idx as i64)
@@ -1945,13 +1936,11 @@ impl Library {
                         .await?;
                     for (i, chapter) in parsed.chapters.iter().enumerate() {
                         sqlx::query(
-                            "INSERT INTO chapters (file_id, idx, title, format, content) \
-                                 VALUES (?, ?, ?, ?, ?)",
+                            "INSERT INTO chapters (file_id, idx, title, content) VALUES (?, ?, ?, ?)",
                         )
                         .bind(&file.id)
                         .bind(i as i64)
                         .bind(&chapter.title)
-                        .bind(chapter.format.as_str())
                         .bind(&chapter.content)
                         .execute(&self.db)
                         .await?;
@@ -1991,7 +1980,7 @@ impl Library {
 
         // Re-read after a possible file-mode materialization.
         if let Some(row) = sqlx::query_as::<_, ChapterRow>(
-            "SELECT idx, title, format, content FROM chapters WHERE file_id = ? AND idx = ?",
+            "SELECT idx, title, content FROM chapters WHERE file_id = ? AND idx = ?",
         )
         .bind(&file.id)
         .bind(idx as i64)
@@ -2016,8 +2005,8 @@ impl Library {
         };
         let content = bookshelf_formats::htmlize::plugin_text_to_html(&chapter.content);
         sqlx::query(
-            "INSERT INTO chapters (file_id, idx, title, format, content) VALUES (?, ?, ?, 'html', ?) \
-             ON CONFLICT (file_id, idx) DO UPDATE SET title = excluded.title, format = 'html', content = excluded.content",
+            "INSERT INTO chapters (file_id, idx, title, content) VALUES (?, ?, ?, ?) \
+             ON CONFLICT (file_id, idx) DO UPDATE SET title = excluded.title, content = excluded.content",
         )
         .bind(&file.id)
         .bind(idx as i64)
@@ -2028,7 +2017,6 @@ impl Library {
         Ok(Some(Chapter {
             idx,
             title: chapter.title,
-            format: ChapterFormat::Html,
             content,
         }))
     }
@@ -2042,8 +2030,7 @@ impl Library {
         let mut tx = self.db.begin().await?;
         for (idx, title) in titles.iter().enumerate() {
             sqlx::query(
-                "INSERT INTO chapters (file_id, idx, title, format, content) \
-                 VALUES (?, ?, ?, 'html', '') \
+                "INSERT INTO chapters (file_id, idx, title, content) VALUES (?, ?, ?, '') \
                  ON CONFLICT (file_id, idx) DO UPDATE SET title = excluded.title \
                  WHERE chapters.content = ''",
             )
@@ -2260,16 +2247,13 @@ pub async fn reparse_originals(
             .execute(&mut *tx)
             .await?;
         for (idx, chapter) in parsed.chapters.iter().enumerate() {
-            sqlx::query(
-                "INSERT INTO chapters (file_id, idx, title, format, content) VALUES (?, ?, ?, ?, ?)",
-            )
-            .bind(&file_id)
-            .bind(idx as i64)
-            .bind(&chapter.title)
-            .bind(chapter.format.as_str())
-            .bind(&chapter.content)
-            .execute(&mut *tx)
-            .await?;
+            sqlx::query("INSERT INTO chapters (file_id, idx, title, content) VALUES (?, ?, ?, ?)")
+                .bind(&file_id)
+                .bind(idx as i64)
+                .bind(&chapter.title)
+                .bind(&chapter.content)
+                .execute(&mut *tx)
+                .await?;
         }
         sqlx::query("UPDATE book_files SET chapter_count = ?, toc = ? WHERE id = ?")
             .bind(count)

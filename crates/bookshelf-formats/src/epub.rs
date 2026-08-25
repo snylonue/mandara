@@ -25,7 +25,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use bookshelf_core::error::{Error, Result};
-use bookshelf_core::model::{ChapterFormat, TocNode};
+use bookshelf_core::model::TocNode;
 use ego_tree::NodeRef;
 use epub::doc::{EpubDoc, NavPoint};
 use scraper::node::Node;
@@ -205,11 +205,7 @@ fn parse_path(path: &Path) -> Result<ParsedBook> {
             .or(heading)
             .unwrap_or_else(|| format!("第 {} 章", chapter_idx + 1));
 
-        chapters.push(ParsedChapter {
-            title,
-            format: ChapterFormat::Html,
-            content,
-        });
+        chapters.push(ParsedChapter { title, content });
         kept_spine.push(chapter_idx);
     }
 
@@ -1028,7 +1024,6 @@ mod tests {
 
         // HTML structure preserved, junk stripped.
         let c0 = &book.chapters[0];
-        assert_eq!(c0.format, ChapterFormat::Html);
         assert!(c0.content.contains("<p>第一段"));
         assert!(c0.content.contains("<ruby>注音<rt>zhùyīn</rt></ruby>"));
         assert!(c0.content.contains("<strong>强调</strong>"));

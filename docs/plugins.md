@@ -151,6 +151,25 @@ exceeds the budget is interrupted at the next wasm backedge — keep
 catalog/chapter generation fast, or split it across calls. Plugin
 calls run on blocking threads, so a slow source never stalls a worker.
 
+### Text chapter conventions (host-normalized)
+
+Plugins return chapter bodies as plain text; the host converts every
+chapter to canonical sanitized HTML at the ingest boundary
+(`bookshelf_formats::htmlize`, see `docs/storage-unification-design.md`).
+Escaping and blank-line paragraph splitting are automatic. On top of
+that, two line conventions are expanded into `<figure><img></figure>`:
+
+- a plate-list line `N. <http(s) URL>` (how a 插图/plates chapter lists
+  its images, one per line);
+- an inline mark `[插图NN] <http(s) URL>` embedded in prose — the form
+  the wenku8 plugin produces when it resolves a print-book `（插图NNN）`
+  mark to its plate image.
+
+The redundant head line `[插图] 共 N 张` is dropped. Bracket text that
+does not match a convention (no URL, non-http URL) stays plain text —
+when in doubt, emit the resolved `[插图NN] URL` form and the host does
+the rest.
+
 ## HTTP acquisition (`http.fetch`)
 
 `http.fetch` is the one way to reach an external source. The host enforces
@@ -261,8 +280,9 @@ and, when it has `lookup`, the book id).
   original position** by default (`end`), or moves it to the volume
   front like the physical book / linovelib2epub (`front`), or drops it
   (`skip`). Plates are extracted
-  as numbered image URLs (plugin chapters are text; the host has no
-  per-chapter HTML format yet). Prose chapters also carry `（插图NNN）`
+  as numbered image URLs, emitted one per line (`N. <url>`); the host
+  expands them into `<figure>` elements at the ingest boundary (see the
+  text chapter conventions above). Prose chapters also carry `（插图NNN）`
   marks where the print book has a plate; the plugin resolves them to
   the matching plate of that volume's 插图 chapter (001 → first plate,
   `[插图005] https://…` inline, so the image appears where the text

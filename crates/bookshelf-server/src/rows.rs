@@ -4,8 +4,8 @@ use anyhow::anyhow;
 use sqlx::FromRow;
 
 use bookshelf_core::model::{
-    BookMeta, Chapter, ChapterFormat, ChapterMeta, FileMeta, OriginalInfo, Position,
-    ReadingSession, Role, SeriesMeta, Share, ShareKind, User, Visibility,
+    BookMeta, Chapter, ChapterMeta, FileMeta, OriginalInfo, Position, ReadingSession, Role,
+    SeriesMeta, Share, ShareKind, User, Visibility,
 };
 
 use crate::error::ApiError;
@@ -138,7 +138,6 @@ impl FileRow {
 pub struct ChapterRow {
     pub idx: i64,
     pub title: String,
-    pub format: String,
     pub content: String,
 }
 
@@ -147,7 +146,6 @@ impl ChapterRow {
         Chapter {
             idx: self.idx.max(0) as u32,
             title: self.title,
-            format: ChapterFormat::parse(&self.format),
             content: self.content,
         }
     }

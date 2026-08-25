@@ -4,7 +4,7 @@
 //! for Chinese light novels downloaded as txt).
 
 use bookshelf_core::error::{Error, Result};
-use bookshelf_core::model::{ChapterFormat, TocNode};
+use bookshelf_core::model::TocNode;
 
 use crate::{ParsedBook, ParsedChapter, htmlize};
 
@@ -88,7 +88,6 @@ fn split_chapters(text: &str, filename: &str) -> (String, Vec<ParsedChapter>) {
                 let content = std::mem::take(&mut cur);
                 chapters.push(ParsedChapter {
                     title: std::mem::take(&mut cur_title),
-                    format: ChapterFormat::Html,
                     content: htmlize::text_to_html(&content),
                 });
             }
@@ -103,7 +102,6 @@ fn split_chapters(text: &str, filename: &str) -> (String, Vec<ParsedChapter>) {
         let content = std::mem::take(&mut cur);
         chapters.push(ParsedChapter {
             title: std::mem::take(&mut cur_title),
-            format: ChapterFormat::Html,
             content: htmlize::text_to_html(&content),
         });
     }
@@ -117,7 +115,6 @@ fn split_chapters(text: &str, filename: &str) -> (String, Vec<ParsedChapter>) {
     if chapters.is_empty() {
         chapters.push(ParsedChapter {
             title: title.clone(),
-            format: ChapterFormat::Html,
             content: htmlize::text_to_html(text),
         });
     }

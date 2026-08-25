@@ -20,6 +20,22 @@ pub async fn connect(cfg: &Config) -> anyhow::Result<SqlitePool> {
         .connect_with(opts)
         .await
         .context("connect to sqlite")?;
+    // Storage unification: legacy plain-text chapters must be converted
+    // to canonical HTML *before* migration 0008 drops the `format`
+    // column (the conversion is real code, not SQL expressions). On a
+    // fresh database the table doesn't exist yet — ignore that error.
+    match crate::service::library::backfill_text_chapters(&pool).await {
+        Ok(0) => {}
+        Ok(n) => tracing::info!(converted = n, "backfilled text chapters to html"),
+        Err(e) => {
+            // Fresh database: the table doesn't exist yet. Already-
+            // migrated database: migration 0008 dropped the format column.
+            let root = e.root_cause().to_string();
+            if !root.contains("no such table") && !root.contains("no such column") {
+                return Err(e);
+            }
+        }
+    }
     sqlx::migrate!("./migrations")
         .run(&pool)
         .await
