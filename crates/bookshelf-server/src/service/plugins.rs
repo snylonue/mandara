@@ -121,7 +121,10 @@ pub struct DeclaredCatalog {
 
 /// Compiled wasm files + the instance registry.
 pub struct PluginService {
+    /// Legacy sqlx pool — removed when the translation completes (P6).
+    #[allow(dead_code)]
     db: SqlitePool,
+    diesel_db: crate::db::DieselDb,
     wasm_by_file: HashMap<String, Arc<WasmInfo>>,
 }
 
@@ -130,7 +133,11 @@ impl PluginService {
     /// `name`/`capabilities`/`config-schema` cannot be fetched is kept
     /// with empty capabilities (its exports can never be reached through
     /// the capability gates) and a warning.
-    pub fn new(db: SqlitePool, wasms: Vec<Arc<WasmPlugin>>) -> Self {
+    pub fn new(
+        db: SqlitePool,
+        diesel_db: crate::db::DieselDb,
+        wasms: Vec<Arc<WasmPlugin>>,
+    ) -> Self {
         let mut wasm_by_file = HashMap::new();
         for wasm in wasms {
             let (name, capabilities, schema, source_info) = match (
@@ -175,7 +182,11 @@ impl PluginService {
                 }),
             );
         }
-        Self { db, wasm_by_file }
+        Self {
+            db,
+            diesel_db,
+            wasm_by_file,
+        }
     }
 
     /// Basenames of the compiled wasm files (for the register form).
@@ -188,32 +199,50 @@ impl PluginService {
     // ---- instance rows ---------------------------------------------------
 
     async fn rows(&self) -> Result<Vec<InstanceRow>, ApiError> {
-        sqlx::query_as::<_, (String, String, String, i64)>(
-            "SELECT id, wasm_file, config, enabled \
-             FROM plugin_instances ORDER BY created_at, rowid",
-        )
-        .fetch_all(&self.db)
-        .await?
-        .into_iter()
-        .map(|(id, wasm_file, config, enabled)| {
-            Ok(InstanceRow {
-                id,
-                wasm_file,
-                config: serde_json::from_str(&config).unwrap_or_else(|_| serde_json::json!({})),
-                enabled: enabled != 0,
+        use diesel::ExpressionMethods as _;
+        use diesel::QueryDsl as _;
+        use diesel_async::RunQueryDsl as _;
+
+        let mut conn = self.diesel_db.get().await?;
+        let rows: Vec<(String, String, String, i32)> = crate::schema::plugin_instances::table
+            .order(crate::schema::plugin_instances::created_at.asc())
+            .select((
+                crate::schema::plugin_instances::id,
+                crate::schema::plugin_instances::wasm_file,
+                crate::schema::plugin_instances::config,
+                crate::schema::plugin_instances::enabled,
+            ))
+            .load(&mut conn)
+            .await?;
+        rows.into_iter()
+            .map(|(id, wasm_file, config, enabled)| {
+                Ok(InstanceRow {
+                    id,
+                    wasm_file,
+                    config: serde_json::from_str(&config).unwrap_or_else(|_| serde_json::json!({})),
+                    enabled: enabled != 0,
+                })
             })
-        })
-        .collect()
+            .collect()
     }
 
     async fn row(&self, id: &str) -> Result<Option<InstanceRow>, ApiError> {
-        let row: Option<(String, String, String, i64)> = sqlx::query_as(
-            "SELECT id, wasm_file, config, enabled \
-             FROM plugin_instances WHERE id = ?",
-        )
-        .bind(id)
-        .fetch_optional(&self.db)
-        .await?;
+        use diesel::OptionalExtension as _;
+        use diesel::QueryDsl as _;
+        use diesel_async::RunQueryDsl as _;
+
+        let mut conn = self.diesel_db.get().await?;
+        let row: Option<(String, String, String, i32)> = crate::schema::plugin_instances::table
+            .find(id)
+            .select((
+                crate::schema::plugin_instances::id,
+                crate::schema::plugin_instances::wasm_file,
+                crate::schema::plugin_instances::config,
+                crate::schema::plugin_instances::enabled,
+            ))
+            .first(&mut conn)
+            .await
+            .optional()?;
         Ok(row.map(|(id, wasm_file, config, enabled)| InstanceRow {
             id,
             wasm_file,
@@ -279,18 +308,29 @@ impl PluginService {
             ApiError::bad_request(format!("no wasm file `{wasm_file}` is loaded"))
         })?;
         let config = self.validate(&wasm, &config)?;
-        sqlx::query("INSERT INTO plugin_instances (id, wasm_file, config) VALUES (?, ?, ?)")
-            .bind(id)
-            .bind(wasm_file)
-            .bind(config.to_string())
-            .execute(&self.db)
-            .await
-            .map_err(|e| match e {
-                sqlx::Error::Database(db) if db.is_unique_violation() => {
-                    ApiError::bad_request(format!("instance id `{id}` is already in use"))
-                }
-                other => other.into(),
-            })?;
+        let mut conn = self.diesel_db.get().await?;
+        use diesel::ExpressionMethods as _;
+        use diesel_async::RunQueryDsl as _;
+        let result = diesel::insert_into(crate::schema::plugin_instances::table)
+            .values((
+                crate::schema::plugin_instances::id.eq(id),
+                crate::schema::plugin_instances::wasm_file.eq(wasm_file),
+                crate::schema::plugin_instances::config.eq(config.to_string()),
+            ))
+            .execute(&mut conn)
+            .await;
+        if matches!(
+            &result,
+            Err(diesel::result::Error::DatabaseError(
+                diesel::result::DatabaseErrorKind::UniqueViolation,
+                _
+            ))
+        ) {
+            return Err(ApiError::bad_request(format!(
+                "instance id `{id}` is already in use"
+            )));
+        }
+        result?;
         let row = self
             .row(id)
             .await?
@@ -302,32 +342,44 @@ impl PluginService {
     /// content source) must be deleted first (409, like metadata
     /// deletion).
     pub async fn unregister(&self, id: &str) -> Result<(), ApiError> {
-        let files: Vec<String> =
-            sqlx::query_scalar("SELECT id FROM book_files WHERE source = ? OR content_source = ?")
-                .bind(id)
-                .bind(id)
-                .fetch_all(&self.db)
-                .await?;
+        use diesel::BoolExpressionMethods as _;
+        use diesel::ExpressionMethods as _;
+        use diesel::QueryDsl as _;
+        use diesel_async::RunQueryDsl as _;
+
+        let mut conn = self.diesel_db.get().await?;
+        let files: Vec<String> = crate::schema::book_files::table
+            .filter(
+                crate::schema::book_files::source
+                    .eq(id)
+                    .or(crate::schema::book_files::content_source.eq(id)),
+            )
+            .select(crate::schema::book_files::id)
+            .load(&mut conn)
+            .await?;
         if !files.is_empty() {
             return Err(ApiError::ConflictWithFiles(files));
         }
-        let result = sqlx::query("DELETE FROM plugin_instances WHERE id = ?")
-            .bind(id)
-            .execute(&self.db)
+        let result = diesel::delete(crate::schema::plugin_instances::table.find(id))
+            .execute(&mut conn)
             .await?;
-        if result.rows_affected() == 0 {
+        if result == 0 {
             return Err(ApiError::not_found("plugin instance"));
         }
         Ok(())
     }
 
     pub async fn set_enabled(&self, id: &str, enabled: bool) -> Result<InstanceInfo, ApiError> {
-        let result = sqlx::query("UPDATE plugin_instances SET enabled = ? WHERE id = ?")
-            .bind(enabled as i64)
-            .bind(id)
-            .execute(&self.db)
+        use diesel::ExpressionMethods as _;
+        use diesel::QueryDsl as _;
+        use diesel_async::RunQueryDsl as _;
+
+        let mut conn = self.diesel_db.get().await?;
+        let result = diesel::update(crate::schema::plugin_instances::table.find(id))
+            .set(crate::schema::plugin_instances::enabled.eq(enabled as i32))
+            .execute(&mut conn)
             .await?;
-        if result.rows_affected() == 0 {
+        if result == 0 {
             return Err(ApiError::not_found("plugin instance"));
         }
         let row = self
@@ -351,10 +403,12 @@ impl PluginService {
             ApiError::bad_request(format!("wasm file `{}` is not loaded", row.wasm_file))
         })?;
         let config = self.validate(&wasm, &config)?;
-        sqlx::query("UPDATE plugin_instances SET config = ? WHERE id = ?")
-            .bind(config.to_string())
-            .bind(id)
-            .execute(&self.db)
+        use diesel::ExpressionMethods as _;
+        use diesel::QueryDsl as _;
+        use diesel_async::RunQueryDsl as _;
+        diesel::update(crate::schema::plugin_instances::table.find(id))
+            .set(crate::schema::plugin_instances::config.eq(config.to_string()))
+            .execute(&mut self.diesel_db.get().await?)
             .await?;
         let row = self
             .row(id)

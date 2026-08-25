@@ -84,7 +84,7 @@ async fn main() -> anyhow::Result<()> {
     let wasms = load_dir(&cfg.plugins_dir, fetch_policy, image_store)?;
     tracing::info!(files = wasms.len(), "loaded wasm plugin files");
 
-    let plugins = Arc::new(PluginService::new(pool.clone(), wasms));
+    let plugins = Arc::new(PluginService::new(pool.clone(), diesel_db.clone(), wasms));
     let library = service::Library::new(pool.clone(), diesel_db.clone(), plugins, files_dir);
     // Startup sync materializes the catalog of every enabled
     // `declare`-capable instance; search/lookup-only instances stay lazy.
