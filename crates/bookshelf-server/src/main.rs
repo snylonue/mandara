@@ -72,12 +72,15 @@ async fn main() -> anyhow::Result<()> {
     );
 
     // Load wasm plugins (the wasmtime engine needs no async runtime).
-    let wasms = load_dir(&cfg.plugins_dir, fetch_policy)?;
+    // The files dir backs the content-addressed image store that serves
+    // the plugins' `store-image` import.
+    let files_dir = data_dir.join("files");
+    tokio::fs::create_dir_all(&files_dir).await?;
+    let image_store = service::images::DbImageStore::new(pool.clone(), files_dir.clone());
+    let wasms = load_dir(&cfg.plugins_dir, fetch_policy, image_store)?;
     tracing::info!(files = wasms.len(), "loaded wasm plugin files");
 
     let plugins = Arc::new(PluginService::new(pool.clone(), wasms));
-    let files_dir = data_dir.join("files");
-    tokio::fs::create_dir_all(&files_dir).await?;
     let library = service::Library::new(pool.clone(), plugins, files_dir);
     // Startup sync materializes the catalog of every enabled
     // `declare`-capable instance; search/lookup-only instances stay lazy.

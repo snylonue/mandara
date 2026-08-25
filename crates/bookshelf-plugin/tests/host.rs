@@ -15,12 +15,26 @@ use bookshelf_plugin::host::{
 
 const FIXTURE: &[u8] = include_bytes!("fixtures/hello.wasm");
 
+/// No-op image store for tests: records calls, returns a fake id.
+#[derive(Default)]
+struct TestImages {
+    count: std::sync::atomic::AtomicUsize,
+}
+
+impl bookshelf_plugin::host::ImageStore for TestImages {
+    fn store_image(&self, bytes: &[u8], _mime: &str) -> Result<String, String> {
+        let n = self.count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(format!("{:064x}", bytes.len() as u128 + n as u128))
+    }
+}
+
 fn load() -> Arc<WasmPlugin> {
     Arc::new(
         WasmPlugin::load(
             "hello.wasm",
             FIXTURE.to_vec(),
             Arc::new(FetchPolicy::default()),
+            Arc::new(TestImages::default()),
         )
         .expect("fixture loads"),
     )
@@ -214,6 +228,7 @@ fn runaway_plugin_is_trapped_by_epoch_deadline() {
                 timeout_ms: 100,
                 ..FetchPolicy::default()
             }),
+            Arc::new(TestImages::default()),
         )
         .expect("fixture loads"),
     );

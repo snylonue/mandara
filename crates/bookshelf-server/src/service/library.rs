@@ -2184,7 +2184,7 @@ fn original_path(files_dir: &Path, file_id: &str, ext: &str) -> PathBuf {
 /// bytes at `{files_dir}/images/{id}`, row in the `images` table. Duplicate
 /// bytes are a no-op (same id). Returns the id for referencing the image as
 /// `/api/images/{id}`.
-async fn store_image(
+pub async fn store_image(
     db: &SqlitePool,
     files_dir: &Path,
     bytes: &[u8],

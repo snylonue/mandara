@@ -1,3 +1,12 @@
+/// No-op image store: the introspection calls never touch images.
+struct NoImages;
+
+impl bookshelf_plugin::host::ImageStore for NoImages {
+    fn store_image(&self, _bytes: &[u8], _mime: &str) -> Result<String, String> {
+        Err("not available in this test".into())
+    }
+}
+
 #[test]
 fn introspection_is_stable_under_epoch_pump() {
     for file in [
@@ -10,6 +19,7 @@ fn introspection_is_stable_under_epoch_pump() {
             "t.wasm",
             wasm,
             std::sync::Arc::new(bookshelf_plugin::FetchPolicy::default()),
+            std::sync::Arc::new(NoImages),
         )
         .expect("load");
         let mut fails = 0;

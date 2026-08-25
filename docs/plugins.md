@@ -159,11 +159,14 @@ chapter to canonical sanitized HTML at the ingest boundary
 Escaping and blank-line paragraph splitting are automatic. On top of
 that, two line conventions are expanded into `<figure><img></figure>`:
 
-- a plate-list line `N. <http(s) URL>` (how a 插图/plates chapter lists
+- a plate-list line `N. <image-ref>` (how a 插图/plates chapter lists
   its images, one per line);
-- an inline mark `[插图NN] <http(s) URL>` embedded in prose — the form
+- an inline mark `[插图NN] <image-ref>` embedded in prose — the form
   the wenku8 plugin produces when it resolves a print-book `（插图NNN）`
   mark to its plate image.
+
+An `<image-ref>` is an `http(s)://` URL or the canonical stored-image
+path `/api/images/{id}` (what the `store-image` import returns).
 
 The redundant head line `[插图] 共 N 张` is dropped. Bracket text that
 does not match a convention (no URL, non-http URL) stays plain text —
@@ -175,7 +178,19 @@ bytes and reference them by id. Plugin chapter HTML should contain only
 `<img src="/api/images/{id}">` references — the id is the sha256 of the
 bytes, so identical images dedup across chapters and books. (The
 host-side URL download of earlier versions is gone; a plugin fetches its
-images itself over `http.fetch`.)
+images itself over `http.fetch`, then calls the import:
+
+```wit
+interface store {
+    log: func(message: string);
+    /// bytes → sha256 hex id; embed as `/api/images/{id}`
+    store-image: func(bytes: list<u8>, mime: string) -> string;
+}
+```
+
+Caps: 20 MiB per image, 96 MiB per call; exceeding them traps. A failed
+download should fall back to the remote URL (degraded rendering, retried
+on the next re-materialization) — see the wenku8 plugin.)
 
 ## HTTP acquisition (`http.fetch`)
 

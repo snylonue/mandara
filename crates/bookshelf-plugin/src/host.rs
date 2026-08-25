@@ -13,7 +13,6 @@
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-
 use tracing::{info, warn};
 use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Config, Engine, Store};
@@ -55,6 +54,14 @@ pub const MAX_CHAPTER_CONTENT_BYTES: usize = 2 * 1024 * 1024;
 /// http size cap usually kicks in first; this guards non-fetched files).
 pub const MAX_BOOK_FILE_BYTES: usize = 256 * 1024 * 1024;
 
+/// Per-image byte cap for the `store-image` import (a plugin fetching its
+/// own chapter images must not park arbitrarily large blobs).
+pub const MAX_IMAGE_BYTES: usize = 20 * 1024 * 1024;
+/// Per-call total byte cap for `store-image` (a fresh [`HostState`] per
+/// call makes this accounting free). Roughly a full illustration chapter's
+/// worth of plates.
+pub const MAX_CALL_IMAGE_BYTES: usize = 96 * 1024 * 1024;
+
 /// The epoch pump fires every `EPOCH_PUMP_MS`; a guest that keeps running
 /// past its per-call epoch deadline gets trapped.
 ///
@@ -79,6 +86,15 @@ fn call_deadline_ticks(policy: &FetchPolicy) -> u64 {
     fetch_budget + EPOCH_DEADLINE_TICKS
 }
 
+/// Sink for the `store-image` import: implemented by the server (which
+/// owns the DB pool and the files directory) and handed to every plugin
+/// call. Synchronous — plugin calls already run on blocking threads.
+pub trait ImageStore: Send + Sync {
+    /// Store image bytes; returns the content address (sha256 hex). Must
+    /// dedup: identical bytes return the same id.
+    fn store_image(&self, bytes: &[u8], mime: &str) -> std::result::Result<String, String>;
+}
+
 /// Host-side state handed to plugin imports for the duration of one call.
 struct HostState {
     /// Instance id, used as the log tag.
@@ -87,6 +103,11 @@ struct HostState {
     config: Vec<ConfigValue>,
     /// Outbound HTTP policy (allow list, caps) — shared by all plugins.
     policy: Arc<FetchPolicy>,
+    /// Image store backing the `store-image` import.
+    images: Arc<dyn ImageStore>,
+    /// Total bytes stored this call (per-call cap accounting; a fresh
+    /// state per call resets it).
+    image_bytes_stored: u64,
 }
 
 impl bookshelf::plugin::store::Host for HostState {
@@ -94,6 +115,28 @@ impl bookshelf::plugin::store::Host for HostState {
     // signalled by panicking (which traps the plugin).
     fn log(&mut self, message: String) {
         info!(plugin = %self.name, "plugin: {message}");
+    }
+
+    fn store_image(&mut self, bytes: Vec<u8>, mime: String) -> String {
+        if bytes.len() > MAX_IMAGE_BYTES {
+            panic!(
+                "`{}` store-image exceeds the {} byte per-image cap",
+                self.name, MAX_IMAGE_BYTES
+            );
+        }
+        if self.image_bytes_stored + bytes.len() as u64 > MAX_CALL_IMAGE_BYTES as u64 {
+            panic!(
+                "`{}` store-image exceeds the {} byte per-call cap",
+                self.name, MAX_CALL_IMAGE_BYTES
+            );
+        }
+        match self.images.store_image(&bytes, &mime) {
+            Ok(id) => {
+                self.image_bytes_stored += bytes.len() as u64;
+                id
+            }
+            Err(e) => panic!("`{}` store-image failed: {e}", self.name),
+        }
     }
 }
 
@@ -174,15 +217,19 @@ pub struct WasmPlugin {
     /// Outbound HTTP policy of the `http.fetch` import (allow list,
     /// timeout/size caps). Shared by every instance of this file.
     policy: Arc<FetchPolicy>,
+    /// Image store backing the `store-image` import.
+    images: Arc<dyn ImageStore>,
 }
 
 impl WasmPlugin {
     /// Compile a component from raw wasm bytes. `policy` governs the
-    /// `http.fetch` import of every instance of this file.
+    /// `http.fetch` import and `images` backs the `store-image` import of
+    /// every instance of this file.
     pub fn load(
         file: impl Into<String>,
         wasm: Vec<u8>,
         policy: Arc<FetchPolicy>,
+        images: Arc<dyn ImageStore>,
     ) -> anyhow::Result<Self> {
         let file = file.into();
         let mut config = Config::new();
@@ -201,6 +248,7 @@ impl WasmPlugin {
             component,
             linker,
             policy,
+            images,
         })
         .inspect(|plugin| plugin.start_epoch_pump())
     }
@@ -235,6 +283,8 @@ impl WasmPlugin {
                 name: self.file.clone(),
                 config: config.to_vec(),
                 policy: self.policy.clone(),
+                images: self.images.clone(),
+                image_bytes_stored: 0,
             },
         );
         // Epoch deadline: calls shorter than one pump interval are never
@@ -422,7 +472,11 @@ impl From<BookEntry> for SourceBook {
 /// warning so a bad plugin never prevents the server from starting.
 /// The returned map is keyed by file basename (e.g. `"hello.wasm"`).
 /// `policy` governs the `http.fetch` import of every plugin.
-pub fn load_dir(dir: &Path, policy: Arc<FetchPolicy>) -> anyhow::Result<Vec<Arc<WasmPlugin>>> {
+pub fn load_dir(
+    dir: &Path,
+    policy: Arc<FetchPolicy>,
+    images: Arc<dyn ImageStore>,
+) -> anyhow::Result<Vec<Arc<WasmPlugin>>> {
     let mut plugins = Vec::new();
     if !dir.is_dir() {
         return Ok(plugins);
@@ -439,7 +493,7 @@ pub fn load_dir(dir: &Path, policy: Arc<FetchPolicy>) -> anyhow::Result<Vec<Arc<
             .unwrap_or("plugin.wasm")
             .to_string();
         let wasm = std::fs::read(&path)?;
-        match WasmPlugin::load(file.clone(), wasm, policy.clone()) {
+        match WasmPlugin::load(file.clone(), wasm, policy.clone(), images.clone()) {
             Ok(plugin) => {
                 info!(file = %file, "loaded wasm plugin");
                 plugins.push(Arc::new(plugin));

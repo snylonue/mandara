@@ -7,9 +7,14 @@
 //! Plugin text-chapter conventions (documented in docs/plugins.md) are
 //! expanded by [`plugin_text_to_html`]:
 //! - a `[插图] 共 N 张` head line is dropped (redundant metadata);
-//! - a plate-list line `N. <url>` becomes `<figure><img src="…"></figure>`;
-//! - an inline `[插图NN] <url>` mark becomes the same figure at its
+//! - a plate-list line `N. <image-ref>` becomes
+//!   `<figure><img src="…"></figure>`;
+//! - an inline `[插图NN] <image-ref>` mark becomes the same figure at its
 //!   position in the paragraph flow.
+//!
+//! An image ref is an `http(s)://` URL or a canonical stored-image path
+//! (`/api/images/{id}`, what plugins get back from the `store-image`
+//! import).
 
 /// Escape text for HTML content (attribute values are escaped with it
 /// too; the URLs we emit cannot contain quotes by construction).
@@ -20,7 +25,13 @@ fn escape_html(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
-/// `true` when `s` is a plate-list line: `N. <http(s) URL>`.
+/// `true` when `s` references an image: an `http(s)://` URL or a stored
+/// image path as returned by the plugin `store-image` import.
+fn is_image_ref(s: &str) -> bool {
+    s.starts_with("http://") || s.starts_with("https://") || s.starts_with("/api/images/")
+}
+
+/// `true` when `s` is a plate-list line: `N. <image-ref>`.
 fn is_plate_list_line(s: &str) -> bool {
     let Some((num, rest)) = s.trim().split_once('.') else {
         return false;
@@ -28,8 +39,7 @@ fn is_plate_list_line(s: &str) -> bool {
     if num.is_empty() || !num.chars().all(|c| c.is_ascii_digit()) {
         return false;
     }
-    let url = rest.trim();
-    url.starts_with("http://") || url.starts_with("https://")
+    is_image_ref(rest.trim())
 }
 
 /// `true` when `s` is the plate-chapter head line: `[插图] 共 N 张`.
@@ -64,15 +74,18 @@ fn find_mark(s: &str) -> Option<(usize, usize, &str)> {
                 while k < bytes.len() && bytes[k].is_ascii_whitespace() {
                     k += 1;
                 }
-                for scheme in ["https://", "http://"] {
-                    if s[k..].starts_with(scheme) {
-                        let url_end = s[k..]
-                            .find([' ', '\t', '\n', ']'])
-                            .map(|p| k + p)
-                            .unwrap_or(s.len());
-                        if url_end > k {
-                            return Some((i, url_end, &s[k..url_end]));
-                        }
+                // The ref is matched up to whitespace/bracket; stored-image
+                // paths start at the leading `/`, URLs at their scheme.
+                let starts_with_ref = s[k..].starts_with("/api/images/")
+                    || s[k..].starts_with("https://")
+                    || s[k..].starts_with("http://");
+                if starts_with_ref {
+                    let url_end = s[k..]
+                        .find([' ', '\t', '\n', ']'])
+                        .map(|p| k + p)
+                        .unwrap_or(s.len());
+                    if url_end > k {
+                        return Some((i, url_end, &s[k..url_end]));
                     }
                 }
             }

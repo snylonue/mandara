@@ -30,6 +30,12 @@
 //! concrete `cid` — the guest is stateless, so the map can't be cached;
 //! the host's DB is the cache, so this happens once per chapter at most.
 //!
+//! Images: plate URLs (插图 chapters and inline `（插图NNN）` marks) are
+//! downloaded by the plugin itself and stored through the host's
+//! `store-image` import; the chapter text references them as
+//! `/api/images/{id}` (the canonical stored-image form). A failed
+//! download falls back to the remote URL.
+//!
 //! Deploy (host side needs the allow list):
 //! ```sh
 //! BOOKSHELF_PLUGIN_FETCH_ALLOWED_HOSTS=www.wenku8.net ./scripts/build-plugins.sh wenku8
@@ -552,10 +558,8 @@ fn fetch_toc(book: &str) -> Option<TocInfo> {
 // Chapter body extraction
 // ---------------------------------------------------------------------------
 
-/// 插图 chapters: list the plate image URLs, one per line (plugin
-/// chapters are stored as text; the reader shows them as a URL list).
-/// Collect the plate image URLs of an 插图 chapter body (deduplicated,
-/// in page order).
+/// Collect the remote plate image URLs of an 插图 chapter body
+/// (deduplicated, in page order).
 fn collect_image_urls(inner: &str) -> Vec<String> {
     let mut urls: Vec<String> = Vec::new();
     let mut i = 0usize;
@@ -591,8 +595,52 @@ fn collect_image_urls(inner: &str) -> Vec<String> {
     urls
 }
 
-/// 插图 chapters: list the plate image URLs, one per line (plugin
-/// chapters are stored as text; the reader shows them as a URL list).
+// ---------------------------------------------------------------------------
+// Image storage
+// ---------------------------------------------------------------------------
+
+/// Sniff the mime type of image bytes (the store wants a stable value;
+/// the CDN's content-type is not always present).
+fn sniff_mime(b: &[u8]) -> Option<&'static str> {
+    if b.starts_with(&[0xFF, 0xD8]) {
+        Some("image/jpeg")
+    } else if b.starts_with(&[0x89, b'P', b'N', b'G']) {
+        Some("image/png")
+    } else if b.starts_with(b"GIF8") {
+        Some("image/gif")
+    } else if b.len() > 12 && &b[0..4] == b"RIFF" && &b[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else {
+        None
+    }
+}
+
+/// Download one remote image and hand the bytes to the host's
+/// content-addressed image store; returns the canonical local reference
+/// (`/api/images/{id}`). `None` on any failure — callers fall back to the
+/// remote URL so a broken CDN only degrades rendering.
+fn store_image_ref(url: &str) -> Option<String> {
+    let (_, body) = http_get(url, "").ok()?;
+    if body.is_empty() {
+        return None;
+    }
+    let mime = sniff_mime(&body)?;
+    let id = bookshelf::plugin::store::store_image(&body, mime);
+    Some(format!("/api/images/{id}"))
+}
+
+/// Localize a plate-URL list into stored-image references. Failures keep
+/// the remote URL (graceful degradation; the next re-materialization
+/// retries).
+fn stored_urls(urls: &[String]) -> Vec<String> {
+    urls.iter()
+        .map(|u| store_image_ref(u).unwrap_or_else(|| u.clone()))
+        .collect()
+}
+
+/// 插图 chapters: list the stored plate images, one `N. <image-ref>`
+/// line per plate (the host's ingest expands those lines into
+/// `<figure><img/></figure>`).
 fn format_image_list(urls: &[String]) -> String {
     if urls.is_empty() {
         return String::new();
@@ -953,14 +1001,20 @@ impl Guest for Wenku8Plugin {
         let inner = strip_contentdp(&content_div(&html)?);
         let is_ill = entry.illustration || inner.contains("class=\"divimage\"");
         let content = if is_ill {
-            format_image_list(&collect_image_urls(&inner))
+            format_image_list(&stored_urls(&collect_image_urls(&inner)))
         } else {
             let text = tidy(&html_to_text(&inner));
             // wenku8 inserts `（插图NNN）` marks where the print book has a
-            // plate; resolve them to the volume's plate image URLs.
+            // plate; resolve them to the volume's plate image (stored in
+            // the host's image store) of that volume.
             replace_illustration_marks(
                 &text,
-                &volume_illustration_urls(&base, &book, &info.volumes, entry.volume),
+                &stored_urls(&volume_illustration_urls(
+                    &base,
+                    &book,
+                    &info.volumes,
+                    entry.volume,
+                )),
             )
         };
         // Content must be non-empty to be a real chapter (the host skips
@@ -988,6 +1042,15 @@ export!(Wenku8Plugin);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sniffs_image_mimes() {
+        assert_eq!(sniff_mime(&[0xFF, 0xD8, 1, 2]), Some("image/jpeg"));
+        assert_eq!(sniff_mime(&[0x89, b'P', b'N', b'G']), Some("image/png"));
+        assert_eq!(sniff_mime(b"GIF89a"), Some("image/gif"));
+        assert_eq!(sniff_mime(b"<html>"), None);
+        assert_eq!(sniff_mime(&[]), None);
+    }
 
     #[test]
     fn parses_volume_titles_and_counts() {

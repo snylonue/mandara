@@ -27,7 +27,7 @@
 //     unsupported features are declared via `capabilities()` and return
 //     `none`/empty).
 
-package bookshelf:plugin@0.5.0;
+package bookshelf:plugin@0.6.0;
 
 /// Shared types between bookshelf and plugins.
 interface types {
@@ -143,6 +143,19 @@ interface types {
 interface store {
     /// Append a line to the server log, tagged with the instance id.
     log: func(message: string);
+
+    /// Store image bytes in the server's content-addressed image store.
+    ///
+    /// The id is the sha256 of the bytes (hex): identical bytes return the
+    /// same id, so images dedup across chapters and books. Reference a
+    /// stored image in chapter content as `<img src="/api/images/{id}">`
+    /// — that exact form is the canonical reference every producer
+    /// (plugins and epub upload ingest) converges on.
+    ///
+    /// Per-image and per-call byte budgets are host caps; exceeding them
+    /// traps the call. Fails (traps) when the store cannot persist the
+    /// bytes.
+    store-image: func(bytes: list<u8>, mime: string) -> string;
 }
 
 /// Configuration channel.
