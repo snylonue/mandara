@@ -327,7 +327,6 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
- "ureq",
  "uuid",
 ]
 

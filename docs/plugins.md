@@ -170,15 +170,12 @@ does not match a convention (no URL, non-http URL) stays plain text —
 when in doubt, emit the resolved `[插图NN] URL` form and the host does
 the rest.
 
-**Image localization.** Remote image URLs in chapter HTML are fetched by
-the host at materialization time and stored under `data/files/images/`
-(deduped by URL across chapters/books); the chapter HTML is rewritten to
-the local `GET /api/images/{sha256}` endpoint, so readers never need
-direct access to the source CDN (which browsers often cannot load —
-hotlink checks, regional blocks). Downloads are capped at 20 MiB / 30 s
-per image, 4 in parallel; a failed download keeps the remote URL in
-place and is retried on the next re-materialization (rebind / clear +
-re-read).
+**Images.** The server is a content-addressed image store: producers store
+bytes and reference them by id. Plugin chapter HTML should contain only
+`<img src="/api/images/{id}">` references — the id is the sha256 of the
+bytes, so identical images dedup across chapters and books. (The
+host-side URL download of earlier versions is gone; a plugin fetches its
+images itself over `http.fetch`.)
 
 ## HTTP acquisition (`http.fetch`)
 

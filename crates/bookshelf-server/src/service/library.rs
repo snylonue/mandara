@@ -417,7 +417,6 @@ impl Library {
         let mut tx = self.db.begin().await?;
         for (idx, chapter) in chapters.iter().enumerate() {
             let content = bookshelf_formats::htmlize::plugin_text_to_html(&chapter.content);
-            let content = self.localize_images(&content).await;
             sqlx::query(
                 "INSERT INTO chapters (file_id, idx, title, content) VALUES (?, ?, ?, ?) \
                  ON CONFLICT (file_id, idx) DO UPDATE SET \
@@ -2011,7 +2010,6 @@ impl Library {
             return Ok(None);
         };
         let content = bookshelf_formats::htmlize::plugin_text_to_html(&chapter.content);
-        let content = self.localize_images(&content).await;
         sqlx::query(
             "INSERT INTO chapters (file_id, idx, title, content) VALUES (?, ?, ?, ?) \
              ON CONFLICT (file_id, idx) DO UPDATE SET title = excluded.title, content = excluded.content",
@@ -2182,14 +2180,6 @@ fn original_path(files_dir: &Path, file_id: &str, ext: &str) -> PathBuf {
 
 // ---- chapter image localization ------------------------------------------
 
-/// Hard caps for host-side chapter-image downloads. Images referenced by
-/// plugin chapter text are fetched by the host at materialization time
-/// (browsers often cannot load the source CDN directly, e.g. wenku8's
-/// pic host).
-const IMAGE_TIMEOUT_SECS: u64 = 30;
-const IMAGE_MAX_BYTES: u64 = 20 * 1024 * 1024;
-const IMAGE_CONCURRENCY: usize = 4;
-
 /// Store image bytes in the content-addressed image store: id = sha256 hex,
 /// bytes at `{files_dir}/images/{id}`, row in the `images` table. Duplicate
 /// bytes are a no-op (same id). Returns the id for referencing the image as
@@ -2249,144 +2239,8 @@ pub async fn ingest_parsed_book(
     Ok(())
 }
 
-/// Extract the remote image URLs referenced by a chapter's HTML
-/// (`<img src="http(s)://…">`; data URIs are left alone), deduplicated
-/// in order of first appearance.
-fn remote_image_urls(html: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut rest = html;
-    while let Some(pos) = rest.find("<img src=\"") {
-        rest = &rest[pos + "<img src=\"".len()..];
-        let Some(end) = rest.find('"') else { break };
-        let url = &rest[..end];
-        if (url.starts_with("https://") || url.starts_with("http://"))
-            && !out.iter().any(|u| u == url)
-        {
-            out.push(url.to_string());
-        }
-    }
-    out
-}
-
-/// Download one image (blocking; runs on the blocking pool). Returns the
-/// sha256 hex and mime type; the caller stores bytes + DB row.
-/// Download one image (blocking; runs on the blocking pool). Returns the
-/// bytes and mime type; the caller stores them + the DB row. URL
-/// validation (scheme, well-formedness) is ureq's job — it errors on
-/// anything it cannot request.
-fn download_image(url: &str) -> anyhow::Result<(Vec<u8>, String)> {
-    let agent = ureq::AgentBuilder::new()
-        .timeout(std::time::Duration::from_secs(IMAGE_TIMEOUT_SECS))
-        .redirects(5)
-        .build();
-    let resp = agent.get(url).call()?;
-    let mime = resp
-        .header("content-type")
-        .unwrap_or("image/jpeg")
-        .split(';')
-        .next()
-        .unwrap_or("image/jpeg")
-        .trim()
-        .to_string();
-    let mut bytes = Vec::new();
-    use std::io::Read;
-    resp.into_reader()
-        .take(IMAGE_MAX_BYTES + 1)
-        .read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > IMAGE_MAX_BYTES {
-        anyhow::bail!("image exceeds {IMAGE_MAX_BYTES} bytes");
-    }
-    Ok((bytes, mime))
-}
-
 impl Library {
-    /// Rewrite remote image references in chapter HTML to local
-    /// `/api/images/{id}` endpoints: every referenced URL is downloaded
-    /// once (deduped by URL across chapters/books via the `images` table,
-    /// bytes stored under `data/files/images/{sha256}`), then the `src`
-    /// is replaced. URLs that fail to download keep their remote form
-    /// (graceful degradation; the next re-materialization retries).
-    async fn localize_images(&self, html: &str) -> String {
-        let urls = remote_image_urls(html);
-        if urls.is_empty() {
-            return html.to_string();
-        }
-
-        // Resolve known URLs from the DB first (no download).
-        let mut mapping: Vec<(String, String)> = Vec::new(); // (url, id)
-        let mut pending: Vec<String> = Vec::new();
-        for url in &urls {
-            let known: Option<String> = sqlx::query_scalar("SELECT id FROM images WHERE url = ?")
-                .bind(url)
-                .fetch_optional(&self.db)
-                .await
-                .ok()
-                .flatten();
-            match known {
-                Some(id) => mapping.push((url.clone(), id)),
-                None => pending.push(url.clone()),
-            }
-        }
-
-        // Download the misses, bounded concurrency, on blocking threads.
-        let images_dir = self.files_dir.join("images");
-        let mut set = tokio::task::JoinSet::new();
-        for chunk in pending.chunks(IMAGE_CONCURRENCY) {
-            for url in chunk {
-                let url = url.clone();
-                set.spawn_blocking(move || download_image(&url).map(|result| (url, result)));
-            }
-            while let Some(joined) = set.join_next().await {
-                let resolved = match joined {
-                    Ok(Ok(pair)) => pair,
-                    Ok(Err(e)) => {
-                        warn!(error = %e, "image download failed");
-                        continue;
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "image download task panicked");
-                        continue;
-                    }
-                };
-                let (url, (bytes, mime)) = resolved;
-                let id = sha256_hex(&bytes);
-                if let Err(e) = tokio::fs::create_dir_all(&images_dir).await {
-                    warn!(error = %e, "cannot create images dir");
-                    continue;
-                }
-                let path = images_dir.join(&id);
-                if let Err(e) = tokio::fs::write(&path, &bytes).await {
-                    warn!(path = %path.display(), error = %e, "cannot write image");
-                    continue;
-                }
-                if let Err(e) =
-                    sqlx::query("INSERT OR IGNORE INTO images (id, mime, size) VALUES (?, ?, ?)")
-                        .bind(&id)
-                        .bind(&mime)
-                        .bind(bytes.len() as i64)
-                        .execute(&self.db)
-                        .await
-                {
-                    warn!(url = %url, error = %e, "cannot record image");
-                    continue;
-                }
-                info!(url = %url, id = %id, size = bytes.len(), "image localized");
-                mapping.push((url, id));
-            }
-        }
-
-        // Rewrite the HTML.
-        let mut out = html.to_string();
-        for (url, id) in mapping {
-            out = out.replace(
-                &format!("src=\"{url}\""),
-                &format!("src=\"/api/images/{id}\""),
-            );
-        }
-        out
-    }
-
-    /// The stored mime type of a localized image (by sha256 hex id).
+    /// The stored mime type of a stored image (by sha256 hex id).
     pub async fn image_mime(&self, id: &str) -> Result<Option<String>, ApiError> {
         let mime: Option<String> = sqlx::query_scalar("SELECT mime FROM images WHERE id = ?")
             .bind(id)
@@ -2544,14 +2398,6 @@ mod tests {
             title: title.into(),
             chapter_count: n,
         }
-    }
-
-    #[test]
-    fn extracts_only_remote_image_urls() {
-        let html = "<p>x</p><figure><img src=\"https://pic.example/a.jpg\"/></figure>\
-<p><img src=\"data:image/png;base64,AAAA\"/></p><img src=\"https://pic.example/a.jpg\">\
-<img src=\"/api/images/abc\">";
-        assert_eq!(remote_image_urls(html), vec!["https://pic.example/a.jpg"]);
     }
 
     #[test]
