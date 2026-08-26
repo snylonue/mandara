@@ -398,7 +398,7 @@ paths:
             type: string
       responses:
         "200":
-          description: Metadata entries that own at least one visible file
+          description: Metadata entries with at least one visible file, plus metadata-only entries (no files yet) the caller owns
           content:
             application/json:
               schema:
@@ -412,14 +412,19 @@ paths:
       summary: |
         Add a book to the library — the single acquisition flow
         (获取书籍 → 添加元数据). The content is either an uploaded
-        `file` or a plugin book (`plugin_source` + `plugin_book_id`
+        `file`, a plugin book (`plugin_source` + `plugin_book_id`
         without a `file`; the plugin supplies the book file via
         `get-book-file` when available, otherwise chapters materialize
-        lazily). The metadata entry is created automatically (parsed
-        from the file / the plugin's own entry), taken from a plugin
-        catalog, or attached to an existing entry (`book_id`).
-        `title`/`authors`/`description`/`cover_url` override the produced
-        metadata (manual mode; never applied when attaching). When the
+        lazily), or none (`metadata_only`: a bare metadata entry — add
+        the content later by attaching a file/plugin book to it). The
+        metadata entry is created automatically (parsed from the file /
+        the plugin's own entry), taken from a plugin catalog
+        (`meta_plugin_source` + `meta_plugin_book_id`), attached to an
+        existing entry (`book_id`), or described manually. The metadata
+        source is independent of the content source: metadata may come
+        from plugin A while the content comes from plugin B.
+        `title`/`authors`/`description`/`cover_url`/`ext` override the
+        produced metadata (never applied when attaching). When the
         plugin source declares >1 volumes, the acquisition auto-splits
         into one series + one book per 卷 (the response carries them all).
       operationId: uploadBook
@@ -438,9 +443,20 @@ paths:
                   description: |
                     Epub or txt file — the content. Mutually exclusive
                     with `plugin_source` + `plugin_book_id` (plugin
-                    content): exactly one content source is required.
-                    When given together with `plugin_source`, the file is
-                    the content and the plugin only supplies the metadata.
+                    content) and with `metadata_only`: exactly one content
+                    source is used. When given together with
+                    `plugin_source`, the file is the content and the
+                    plugin only supplies the metadata.
+                metadata_only:
+                  type: boolean
+                  default: false
+                  description: |
+                    Create a bare metadata entry without any content
+                    (no file is created). `meta_plugin_source` +
+                    `meta_plugin_book_id` name the metadata source
+                    (catalog entry), or `title`/`authors`/… describe the
+                    entry manually (a title is required). Content may be
+                    attached later via `POST /api/books/{id}/files`.
                 visibility:
                   type: string
                   enum: [private, public]
@@ -460,13 +476,25 @@ paths:
                 plugin_source:
                   type: string
                   description: |
-                    Together with `plugin_book_id`: the metadata comes
-                    from this plugin source's catalog. Without a `file`,
-                    the plugin is also the content source (the book is
-                    materialized into the library).
+                    Together with `plugin_book_id`: the *content* comes
+                    from this plugin source's book (materialized into the
+                    library; whole-book files via `get-book-file`, else
+                    lazy chapter mode). When no `file`,
+                    `meta_plugin_source`, or `book_id` is given, the
+                    plugin's own entry also provides the metadata.
                 plugin_book_id:
                   type: string
                   description: Id of the book inside the plugin's catalog
+                meta_plugin_source:
+                  type: string
+                  description: |
+                    Together with `meta_plugin_book_id`: the metadata
+                    comes from this plugin source's catalog — possibly a
+                    different plugin than the content source. Overrides
+                    (`title`/…) apply on top of its entry.
+                meta_plugin_book_id:
+                  type: string
+                  description: Id of the metadata book inside its plugin's catalog
                 title:
                   type: string
                   description: "Manual metadata: overrides the title (auto mode uses the parsed/identified one)"
@@ -490,7 +518,8 @@ paths:
         "201":
           description: |
             The created series (when a multi-volume source book was
-            split) and the created books, each with its first file.
+            split) and the created books, each with its first file
+            (empty files array for a metadata-only addition).
           content:
             application/json:
               schema:
@@ -1763,6 +1792,7 @@ components:
         book:
           $ref: "#/components/schemas/BookMeta"
         files:
+          description: Files of this book visible to the caller (empty for a metadata-only entry)
           type: array
           items:
             $ref: "#/components/schemas/FileMeta"

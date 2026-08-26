@@ -61,14 +61,23 @@ fn parse_visibility(value: Option<&str>, default: Visibility) -> Result<Visibili
 /// comes either from an uploaded `file` or from a plugin source
 /// (`plugin_source` + `plugin_book_id`); the *metadata* is attached via
 /// `book_id` (existing entry), taken from a plugin catalog
-/// (`plugin_source`), or generated automatically (parsed/identified).
-/// `title`/`authors`/`description`/`cover_url` override the produced
+/// (`meta_plugin_source` + `meta_plugin_book_id`, or the bare
+/// `plugin_source` when no plugin content was named), or generated
+/// automatically (parsed/identified). The two sources are independent:
+/// metadata may come from plugin A while the content comes from plugin
+/// B. `title`/`authors`/`description`/`cover_url` override the produced
 /// metadata (never applied when attaching).
 #[derive(Default)]
 struct UploadFields {
     book_id: Option<String>,
     plugin_source: Option<String>,
     plugin_book_id: Option<String>,
+    /// Metadata source (a different plugin than the content source is
+    /// fine). When absent, the metadata resolves automatically unless
+    /// `plugin_source` named no content either (then it *is* the
+    /// metadata source — the self-describing single-plugin form).
+    meta_plugin_source: Option<String>,
+    meta_plugin_book_id: Option<String>,
     title: Option<String>,
     authors: Option<Vec<String>>,
     description: Option<String>,
@@ -76,6 +85,10 @@ struct UploadFields {
     /// Extended metadata (JSON object; ISBN/publisher/…, see
     /// `BookExt`). Overrides the parsed/plugin value per-key.
     ext: Option<serde_json::Value>,
+    /// Metadata-only addition: create the entry without any content
+    /// (`AcquireContent::None`); `plugin_source` + `plugin_book_id` then
+    /// name the metadata source, manual fields describe it directly.
+    metadata_only: bool,
 }
 
 async fn field_text(field: axum::extract::multipart::Field<'_>) -> Result<String, ApiError> {
@@ -125,6 +138,13 @@ async fn read_upload(
             Some("book_id") => fields.book_id = Some(field_text(field).await?),
             Some("plugin_source") => fields.plugin_source = Some(field_text(field).await?),
             Some("plugin_book_id") => fields.plugin_book_id = Some(field_text(field).await?),
+            Some("meta_plugin_source") => {
+                fields.meta_plugin_source = Some(field_text(field).await?)
+            }
+            Some("meta_plugin_book_id") => {
+                fields.meta_plugin_book_id = Some(field_text(field).await?)
+            }
+            Some("metadata_only") => fields.metadata_only = true,
             Some("title") => fields.title = Some(field_text(field).await?),
             Some("authors") => {
                 let raw = field_text(field).await?;
@@ -172,19 +192,49 @@ async fn read_upload(
 }
 
 /// The metadata mode of an addition: attach to an existing entry
-/// (`book_id`), metadata from a plugin catalog (`plugin_source`), or a
-/// new entry (auto/parsed/identified; `overrides` apply).
+/// (`book_id`), metadata from a plugin catalog (`meta_plugin_source`, or
+/// the bare `plugin_source` when it names no content), or a new entry
+/// (auto/parsed/identified; `overrides` apply).
 fn metadata_mode<'a>(
     fields: &'a UploadFields,
+    has_file: bool,
     overrides: &'a MetadataOverrides,
 ) -> Result<AcquireMetadata<'a>, ApiError> {
     if let Some(book_id) = &fields.book_id {
         return Ok(AcquireMetadata::Attach { book_id });
     }
+    // Explicit metadata source: independent of where the content comes
+    // from (metadata from plugin A + content from plugin B is valid).
+    if let Some(source) = &fields.meta_plugin_source {
+        let book_id_in_source = fields.meta_plugin_book_id.as_deref().ok_or_else(|| {
+            ApiError::bad_request(
+                "`meta_plugin_book_id` is required together with `meta_plugin_source`",
+            )
+        })?;
+        return Ok(AcquireMetadata::Plugin {
+            source,
+            book_id_in_source,
+            overrides,
+        });
+    }
+    if fields.meta_plugin_book_id.is_some() {
+        return Err(ApiError::bad_request(
+            "`meta_plugin_book_id` requires `meta_plugin_source`",
+        ));
+    }
+    // Self-describing form: `plugin_source` names the metadata source
+    // only when it does not name the content (an upload whose metadata
+    // comes from a plugin, or a metadata-only catalog entry). When it
+    // names the content, the metadata is that plugin's own entry — auto.
     if let Some(source) = &fields.plugin_source {
         let book_id_in_source = fields.plugin_book_id.as_deref().ok_or_else(|| {
             ApiError::bad_request("`plugin_book_id` is required together with `plugin_source`")
         })?;
+        let names_content = !fields.metadata_only && !has_file;
+        if names_content {
+            // Plugin content + auto: `(Plugin, New)` resolves the entry.
+            return Ok(AcquireMetadata::New { overrides });
+        }
         return Ok(AcquireMetadata::Plugin {
             source,
             book_id_in_source,
@@ -199,21 +249,26 @@ fn metadata_mode<'a>(
     Ok(AcquireMetadata::New { overrides })
 }
 
-/// The content source of an addition: the uploaded file, or a book of a
+/// The content source of an addition: the uploaded file, a book of a
 /// plugin source (file mode via `get-book-file` when available, else
-/// chapter-mode virtual file).
+/// chapter-mode virtual file), or none (a metadata-only addition — the
+/// entry is created without any content; `metadata_only` forces this even
+/// when `plugin_source` names the metadata source).
 fn content_source<'a>(
     file: &'a Option<(Vec<u8>, String)>,
     fields: &'a UploadFields,
 ) -> Result<AcquireContent<'a>, ApiError> {
+    if fields.metadata_only {
+        return Ok(AcquireContent::None);
+    }
     if let Some((bytes, filename)) = file {
         return Ok(AcquireContent::File { bytes, filename });
     }
     let (Some(source), Some(book_id_in_source)) = (&fields.plugin_source, &fields.plugin_book_id)
     else {
-        return Err(ApiError::bad_request(
-            "missing `file`, or a plugin book (`plugin_source` + `plugin_book_id`)",
-        ));
+        // Neither a file nor a plugin book: metadata only (manual or a
+        // plugin catalog entry — `metadata_mode` resolves which).
+        return Ok(AcquireContent::None);
     };
     Ok(AcquireContent::Plugin {
         source,
@@ -291,7 +346,7 @@ pub async fn upload_book(
         .acquire_book(
             &user,
             content_source(&file, &fields)?,
-            metadata_mode(&fields, &overrides)?,
+            metadata_mode(&fields, file.is_some(), &overrides)?,
             visibility,
             &label,
         )
@@ -311,7 +366,7 @@ pub async fn upload_book(
                 .map(|(book, file)| BookDetail {
                     series: None,
                     book,
-                    files: vec![file],
+                    files: file.into_iter().collect(),
                 })
                 .collect(),
         }),
@@ -363,6 +418,8 @@ pub async fn attach_file(
         .into_iter()
         .next()
         .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("acquisition produced no books")))?;
+    let file =
+        file.ok_or_else(|| ApiError::Internal(anyhow::anyhow!("acquisition produced no file")))?;
     Ok((StatusCode::CREATED, Json(file)))
 }
 
@@ -380,7 +437,9 @@ pub async fn get_book(
         .await?
         .ok_or_else(|| ApiError::not_found("book"))?;
     let files = st.library.files_of_book(&book.id, &user).await?;
-    if files.is_empty() {
+    // A metadata-only entry has no files yet; it is still visible to its
+    // owner and admins (who may attach content to it later).
+    if files.is_empty() && !can_manage_metadata(&user, &book) {
         return Err(ApiError::not_found("book"));
     }
     let series = match &book.series_id {

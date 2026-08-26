@@ -586,6 +586,7 @@ export function BookDetailPage() {
         <h2>
           {t("book.filesTitle", { count: files.length })}
         </h2>
+        {files.length === 0 && <p className="hint">{t("book.noFiles")}</p>}
         {files.map((f) => (
           <FileSection
             key={f.id}

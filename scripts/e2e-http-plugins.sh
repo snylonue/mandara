@@ -265,6 +265,55 @@ api PATCH "/api/books/$UPBOOK" '{"series_id":null}' > /dev/null || fail "unassig
 api DELETE "/api/series/$MS_ID" > /dev/null || fail "delete series"
 pass "manual series: create / assign / empty members / unassign / delete"
 
+# --- metadata-only acquisition (书籍 / 元数据单独添加) ------------------
+# 元数据取自插件目录，但不产生任何文件；之后再把文件挂到它下面。
+# 用 w-4（尚未物化）验证全新元数据条目，而非复用已入库条目。
+MO=$(api_form /api/books "metadata_only=true" "plugin_source=wiki" "plugin_book_id=w-4" "visibility=public")
+MOBOOK=$(echo "$MO" | jq_field "d['books'][0]['book']['id']")
+MOFILES=$(echo "$MO" | jq_field "len(d['books'][0]['files'])")
+[ "$MOFILES" = "0" ] || fail "metadata-only plugin entry must have no files (got $MOFILES)"
+api GET /api/books | grep -q "$MOBOOK" || fail "metadata-only entry not listed"
+api GET "/api/books/$MOBOOK" | grep -q "$MOBOOK" || fail "metadata-only entry detail not reachable"
+# 元数据条目本身确实无文件：详情中的 files 数组为空。
+MODFILES=$(api GET "/api/books/$MOBOOK" | jq_field "len(d['files'])")
+[ "$MODFILES" = "0" ] || fail "metadata-only entry detail must have 0 files (got $MODFILES)"
+MO2=$(api_form /api/books "file=@/tmp/e2e-upload.txt" "book_id=$MOBOOK" "visibility=public")
+[ "$(echo "$MO2" | jq_field "d['books'][0]['book']['id']")" = "$MOBOOK" ] || fail "attach content to metadata-only entry"
+pass "metadata-only: plugin metadata entry (0 files), listed, then a file attached"
+
+# 手动描述的元数据条目（无内容，书名必填）。
+MM=$(api_form /api/books "metadata_only=true" "title=仅元数据的书" "authors=[\"甲\",\"乙\"]")
+echo "$MM" | grep -q "仅元数据的书" || fail "manual metadata-only title lost"
+[ "$(echo "$MM" | jq_field "len(d['books'][0]['files'])")" = "0" ] || fail "manual metadata-only must have no files"
+pass "metadata-only: manual entry (title required), no files"
+
+# metadata_only 与 book_id 互斥（无可挂接的内容）→ 400。
+if api_form /api/books "metadata_only=true" "book_id=$MOBOOK" "visibility=public" > /dev/null 2>&1; then
+    fail "metadata_only with book_id (attach) should 400"
+fi
+# metadata_only 但既无书名也无插件源 → 400。
+if api_form /api/books "metadata_only=true" > /dev/null 2>&1; then
+    fail "metadata_only without title or plugin source should 400"
+fi
+pass "metadata-only guards: attach / empty metadata -> 400"
+
+# --- cross-plugin acquisition (A 插件供元数据 + B 插件供内容) -----------
+# 元数据取自 wiki w-5《旧书店的猫》，内容取自 reader r-6《时间旅人的信》：
+# 条目书名/作者应来自 wiki，而章节标题/正文来自 reader。
+XP=$(api_form /api/books "plugin_source=reader" "plugin_book_id=r-6" \
+    "meta_plugin_source=wiki" "meta_plugin_book_id=w-5" "visibility=public")
+XPBOOK=$(echo "$XP" | jq_field "d['books'][0]['book']['id']")
+XPFILE=$(echo "$XP" | jq_field "d['books'][0]['files'][0]['id']")
+echo "$XP" | grep -q "旧书店的猫" || fail "cross-plugin: metadata title should come from wiki w-5"
+[ "$(echo "$XP" | jq_field "d['books'][0]['files'][0]['source']")" = "reader" ] || fail "cross-plugin: file should belong to the content source"
+api GET "/api/files/$XPFILE/chapters/0" | grep -q "明天寄来的明信片" || fail "cross-plugin: chapter content should come from reader r-6"
+# 同一插件内容不能再次物化到另一条元数据下 → 409。
+if api_form /api/books "plugin_source=reader" "plugin_book_id=r-6" \
+    "meta_plugin_source=wiki" "meta_plugin_book_id=w-7" "visibility=public" > /dev/null 2>&1; then
+    fail "cross-plugin re-acquire of the same content book should 409"
+fi
+pass "cross-plugin: wiki metadata + reader content, conflict on re-acquire"
+
 rm -f /tmp/e2e-upload.txt
 
 echo ""

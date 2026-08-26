@@ -133,6 +133,12 @@ pub enum AcquireContent<'a> {
         source: &'a str,
         book_id_in_source: &'a str,
     },
+    /// No content: add a metadata entry on its own (a book without any
+    /// file yet). Only valid with [`AcquireMetadata::Plugin`] (metadata
+    /// from a plugin catalog) or [`AcquireMetadata::New`] (a manually
+    /// described entry, which needs a title); [`AcquireMetadata::Attach`]
+    /// has nothing to attach and is rejected.
+    None,
 }
 
 /// How the metadata entry of a library addition is resolved (the
@@ -144,9 +150,8 @@ pub enum AcquireMetadata<'a> {
     /// correct the produced metadata.
     New { overrides: &'a MetadataOverrides },
     /// Metadata from a named plugin source's `get-book` (e.g. a plugin
-    /// catalog picker). The content may be an uploaded file (the classic
-    /// "metadata from a plugin, file from disk" mode) or the same
-    /// plugin's book.
+    /// catalog picker). The content is independent of this source: an
+    /// uploaded file, another plugin's book, or none (metadata only).
     Plugin {
         source: &'a str,
         book_id_in_source: &'a str,
@@ -181,12 +186,13 @@ impl MetadataOverrides {
 
 /// Result of one acquisition: the series created by a volume split (when
 /// the source declared >1 volumes) plus the books that entered the
-/// library, each with the file stored under it.
+/// library, each with the file stored under it (`None` for a
+/// metadata-only addition, which has no content yet).
 #[derive(Debug, Clone)]
 pub struct AcquireOutcome {
     pub series: Option<SeriesMeta>,
     /// Non-empty; one element unless the acquisition split volumes.
-    pub books: Vec<(BookMeta, FileMeta)>,
+    pub books: Vec<(BookMeta, Option<FileMeta>)>,
 }
 
 pub struct Library {
@@ -320,11 +326,13 @@ impl Library {
                 "",
             )
             .await?;
-        outcome
-            .books
-            .into_iter()
-            .next()
-            .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("acquisition produced no books")))
+        let (book, file) =
+            outcome.books.into_iter().next().ok_or_else(|| {
+                ApiError::Internal(anyhow::anyhow!("acquisition produced no books"))
+            })?;
+        let file = file
+            .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("acquisition produced no file")))?;
+        Ok((book, file))
     }
 
     /// File-mode materialization: store a `get-book-file` result like a
@@ -589,6 +597,37 @@ impl Library {
         row.map(FileRow::into_model).transpose()
     }
 
+    /// Insert a bare metadata entry (no files yet) — a book added on its
+    /// own (`AcquireContent::None`) so its content can be attached later.
+    #[allow(clippy::too_many_arguments)]
+    async fn create_metadata_entry(
+        &self,
+        title: &str,
+        authors: &[String],
+        description: Option<&str>,
+        cover_url: Option<&str>,
+        ext: Option<&BookExt>,
+        owner_id: &str,
+    ) -> Result<String, ApiError> {
+        let book_id = uuid::Uuid::new_v4().simple().to_string();
+        let authors_json = serde_json::to_string(authors).unwrap_or_else(|_| "[]".into());
+        let mut ext = ext.cloned().unwrap_or_default();
+        ext.sanitize().map_err(ApiError::bad_request)?;
+        diesel::insert_into(schema::books::table)
+            .values((
+                schema::books::id.eq(&book_id),
+                schema::books::title.eq(title),
+                schema::books::authors.eq(authors_json),
+                schema::books::description.eq(description.map(str::to_string)),
+                schema::books::cover_url.eq(cover_url.map(str::to_string)),
+                schema::books::ext_meta.eq(ext.to_column()),
+                schema::books::created_by.eq(owner_id),
+            ))
+            .execute(&mut self.diesel_db.get().await?)
+            .await?;
+        Ok(book_id)
+    }
+
     // ---- acquisition (获取书籍 → 添加元数据) --------------------------------
 
     /// Add a book to the library: one unified flow for every content
@@ -636,12 +675,15 @@ impl Library {
                 let mut parsed = bookshelf_formats::parse(bytes, filename)?;
                 ingest_parsed_book(&self.diesel_db, &self.files_dir, &mut parsed).await?;
                 // The caller must be able to see the book (its owner, an
-                // admin, or via a public file).
-                let _ = self
+                // admin, via a public file, or as a metadata-only entry
+                // they created).
+                let book = self
                     .get_book(book_id)
                     .await?
                     .ok_or_else(|| ApiError::not_found("book"))?;
-                if self.files_of_book(book_id, user).await?.is_empty() {
+                let owns = user.role == Role::Admin
+                    || book.created_by.as_deref() == Some(user.id.as_str());
+                if !owns && self.files_of_book(book_id, user).await?.is_empty() {
                     return Err(ApiError::Forbidden);
                 }
                 // The attached edition may be the first one carrying a
@@ -654,7 +696,7 @@ impl Library {
                         &parsed, bytes, book_id, &user.id, filename, visibility, label,
                     )
                     .await?;
-                (book_id.to_string(), file)
+                (book_id.to_string(), Some(file))
             }
 
             // ---- attach a plugin book's content to existing metadata ---
@@ -665,11 +707,13 @@ impl Library {
                 },
                 AcquireMetadata::Attach { book_id },
             ) => {
-                let _ = self
+                let book = self
                     .get_book(book_id)
                     .await?
                     .ok_or_else(|| ApiError::not_found("book"))?;
-                if self.files_of_book(book_id, user).await?.is_empty() {
+                let owns = user.role == Role::Admin
+                    || book.created_by.as_deref() == Some(user.id.as_str());
+                if !owns && self.files_of_book(book_id, user).await?.is_empty() {
                     return Err(ApiError::Forbidden);
                 }
                 let entry = self.plugin_book_entry(source, book_id_in_source).await?;
@@ -707,10 +751,172 @@ impl Library {
                 let file = self
                     .materialize_plugin_content(source, &entry, book_id)
                     .await?;
-                (book_id.to_string(), file)
+                (book_id.to_string(), Some(file))
             }
 
-            // ---- metadata from a named plugin source --------------------
+            // ---- metadata only (no content) ----------------------------
+            // Nothing to attach: a metadata-only addition must describe
+            // its own entry (plugin catalog or manual fields).
+            (AcquireContent::None, AcquireMetadata::Attach { .. }) => {
+                return Err(ApiError::bad_request(
+                    "a metadata-only addition has no content to attach — drop `book_id` or \
+                     provide a file / plugin book",
+                ));
+            }
+
+            // A catalog entry's metadata, stored on its own (no virtual
+            // file): the content may come later, e.g. from an upload
+            // attached to this entry.
+            (
+                AcquireContent::None,
+                AcquireMetadata::Plugin {
+                    source,
+                    book_id_in_source,
+                    overrides,
+                },
+            ) => {
+                let entry = self.plugin_book_entry(source, book_id_in_source).await?;
+                // Idempotent: if the book already has content, reuse its
+                // metadata entry instead of creating a duplicate.
+                let existing: Option<String> = schema::book_files::table
+                    .filter(
+                        schema::book_files::source
+                            .eq(source)
+                            .and(schema::book_files::external_id.eq(&entry.id)),
+                    )
+                    .select(schema::book_files::book_id)
+                    .first(&mut self.diesel_db.get().await?)
+                    .await
+                    .optional()?;
+                let book_id = match existing {
+                    Some(book_id) => book_id,
+                    None => {
+                        let ext = entry
+                            .ext
+                            .as_ref()
+                            .map(|v| BookExt::from_value(v.clone()))
+                            .transpose()
+                            .map_err(ApiError::bad_request)?;
+                        self.create_metadata_entry(
+                            &entry.title,
+                            &entry.authors,
+                            entry.description.as_deref(),
+                            entry.cover_url.as_deref(),
+                            ext.as_ref(),
+                            &user.id,
+                        )
+                        .await?
+                    }
+                };
+                if !overrides.is_empty() {
+                    self.update_book(
+                        &book_id,
+                        overrides.title.as_deref(),
+                        overrides.description.as_deref(),
+                        overrides.authors.as_ref(),
+                        overrides.cover_url.as_deref(),
+                        overrides.ext.as_ref(),
+                    )
+                    .await?;
+                }
+                (book_id, None)
+            }
+
+            // ---- metadata from plugin A, content from plugin B --------
+            // The two sources are fully independent: the metadata entry
+            // is created from A's `book-entry`, the content (file or
+            // chapter materialization) comes from B. Same source + id
+            // takes this path too and behaves like the auto mode.
+            (
+                AcquireContent::Plugin {
+                    source: content_source,
+                    book_id_in_source: content_book_id,
+                },
+                AcquireMetadata::Plugin {
+                    source: meta_source,
+                    book_id_in_source: meta_book_id,
+                    overrides,
+                },
+            ) => {
+                let meta_entry = self.plugin_book_entry(meta_source, meta_book_id).await?;
+                let content_entry = self
+                    .plugin_book_entry(content_source, content_book_id)
+                    .await?;
+                // A multi-volume source book cannot be squeezed into one
+                // metadata entry here: the split path above declined
+                // (e.g. collapsed volume slices), so refuse like attach.
+                if content_entry.volumes.len() > 1 {
+                    return Err(ApiError::bad_request(
+                        "this plugin book spans several volumes but its volume slices are empty; \
+                         acquire it as a single-volume book instead",
+                    ));
+                }
+                // One plugin book = one library entry: B's content must
+                // not already live under a different metadata entry.
+                let existing: Option<String> = schema::book_files::table
+                    .filter(
+                        schema::book_files::source
+                            .eq(content_source)
+                            .and(schema::book_files::external_id.eq(&content_entry.id)),
+                    )
+                    .select(schema::book_files::book_id)
+                    .first(&mut self.diesel_db.get().await?)
+                    .await
+                    .optional()?;
+                if let Some(other) = existing {
+                    return Err(ApiError::Conflict(format!(
+                        "plugin book `{content_book_id}` is already in the library under \
+                         metadata `{other}`; attach another source instead"
+                    )));
+                }
+                // Fresh metadata entry from A's catalog data, with the
+                // user's fields applied on top. (Already-synced copies of
+                // A's entry under other books are deliberately not reused:
+                // one metadata per acquisition keeps the flow simple.)
+                let ext = meta_entry
+                    .ext
+                    .as_ref()
+                    .map(|v| BookExt::from_value(v.clone()))
+                    .transpose()
+                    .map_err(ApiError::bad_request)?;
+                let final_ext: Option<BookExt> = match &overrides.ext {
+                    Some(o) => {
+                        let mut e = ext.unwrap_or_default();
+                        e.apply_override(o);
+                        Some(e)
+                    }
+                    None => ext,
+                };
+                let book_id = self
+                    .create_metadata_entry(
+                        overrides
+                            .title
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|t| !t.is_empty())
+                            .unwrap_or(&meta_entry.title),
+                        overrides.authors.as_ref().unwrap_or(&meta_entry.authors),
+                        overrides
+                            .description
+                            .as_deref()
+                            .or(meta_entry.description.as_deref()),
+                        overrides
+                            .cover_url
+                            .as_deref()
+                            .or(meta_entry.cover_url.as_deref()),
+                        final_ext.as_ref(),
+                        &user.id,
+                    )
+                    .await?;
+                self.attach_plugin_file(content_source, Some(&user.id), &content_entry, &book_id)
+                    .await?;
+                let file = self
+                    .materialize_plugin_content(content_source, &content_entry, &book_id)
+                    .await?;
+                (book_id, Some(file))
+            }
+
+            // ---- metadata from a named plugin source (file / none) ------
             (
                 content,
                 AcquireMetadata::Plugin {
@@ -749,13 +955,10 @@ impl Library {
                                 &parsed, bytes, &book_id, &user.id, filename, visibility, label,
                             )
                             .await?;
-                        (book_id, file)
+                        (book_id, Some(file))
                     }
-                    AcquireContent::Plugin { .. } => {
-                        let file = self
-                            .materialize_plugin_content(source, &entry, &book_id)
-                            .await?;
-                        (book_id, file)
+                    AcquireContent::Plugin { .. } | AcquireContent::None => {
+                        unreachable!("plugin content handled above; metadata-only earlier")
                     }
                 }
             }
@@ -799,7 +1002,7 @@ impl Library {
                         &parsed, bytes, &book_id, &user.id, filename, visibility, label,
                     )
                     .await?;
-                (book_id, file)
+                (book_id, Some(file))
             }
 
             // ---- new metadata from a plugin source's own entry ----------
@@ -835,7 +1038,33 @@ impl Library {
                 let file = self
                     .materialize_plugin_content(source, &entry, &book_id)
                     .await?;
-                (book_id, file)
+                (book_id, Some(file))
+            }
+
+            // ---- a manually described entry with no content -----------
+            (AcquireContent::None, AcquireMetadata::New { overrides }) => {
+                // At least a title is required (there is nothing to parse
+                // it from).
+                let title = overrides
+                    .title
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|t| !t.is_empty())
+                    .ok_or_else(|| {
+                        ApiError::bad_request("a metadata-only addition needs a title")
+                    })?;
+                let authors = overrides.authors.clone().unwrap_or_default();
+                let book_id = self
+                    .create_metadata_entry(
+                        title,
+                        &authors,
+                        overrides.description.as_deref(),
+                        overrides.cover_url.as_deref(),
+                        overrides.ext.as_ref(),
+                        &user.id,
+                    )
+                    .await?;
+                (book_id, None)
             }
         };
 
@@ -850,13 +1079,15 @@ impl Library {
     }
 
     /// Multi-volume plugin acquisition (series split). Returns `Some`
-    /// when the source's `book-entry` declared >1 volumes and the split
-    /// was performed; `None` when the book is effectively single-volume.
+    /// when the *content* source's `book-entry` declared >1 volumes and
+    /// the split was performed; `None` when the book is effectively
+    /// single-volume.
     ///
     /// Only plugin *content* splits (an uploaded file is one complete
     /// edition and never does): the guard in [`Self::acquire_book`]
     /// limits this path to `AcquireContent::Plugin` + new/plugin
-    /// metadata.
+    /// metadata. The metadata base is the metadata mode's own entry —
+    /// which may live on another plugin than the content.
     async fn try_split_acquire(
         &self,
         user: &User,
@@ -871,6 +1102,21 @@ impl Library {
         if entry.volumes.len() <= 1 {
             return Ok(None);
         }
+        // The metadata base: the named plugin's entry when the metadata
+        // comes from a (possibly different) source, otherwise the
+        // content entry itself (auto mode).
+        let (base, overrides) = match metadata {
+            AcquireMetadata::New { overrides } => (entry.clone(), overrides),
+            AcquireMetadata::Plugin {
+                source: meta_source,
+                book_id_in_source: meta_book_id,
+                overrides,
+            } => (
+                self.plugin_book_entry(meta_source, meta_book_id).await?,
+                overrides,
+            ),
+            AcquireMetadata::Attach { .. } => unreachable!("guarded by the caller"),
+        };
         let (content_inst, content_id) = self.plugins.content_target(source, &entry);
         let titles = self
             .plugins
@@ -880,12 +1126,6 @@ impl Library {
             // Declared volumes collapsed (all empty): fall back to today's
             // single-book acquisition.
             return Ok(None);
-        };
-        let overrides = match metadata {
-            AcquireMetadata::New { overrides } | AcquireMetadata::Plugin { overrides, .. } => {
-                overrides
-            }
-            AcquireMetadata::Attach { .. } => unreachable!("guarded by the caller"),
         };
 
         // One plugin book = one library series: reject materializing the
@@ -911,23 +1151,24 @@ impl Library {
         let title = overrides
             .title
             .clone()
-            .unwrap_or_else(|| entry.title.clone());
+            .unwrap_or_else(|| base.title.clone());
         let authors_json =
-            serde_json::to_string(overrides.authors.as_ref().unwrap_or(&entry.authors))
+            serde_json::to_string(overrides.authors.as_ref().unwrap_or(&base.authors))
                 .unwrap_or_else(|_| "[]".into());
         let description = overrides
             .description
             .clone()
-            .or_else(|| entry.description.clone());
+            .or_else(|| base.description.clone());
         let cover_url = overrides
             .cover_url
             .clone()
-            .or_else(|| entry.cover_url.clone());
+            .or_else(|| base.cover_url.clone());
         let series_ext =
-            SeriesExt::from_source(entry.ext.as_ref()).map_err(ApiError::bad_request)?;
-        // Extended metadata: the source's object, manual overrides win
-        // per-key. The series keeps its own subset of the same object.
-        let mut book_ext = match &entry.ext {
+            SeriesExt::from_source(base.ext.as_ref()).map_err(ApiError::bad_request)?;
+        // Extended metadata: the metadata entry's object, manual
+        // overrides win per-key. The series keeps its own subset of the
+        // same object.
+        let mut book_ext = match &base.ext {
             Some(v) => BookExt::from_value(v.clone()).map_err(ApiError::bad_request)?,
             None => BookExt::default(),
         };
@@ -1031,7 +1272,7 @@ impl Library {
                     series_id: Some(series_id.clone()),
                     volume_no,
                 },
-                FileMeta {
+                Some(FileMeta {
                     id: file_id,
                     book_id,
                     source: source.to_string(),
@@ -1047,7 +1288,7 @@ impl Library {
                     volume_no,
                     volume_offset: *start,
                     original: None,
-                },
+                }),
             ));
         }
         drop(conn);
@@ -1377,12 +1618,13 @@ impl Library {
         let is_admin = user.role == bookshelf_core::model::Role::Admin;
         let mut conn = self.diesel_db.get().await?;
 
-        // Books owning at least one visible file. Optional filters are
+        // Books owning at least one visible file, plus metadata-only
+        // entries (no files yet) owned by the caller. Optional filters are
         // assembled in Rust (type-checked builder) instead of the old
         // parameterized switches. Series first (in volume order), then
         // standalone books, newest first.
         let mut book_q = schema::books::table
-            .inner_join(schema::book_files::table)
+            .left_join(schema::book_files::table)
             .filter(schema::books::title.like(&pattern))
             .select(BookRow::as_select())
             .distinct()
@@ -1394,7 +1636,10 @@ impl Library {
             book_q = book_q.filter(
                 schema::book_files::visibility
                     .eq("public")
-                    .or(schema::book_files::owner_id.eq(&user.id)),
+                    .or(schema::book_files::owner_id.eq(&user.id))
+                    .or(schema::book_files::id
+                        .is_null()
+                        .and(schema::books::created_by.eq(&user.id))),
             );
         }
         let rows: Vec<BookRow> = book_q
@@ -1438,9 +1683,9 @@ impl Library {
         for row in rows {
             let book = row.into_model()?;
             let files = by_book.remove(&book.id).unwrap_or_default();
-            if !files.is_empty() {
-                books.push((book, files));
-            }
+            // Metadata-only entries (no visible files) belong to the
+            // caller and were already admitted by the join filter above.
+            books.push((book, files));
         }
         Ok(books)
     }

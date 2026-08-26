@@ -1,16 +1,19 @@
 // The unified "add a book" dialog (获取书籍 → 添加元数据).
 //
-// One acquisition flow for every content source:
-//   step 1 (获取书籍): an uploaded file, or a book picked from a plugin
-//     source (searchable or by manual id — see SourceSearchPane);
-//   step 2 (添加元数据): a new entry (auto / manual overrides), or
-//     attach to an existing metadata entry;
-//   step 3: visibility + label, then submit.
+// Content (step ①) and metadata (step ②) are orthogonal and may come
+// from different plugins:
+//   step 1 (获取书籍): an uploaded file, a book picked from a plugin
+//     source, or none (仅添加元数据 — a bare metadata entry whose content
+//     is attached later);
+//   step 2 (添加元数据): auto (parsed / the plugin's own entry), from a
+//     plugin catalog (从插件源 — possibly another plugin than the content
+//     source), attached to an existing entry, or manual.
 //
-// Both steps are orthogonal: any content source can be combined with any
-// metadata mode. The submission goes to the unified endpoint
-// POST /api/books (see the OpenAPI contract), which accepts either a
-// `file` or `plugin_source`+`plugin_book_id` and a `book_id`/overrides.
+// The submission goes to the unified endpoint POST /api/books (see the
+// OpenAPI contract), which accepts a `file`, a plugin book
+// (`plugin_source` + `plugin_book_id`), or `metadata_only` for the
+// content, plus the metadata fields (`book_id` / `meta_plugin_source` +
+// `meta_plugin_book_id` / manual overrides).
 
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -26,8 +29,8 @@ import type {
   Visibility,
 } from "../types";
 
-type AcquireTab = "upload" | "plugin";
-type MetaMode = "auto" | "attach" | "manual";
+type AcquireTab = "upload" | "plugin" | "meta-only";
+type MetaMode = "auto" | "plugin" | "attach" | "manual";
 
 const splitAuthors = (raw: string) =>
   raw
@@ -57,23 +60,21 @@ export function AddBookDialog({
   const [dialogError, setDialogError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  // Plugin tab: the book whose content (and suggested metadata) we take.
+  // Plugin content tab: the book whose content (and, in auto mode,
+  // metadata) we take.
   const [pluginAcq, setPluginAcq] = useState<SourcePick | null>(null);
-  // Upload tab, manual mode: metadata linked to a plugin catalog entry.
+  // "从插件源" metadata mode: the catalog entry whose metadata we take.
   const [pluginMetaRef, setPluginMetaRef] = useState<SourcePick | null>(null);
 
   // attach mode: books available to the caller
   const [bookOptions, setBookOptions] = useState<BookListEntry[]>([]);
   const [attachBookId, setAttachBookId] = useState("");
 
-  // manual mode fields
+  // manual (and plugin-refinement) mode fields
   const [title, setTitle] = useState("");
   const [authors, setAuthors] = useState("");
   const [description, setDescription] = useState("");
-  // manual mode: extended metadata (ISBN/publisher/…)
   const [ext, setExt] = useState<ExtRecord>({});
-
-  const suggestion = pluginAcq ?? pluginMetaRef;
 
   const reset = () => {
     setTab("upload");
@@ -108,22 +109,47 @@ export function AddBookDialog({
     };
   }, [open]);
 
-  /** Adopt a picked source entry as the metadata suggestion (plugin tab). */
+  /** Adopt a picked source entry as the plugin content (获取书籍 step). */
   function usePluginBook(pick: SourcePick) {
     setPluginAcq(pick);
-    setMode((m) => (m === "auto" ? "auto" : "manual"));
+    // Seed the manual fields with the plugin's own metadata, so the user
+    // can refine it without retyping.
     setTitle(pick.item.title);
     setAuthors(pick.item.authors.join("，"));
     setDescription(pick.item.description ?? "");
     setDialogError(null);
   }
 
-  /** Link the metadata of an uploaded file to a plugin catalog entry. */
-  function useUploadMetadata(pick: SourcePick) {
+  /** Adopt a picked source entry as the metadata source (从插件源 mode). */
+  function usePluginMeta(pick: SourcePick) {
     setPluginMetaRef(pick);
     setTitle(pick.item.title);
     setAuthors(pick.item.authors.join("，"));
     setDescription(pick.item.description ?? "");
+    setDialogError(null);
+  }
+
+  /** Whether a metadata mode makes sense for the active content tab. */
+  function modeAvailable(m: MetaMode): boolean {
+    if (tab === "meta-only") return m === "plugin" || m === "manual";
+    return true;
+  }
+
+  function switchTab(next: AcquireTab) {
+    if (next === tab) return;
+    setTab(next);
+    setDialogError(null);
+    // Content/metadata refs belong to their tab; keep the metadata
+    // suggestion of the newly active tab.
+    setPluginAcq(next === "plugin" ? pluginAcq : null);
+    // A mode that is meaningless for the new tab falls back to a default.
+    if (!modeAvailable(mode)) {
+      setMode(next === "meta-only" ? "plugin" : "auto");
+    }
+  }
+
+  function switchMode(next: MetaMode) {
+    setMode(next);
     setDialogError(null);
   }
 
@@ -141,7 +167,11 @@ export function AddBookDialog({
       setDialogError(t("library.pickBook"));
       return;
     }
-    if (mode === "manual" && !title.trim() && !suggestion) {
+    if (mode === "plugin" && !pluginMetaRef) {
+      setDialogError(t("library.pickMetaFromPlugin"));
+      return;
+    }
+    if (mode === "manual" && !title.trim()) {
       setDialogError(t("library.manualNeedsTitle"));
       return;
     }
@@ -153,31 +183,36 @@ export function AddBookDialog({
       form.append("visibility", visibility);
       if (label.trim()) form.append("label", label.trim());
 
-      // 获取书籍: the content source (file or plugin book).
+      // 获取书籍: the content source (file, plugin book, or none).
       if (tab === "upload") {
         const file = fileRef.current?.files?.[0];
         if (file) form.append("file", file);
-      } else if (pluginAcq) {
-        form.append("plugin_source", pluginAcq.instance.id);
-        form.append("plugin_book_id", pluginAcq.item.id);
+      } else if (tab === "plugin") {
+        // Non-null per the validation above.
+        const acq = pluginAcq!;
+        form.append("plugin_source", acq.instance.id);
+        form.append("plugin_book_id", acq.item.id);
+      } else {
+        form.append("metadata_only", "true");
       }
 
       // 添加元数据: where the metadata entry comes from.
       if (mode === "attach") {
         form.append("book_id", attachBookId);
-      } else {
-        // Uploaded file whose metadata is linked to a plugin catalog
-        // entry (upload tab manual mode).
-        if (tab === "upload" && pluginMetaRef) {
-          form.append("plugin_source", pluginMetaRef.instance.id);
-          form.append("plugin_book_id", pluginMetaRef.item.id);
-        }
-        if (mode === "manual") {
-          if (title.trim()) form.append("title", title.trim());
-          if (authors.trim()) form.append("authors", JSON.stringify(splitAuthors(authors)));
-          if (description.trim()) form.append("description", description.trim());
-          if (Object.keys(ext).length > 0) form.append("ext", JSON.stringify(ext));
-        }
+      } else if (mode === "plugin") {
+        // Non-null per the validation above. Distinct field names: the
+        // metadata source is independent of the content source, so a
+        // cross-plugin combination (metadata A + content B) works.
+        const metaRef = pluginMetaRef!;
+        form.append("meta_plugin_source", metaRef.instance.id);
+        form.append("meta_plugin_book_id", metaRef.item.id);
+      }
+      // Manual overrides refine both the manual and the plugin mode.
+      if (mode === "manual" || mode === "plugin") {
+        if (title.trim()) form.append("title", title.trim());
+        if (authors.trim()) form.append("authors", JSON.stringify(splitAuthors(authors)));
+        if (description.trim()) form.append("description", description.trim());
+        if (Object.keys(ext).length > 0) form.append("ext", JSON.stringify(ext));
       }
 
       const result = await api<AcquireResult>("/books", { method: "POST", body: form });
@@ -205,16 +240,6 @@ export function AddBookDialog({
     }
   }
 
-  function switchTab(next: AcquireTab) {
-    if (next === tab) return;
-    setTab(next);
-    setDialogError(null);
-    // Content and metadata refs belong to their tab; keep the metadata
-    // suggestion of the newly active tab.
-    setPluginAcq(next === "plugin" ? pluginAcq : null);
-    setPluginMetaRef(next === "upload" ? pluginMetaRef : null);
-  }
-
   function close() {
     reset();
     onClose();
@@ -232,6 +257,14 @@ export function AddBookDialog({
           <label className="radio">
             <input type="radio" checked={tab === "plugin"} onChange={() => switchTab("plugin")} />
             {t("library.tabPlugin")}
+          </label>
+          <label className="radio">
+            <input
+              type="radio"
+              checked={tab === "meta-only"}
+              onChange={() => switchTab("meta-only")}
+            />
+            {t("library.tabMetaOnly")}
           </label>
         </div>
 
@@ -277,31 +310,103 @@ export function AddBookDialog({
             )}
           </div>
         )}
+
+        {tab === "meta-only" && (
+          <div className="field">
+            <p className="hint">{t("library.tabMetaOnlyHint")}</p>
+          </div>
+        )}
       </section>
 
       <section className="modal-section">
         <h3>{t("library.sectionMeta")}</h3>
         <div className="row">
+          {modeAvailable("auto") && (
+            <label className="radio">
+              <input type="radio" checked={mode === "auto"} onChange={() => switchMode("auto")} />
+              {t("library.modeAuto")}
+            </label>
+          )}
+          {modeAvailable("plugin") && (
+            <label className="radio">
+              <input
+                type="radio"
+                checked={mode === "plugin"}
+                onChange={() => switchMode("plugin")}
+              />
+              {t("library.modePlugin")}
+            </label>
+          )}
+          {modeAvailable("attach") && (
+            <label className="radio">
+              <input
+                type="radio"
+                checked={mode === "attach"}
+                onChange={() => switchMode("attach")}
+              />
+              {t("library.modeAttach")}
+            </label>
+          )}
           <label className="radio">
-            <input type="radio" checked={mode === "auto"} onChange={() => setMode("auto")} />
-            {t("library.modeAuto")}
-          </label>
-          <label className="radio">
-            <input type="radio" checked={mode === "attach"} onChange={() => setMode("attach")} />
-            {t("library.modeAttach")}
-          </label>
-          <label className="radio">
-            <input type="radio" checked={mode === "manual"} onChange={() => setMode("manual")} />
+            <input
+              type="radio"
+              checked={mode === "manual"}
+              onChange={() => switchMode("manual")}
+            />
             {t("library.modeManual")}
           </label>
         </div>
 
         {mode === "auto" && (
           <p className="hint">
-            {tab === "upload"
-              ? t("library.modeAutoHint")
-              : t("library.modeAutoPluginHint")}
+            {tab === "upload" ? t("library.modeAutoHint") : t("library.modeAutoPluginHint")}
           </p>
+        )}
+
+        {mode === "plugin" && (
+          <div className="field">
+            <SourceSearchPane
+              instances={instances}
+              filter={(i) => i.enabled && i.capabilities.includes("lookup")}
+              pickLabel={() => t("library.useAsMetadataSource")}
+              onPick={(pick) => {
+                usePluginMeta(pick);
+              }}
+            />
+            {pluginMetaRef && (
+              <p className="hint">
+                {t("library.pluginMetaPicked", {
+                  title: pluginMetaRef.item.title,
+                  plugin: pluginMetaRef.instance.name,
+                  id: pluginMetaRef.item.id,
+                })}{" "}
+                <button className="link-btn" onClick={() => setPluginMetaRef(null)}>
+                  {t("library.clearPlugin")}
+                </button>
+              </p>
+            )}
+            <p className="hint">
+              {tab === "plugin" && pluginAcq
+                ? t("library.modePluginCrossHint", { plugin: pluginAcq.instance.name })
+                : t("library.modePluginHint")}
+            </p>
+            <input
+              placeholder={t("library.bookPlaceholder")}
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+            />
+            <input
+              placeholder={t("library.authorsPlaceholder")}
+              value={authors}
+              onChange={(e) => setAuthors(e.target.value)}
+            />
+            <textarea
+              placeholder={t("library.descriptionPlaceholder")}
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+            />
+            <ExtMetaForm kind="book" value={ext} onChange={setExt} />
+          </div>
         )}
 
         {mode === "attach" && (
@@ -336,34 +441,7 @@ export function AddBookDialog({
               onChange={(e) => setDescription(e.target.value)}
             />
             <ExtMetaForm kind="book" value={ext} onChange={setExt} />
-            {tab === "upload" && (
-              <>
-                <p className="hint">{t("library.modeManualHint")}</p>
-                <div className="picker">
-                  <SourceSearchPane
-                    instances={instances}
-                    filter={(i) =>
-                      i.enabled && i.capabilities.includes("search") && i.capabilities.includes("lookup")
-                    }
-                    pickLabel={() => t("library.useAsMetadataSource")}
-                    onPick={(pick) => {
-                      useUploadMetadata(pick);
-                    }}
-                  />
-                </div>
-                {pluginMetaRef && (
-                  <p className="hint">
-                    {t("library.pluginSource", {
-                      plugin: pluginMetaRef.instance.name,
-                      id: pluginMetaRef.item.id,
-                    })}{" "}
-                    <button className="link-btn" onClick={() => setPluginMetaRef(null)}>
-                      {t("library.clearPlugin")}
-                    </button>
-                  </p>
-                )}
-              </>
-            )}
+            <p className="hint">{t("library.modeManualHint")}</p>
           </div>
         )}
       </section>

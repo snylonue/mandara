@@ -261,14 +261,19 @@ export interface paths {
         /**
          * Add a book to the library — the single acquisition flow
          *     (获取书籍 → 添加元数据). The content is either an uploaded
-         *     `file` or a plugin book (`plugin_source` + `plugin_book_id`
+         *     `file`, a plugin book (`plugin_source` + `plugin_book_id`
          *     without a `file`; the plugin supplies the book file via
          *     `get-book-file` when available, otherwise chapters materialize
-         *     lazily). The metadata entry is created automatically (parsed
-         *     from the file / the plugin's own entry), taken from a plugin
-         *     catalog, or attached to an existing entry (`book_id`).
-         *     `title`/`authors`/`description`/`cover_url` override the produced
-         *     metadata (manual mode; never applied when attaching). When the
+         *     lazily), or none (`metadata_only`: a bare metadata entry — add
+         *     the content later by attaching a file/plugin book to it). The
+         *     metadata entry is created automatically (parsed from the file /
+         *     the plugin's own entry), taken from a plugin catalog
+         *     (`meta_plugin_source` + `meta_plugin_book_id`), attached to an
+         *     existing entry (`book_id`), or described manually. The metadata
+         *     source is independent of the content source: metadata may come
+         *     from plugin A while the content comes from plugin B.
+         *     `title`/`authors`/`description`/`cover_url`/`ext` override the
+         *     produced metadata (never applied when attaching). When the
          *     plugin source declares >1 volumes, the acquisition auto-splits
          *     into one series + one book per 卷 (the response carries them all).
          */
@@ -893,6 +898,7 @@ export interface components {
         };
         BookDetail: {
             book: components["schemas"]["BookMeta"];
+            /** @description Files of this book visible to the caller (empty for a metadata-only entry) */
             files: components["schemas"]["FileMeta"][];
             series: components["schemas"]["SeriesBrief"];
         };
@@ -1514,7 +1520,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Metadata entries that own at least one visible file */
+            /** @description Metadata entries with at least one visible file, plus metadata-only entries (no files yet) the caller owns */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -1540,11 +1546,22 @@ export interface operations {
                      * Format: binary
                      * @description Epub or txt file — the content. Mutually exclusive
                      *     with `plugin_source` + `plugin_book_id` (plugin
-                     *     content): exactly one content source is required.
-                     *     When given together with `plugin_source`, the file is
-                     *     the content and the plugin only supplies the metadata.
+                     *     content) and with `metadata_only`: exactly one content
+                     *     source is used. When given together with
+                     *     `plugin_source`, the file is the content and the
+                     *     plugin only supplies the metadata.
                      */
                     file?: string;
+                    /**
+                     * @description Create a bare metadata entry without any content
+                     *     (no file is created). `meta_plugin_source` +
+                     *     `meta_plugin_book_id` name the metadata source
+                     *     (catalog entry), or `title`/`authors`/… describe the
+                     *     entry manually (a title is required). Content may be
+                     *     attached later via `POST /api/books/{id}/files`.
+                     * @default false
+                     */
+                    metadata_only?: boolean;
                     /**
                      * @description Choose whether this file is published
                      * @default private
@@ -1562,14 +1579,25 @@ export interface operations {
                      */
                     book_id?: string;
                     /**
-                     * @description Together with `plugin_book_id`: the metadata comes
-                     *     from this plugin source's catalog. Without a `file`,
-                     *     the plugin is also the content source (the book is
-                     *     materialized into the library).
+                     * @description Together with `plugin_book_id`: the *content* comes
+                     *     from this plugin source's book (materialized into the
+                     *     library; whole-book files via `get-book-file`, else
+                     *     lazy chapter mode). When no `file`,
+                     *     `meta_plugin_source`, or `book_id` is given, the
+                     *     plugin's own entry also provides the metadata.
                      */
                     plugin_source?: string;
                     /** @description Id of the book inside the plugin's catalog */
                     plugin_book_id?: string;
+                    /**
+                     * @description Together with `meta_plugin_book_id`: the metadata
+                     *     comes from this plugin source's catalog — possibly a
+                     *     different plugin than the content source. Overrides
+                     *     (`title`/…) apply on top of its entry.
+                     */
+                    meta_plugin_source?: string;
+                    /** @description Id of the metadata book inside its plugin's catalog */
+                    meta_plugin_book_id?: string;
                     /** @description Manual metadata: overrides the title (auto mode uses the parsed/identified one) */
                     title?: string;
                     /** @description Manual metadata: JSON string array, e.g. `["A","B"]` */
@@ -1591,7 +1619,8 @@ export interface operations {
         responses: {
             /**
              * @description The created series (when a multi-volume source book was
-             *     split) and the created books, each with its first file.
+             *     split) and the created books, each with its first file
+             *     (empty files array for a metadata-only addition).
              */
             201: {
                 headers: {
