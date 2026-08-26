@@ -905,7 +905,8 @@ export interface components {
         };
         ShareFileView: {
             id: string;
-            format: string;
+            /** @enum {string} */
+            format: "epub" | "txt" | "plugin";
             label: string;
             chapter_count: number;
         };

@@ -3,8 +3,8 @@
 use anyhow::anyhow;
 
 use bookshelf_core::model::{
-    BookMeta, Chapter, ChapterMeta, FileMeta, OriginalInfo, Position, ReadingSession, Role,
-    SeriesMeta, Share, ShareKind, User, Visibility,
+    BookMeta, Chapter, ChapterMeta, FileFormat, FileMeta, OriginalInfo, Position, ReadingSession,
+    Role, SeriesMeta, Share, ShareKind, User, Visibility,
 };
 
 use crate::error::ApiError;
@@ -120,7 +120,10 @@ impl FileRow {
             external_id: self.external_id,
             content_source: self.content_source,
             content_external_id: self.content_external_id,
-            format: self.format,
+            format: self
+                .format
+                .parse::<FileFormat>()
+                .map_err(|_| anyhow!("bad file format in db: {}", self.format))?,
             label: self.label,
             visibility: self
                 .visibility

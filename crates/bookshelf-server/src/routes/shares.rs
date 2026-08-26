@@ -173,7 +173,7 @@ pub struct ShareBookView {
 #[derive(Serialize)]
 pub struct ShareFileView {
     pub id: String,
-    pub format: String,
+    pub format: bookshelf_core::model::FileFormat,
     pub label: String,
     pub chapter_count: u32,
 }

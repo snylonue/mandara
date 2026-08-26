@@ -131,8 +131,9 @@ pub struct FileMeta {
     /// `source` / `external_id`.
     pub content_source: Option<String>,
     pub content_external_id: Option<String>,
-    /// `"epub"` | `"txt"` for uploads, `"plugin"` for plugin books.
-    pub format: String,
+    /// Real format for uploads (`epub`/`txt`), `plugin` for virtual
+    /// plugin books.
+    pub format: FileFormat,
     /// Short human label for this edition.
     pub label: String,
     pub visibility: Visibility,
@@ -215,6 +216,46 @@ mod tests {
         assert!(ImageId::from_sha256_hex("a".repeat(63)).is_err());
         assert!(ImageId::from_sha256_hex("../../etc/passwd").is_err());
         assert!(ImageId::from_sha256_hex("").is_err());
+    }
+}
+
+/// Content format of a book file. Uploads keep their real format
+/// (`Epub`/`Txt`); plugin chapter-mode books are `Plugin`, until a file-mode
+/// pull materializes them into their actual format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FileFormat {
+    Epub,
+    Txt,
+    Plugin,
+}
+
+impl AsRef<str> for FileFormat {
+    fn as_ref(&self) -> &str {
+        match self {
+            FileFormat::Epub => "epub",
+            FileFormat::Txt => "txt",
+            FileFormat::Plugin => "plugin",
+        }
+    }
+}
+
+impl std::fmt::Display for FileFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_ref())
+    }
+}
+
+impl std::str::FromStr for FileFormat {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "epub" => Ok(FileFormat::Epub),
+            "txt" => Ok(FileFormat::Txt),
+            "plugin" => Ok(FileFormat::Plugin),
+            _ => Err(format!("unknown file format: {s}")),
+        }
     }
 }
 

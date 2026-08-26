@@ -25,7 +25,8 @@ use anyhow::Context as _;
 use tracing::{info, warn};
 
 use bookshelf_core::model::{
-    BookMeta, Chapter, ChapterMeta, FileMeta, ImageId, Role, SeriesMeta, TocNode, User, Visibility,
+    BookMeta, Chapter, ChapterMeta, FileFormat, FileMeta, ImageId, Role, SeriesMeta, TocNode, User,
+    Visibility,
 };
 use bookshelf_core::source::{SourceBook, SourceBookFile, SourceChapter, SourceVolume};
 use bookshelf_formats::ParsedBook;
@@ -342,14 +343,14 @@ impl Library {
         // Cache the fetched bytes as the file's original: the source may
         // disappear later; download/reparse should not depend on it.
         let (orig_ext, orig_sha256, orig_size) = self
-            .store_original(&file_id, format, &book_file.bytes)
+            .store_original(&file_id, format.as_ref(), &book_file.bytes)
             .await?;
 
         // Rewrite the virtual row into a stored file: self-contained
         // (no content indirection), real format/toc/chapter count.
         diesel::update(schema::book_files::table.find(&file_id))
             .set((
-                schema::book_files::format.eq(format),
+                schema::book_files::format.eq(format.as_ref()),
                 schema::book_files::label.eq(&label),
                 schema::book_files::toc.eq(toc_json),
                 schema::book_files::content_source.eq(Option::<String>::None),
@@ -382,7 +383,7 @@ impl Library {
             source = %source,
             book = %book_id,
             file = %file_id,
-            format,
+            format = %format,
             chapters = parsed.chapters.len(),
             "plugin book materialized in file mode (upload parser)"
         );
@@ -447,7 +448,7 @@ impl Library {
                         schema::book_files::external_id.eq(&book.id),
                         schema::book_files::content_source.eq(&book.content_source),
                         schema::book_files::content_external_id.eq(&book.content_id),
-                        schema::book_files::format.eq("plugin"),
+                        schema::book_files::format.eq(FileFormat::Plugin.as_ref()),
                         schema::book_files::visibility.eq("public"),
                         schema::book_files::owner_id.eq(owner),
                         schema::book_files::chapter_count.eq(titles.len() as i64),
@@ -953,7 +954,7 @@ impl Library {
                     schema::book_files::external_id.eq(&entry.id),
                     schema::book_files::content_source.eq(&entry.content_source),
                     schema::book_files::content_external_id.eq(&entry.content_id),
-                    schema::book_files::format.eq("plugin"),
+                    schema::book_files::format.eq(FileFormat::Plugin.as_ref()),
                     schema::book_files::label.eq(&file_label),
                     schema::book_files::visibility.eq(visibility.as_ref()),
                     schema::book_files::owner_id.eq(&user.id),
@@ -997,7 +998,7 @@ impl Library {
                     external_id: entry.id.clone(),
                     content_source: entry.content_source.clone(),
                     content_external_id: entry.content_id.clone(),
-                    format: "plugin".into(),
+                    format: FileFormat::Plugin,
                     label: file_label,
                     visibility,
                     owner_id: Some(user.id.clone()),
@@ -1074,7 +1075,7 @@ impl Library {
                 schema::book_files::external_id.eq(&book.id),
                 schema::book_files::content_source.eq(&book.content_source),
                 schema::book_files::content_external_id.eq(&book.content_id),
-                schema::book_files::format.eq("plugin"),
+                schema::book_files::format.eq(FileFormat::Plugin.as_ref()),
                 schema::book_files::visibility.eq("public"),
                 schema::book_files::owner_id.eq(owner),
                 schema::book_files::chapter_count.eq(0),
@@ -1270,8 +1271,9 @@ impl Library {
         let file_id = uuid::Uuid::new_v4().simple().to_string();
         let format = detect_format(filename);
         let toc_json = serde_json::to_string(&parsed.toc).unwrap_or_else(|_| "[]".into());
-        let (orig_ext, orig_sha256, orig_size) =
-            self.store_original(&file_id, format, bytes).await?;
+        let (orig_ext, orig_sha256, orig_size) = self
+            .store_original(&file_id, format.as_ref(), bytes)
+            .await?;
 
         let mut tx = self.diesel_db.get().await?;
         diesel::insert_into(schema::book_files::table)
@@ -1280,7 +1282,7 @@ impl Library {
                 schema::book_files::book_id.eq(book_id),
                 schema::book_files::source.eq("local"),
                 schema::book_files::external_id.eq(&file_id),
-                schema::book_files::format.eq(format),
+                schema::book_files::format.eq(format.as_ref()),
                 schema::book_files::label.eq(label),
                 schema::book_files::visibility.eq(visibility.as_ref()),
                 schema::book_files::owner_id.eq(owner_id),
@@ -2147,7 +2149,8 @@ impl Library {
         // `volume_offset` slices of the source's flat list are only valid
         // in chapter mode — a whole-book file rewrite would merge the
         // volumes back together.
-        if file.format == "plugin" && file.content_source.is_none() && file.volume_no == 0 {
+        if file.format == FileFormat::Plugin && file.content_source.is_none() && file.volume_no == 0
+        {
             let entry = self
                 .plugins
                 .get_book(source_id, external_id)
@@ -2173,7 +2176,7 @@ impl Library {
                     let mut conn = self.diesel_db.get().await?;
                     diesel::update(schema::book_files::table.find(&file.id))
                         .set((
-                            schema::book_files::format.eq(format),
+                            schema::book_files::format.eq(format.as_ref()),
                             schema::book_files::label.eq(&label),
                             schema::book_files::toc.eq(toc_json),
                             schema::book_files::content_source.eq(Option::<String>::None),
@@ -2214,7 +2217,7 @@ impl Library {
                         source = %source_id,
                         book = %file.book_id,
                         file = %file.id,
-                        format,
+                        format = %format,
                         chapters = parsed.chapters.len(),
                         "plugin book materialized in file mode on first access"
                     );
@@ -2392,12 +2395,12 @@ fn file_content_target(file: &FileMeta) -> (&str, &str) {
     )
 }
 
-fn detect_format(filename: &str) -> &'static str {
+fn detect_format(filename: &str) -> FileFormat {
     let lower = filename.to_ascii_lowercase();
     if lower.ends_with(".epub") {
-        "epub"
+        FileFormat::Epub
     } else {
-        "txt"
+        FileFormat::Txt
     }
 }
 
@@ -2886,7 +2889,7 @@ mod tests {
             external_id: String::new(),
             content_source: None,
             content_external_id: None,
-            format: "plugin".into(),
+            format: FileFormat::Plugin,
             label: String::new(),
             visibility: Visibility::Public,
             owner_id: None,
