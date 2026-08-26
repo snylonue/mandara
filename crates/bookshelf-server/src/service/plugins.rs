@@ -142,12 +142,19 @@ impl PluginService {
                     (name, capabilities, schema, source_info)
                 }
                 (name, capabilities, schema, source_info) => {
+                    // Log the actual causes: this almost always means the
+                    // deployed wasm was built against an older WIT world
+                    // than the host expects (rebuild + redeploy the
+                    // plugins, see scripts/build-plugins.sh).
+                    fn describe<E: std::fmt::Display>(r: &Result<impl Sized, E>) -> Option<String> {
+                        r.as_ref().err().map(|e| e.to_string())
+                    }
                     tracing::warn!(
                         file = wasm.file(),
-                        name_err = name.is_err(),
-                        caps_err = capabilities.is_err(),
-                        schema_err = schema.is_err(),
-                        srcinfo_err = source_info.is_err(),
+                        name_err = ?describe(&name),
+                        caps_err = ?describe(&capabilities),
+                        schema_err = ?describe(&schema),
+                        srcinfo_err = ?describe(&source_info),
                         "could not introspect plugin; treating it as capability-less"
                     );
                     (
