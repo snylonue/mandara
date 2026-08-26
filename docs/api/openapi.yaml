@@ -1027,6 +1027,34 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /api/files/{id}/rematerialize:
+    post:
+      tags: [files]
+      summary: |
+        Clear a plugin file's stored chapter bodies (owner/admin only) so
+        they are lazily re-pulled from its content source on the next
+        read. The retry path for degraded materializations — e.g. images
+        that fell back to remote URLs because the download failed; the
+        re-pull stores them via the plugin's store-image import.
+      operationId: rematerializeFile
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/FileId"
+      responses:
+        "200":
+          description: The updated file (bodies cleared)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FileMeta"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /api/files/{id}/sessions:
     get:
       tags: [sessions]

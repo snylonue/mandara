@@ -1990,6 +1990,34 @@ impl Library {
         Ok(file)
     }
 
+    /// Re-materialize a plugin file's chapter bodies: clear the stored
+    /// content so every chapter is lazily re-pulled from its content
+    /// source on the next read. This is the retry path for degraded
+    /// materializations — e.g. images whose download failed and fell back
+    /// to remote URLs; the re-pull stores them via `store-image` this
+    /// time. Local uploads are not touched (their content comes from the
+    /// retained original; use the `--reparse-originals` CLI instead).
+    pub async fn rematerialize_file(&self, id: &str) -> Result<FileMeta, ApiError> {
+        let file = self
+            .get_file(id)
+            .await?
+            .ok_or_else(|| ApiError::not_found("file"))?;
+        if file.source == "local" {
+            return Err(ApiError::bad_request(
+                "local files have no plugin content to re-materialize",
+            ));
+        }
+        // Bodies from the previous materialization must not leak through;
+        // keep the title rows as placeholders.
+        diesel::update(schema::chapters::table.filter(schema::chapters::file_id.eq(id)))
+            .set(schema::chapters::content.eq(""))
+            .execute(&mut self.diesel_db.get().await?)
+            .await?;
+        self.ensure_titles(&file).await?;
+        info!(file = %id, source = %file.source, "file chapters cleared for re-materialization");
+        Ok(file)
+    }
+
     pub async fn delete_file(&self, id: &str) -> Result<(), ApiError> {
         // Remove the retained original first (best effort — a leftover
         // disk file without a row is harmless garbage).

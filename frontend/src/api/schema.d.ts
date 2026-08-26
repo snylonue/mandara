@@ -535,6 +535,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/files/{id}/rematerialize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Clear a plugin file's stored chapter bodies (owner/admin only) so
+         *     they are lazily re-pulled from its content source on the next
+         *     read. The retry path for degraded materializations — e.g. images
+         *     that fell back to remote URLs because the download failed; the
+         *     re-pull stores them via the plugin's store-image import.
+         */
+        post: operations["rematerializeFile"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/files/{id}/sessions": {
         parameters: {
             query?: never;
@@ -2033,6 +2056,32 @@ export interface operations {
         };
         responses: {
             /** @description The updated file */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FileMeta"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    rematerializeFile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Book file id */
+                id: components["parameters"]["FileId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The updated file (bodies cleared) */
             200: {
                 headers: {
                     [name: string]: unknown;

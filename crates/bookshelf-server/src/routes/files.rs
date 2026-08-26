@@ -138,6 +138,27 @@ pub async fn patch_file(
     Ok(Json(updated))
 }
 
+// POST /api/files/{id}/rematerialize -------------------------------------------
+//
+// Clear a plugin file's stored chapter bodies so they are lazily re-pulled
+// from its content source on the next read. The retry path for degraded
+// materializations (e.g. images that fell back to remote URLs because the
+// download failed — the re-pull stores them via `store-image`).
+
+pub async fn rematerialize_file(
+    State(st): State<St>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let user = current_user(&st, &headers).await?;
+    let file = load_visible_file(&st, &user, &id).await?;
+    if !can_manage_file(&user, &file) {
+        return Err(ApiError::Forbidden);
+    }
+    let updated = st.library.rematerialize_file(&id).await?;
+    Ok(Json(updated))
+}
+
 // DELETE /api/files/{id} -------------------------------------------------------
 
 pub async fn delete_file(

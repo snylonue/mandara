@@ -113,6 +113,16 @@ function FileSection({
     }
   }
 
+  async function rematerialize() {
+    try {
+      await api<FileMeta>(`/files/${file.id}/rematerialize`, { method: "POST" });
+      toast.push("success", t("book.rematerializeDone"));
+      await onChanged();
+    } catch (err) {
+      toast.push("error", err instanceof Error ? err.message : t("book.opFailed"));
+    }
+  }
+
   const readable = file.chapter_count > 0;
 
   return (
@@ -172,9 +182,18 @@ function FileSection({
             </>
           )}
           {canManage && file.source !== "local" && (
-            <button className="mini-btn" onClick={() => setRebindOpen(true)}>
-              {t("book.changeContentSource")}
-            </button>
+            <>
+              <button
+                className="mini-btn"
+                title={t("book.rematerializeHint")}
+                onClick={() => void rematerialize()}
+              >
+                {t("book.rematerialize")}
+              </button>
+              <button className="mini-btn" onClick={() => setRebindOpen(true)}>
+                {t("book.changeContentSource")}
+              </button>
+            </>
           )}
         </div>
       </div>
