@@ -11,26 +11,30 @@ pub enum Role {
     User,
 }
 
-impl Role {
-    pub fn as_str(self) -> &'static str {
+impl AsRef<str> for Role {
+    fn as_ref(&self) -> &str {
         match self {
             Role::Admin => "admin",
             Role::User => "user",
-        }
-    }
-
-    pub fn parse(s: &str) -> Option<Self> {
-        match s {
-            "admin" => Some(Role::Admin),
-            "user" => Some(Role::User),
-            _ => None,
         }
     }
 }
 
 impl std::fmt::Display for Role {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
+        f.write_str(self.as_ref())
+    }
+}
+
+impl std::str::FromStr for Role {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "admin" => Ok(Role::Admin),
+            "user" => Ok(Role::User),
+            _ => Err(format!("unknown role: {s}")),
+        }
     }
 }
 
@@ -43,26 +47,30 @@ pub enum Visibility {
     Public,
 }
 
-impl Visibility {
-    pub fn as_str(self) -> &'static str {
+impl AsRef<str> for Visibility {
+    fn as_ref(&self) -> &str {
         match self {
             Visibility::Private => "private",
             Visibility::Public => "public",
-        }
-    }
-
-    pub fn parse(s: &str) -> Option<Self> {
-        match s {
-            "private" => Some(Visibility::Private),
-            "public" => Some(Visibility::Public),
-            _ => None,
         }
     }
 }
 
 impl std::fmt::Display for Visibility {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
+        f.write_str(self.as_ref())
+    }
+}
+
+impl std::str::FromStr for Visibility {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "private" => Ok(Visibility::Private),
+            "public" => Ok(Visibility::Public),
+            _ => Err(format!("unknown visibility: {s}")),
+        }
     }
 }
 
@@ -185,12 +193,50 @@ pub struct Chapter {
     pub content: String,
 }
 
+impl ShareKind {
+    /// The share view mode implied by the kind (`"read"` for file shares,
+    /// `"progress"` for session shares).
+    pub fn mode(self) -> &'static str {
+        match self {
+            ShareKind::Book => "read",
+            ShareKind::Session => "progress",
+        }
+    }
+}
+
+impl AsRef<str> for ShareKind {
+    fn as_ref(&self) -> &str {
+        match self {
+            ShareKind::Book => "book",
+            ShareKind::Session => "session",
+        }
+    }
+}
+
+impl std::fmt::Display for ShareKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_ref())
+    }
+}
+
+impl std::str::FromStr for ShareKind {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "book" => Ok(ShareKind::Book),
+            "session" => Ok(ShareKind::Session),
+            _ => Err(format!("unknown share kind: {s}")),
+        }
+    }
+}
+
 /// A reading position inside a file.
 ///
 /// `chapter_idx` selects the chapter, `offset` is a character offset inside
 /// the chapter (used by non-web readers), and `fraction` is a 0..1 scroll
 /// fraction inside the chapter (used by the web reader).
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Position {
     pub chapter_idx: u32,
@@ -198,18 +244,7 @@ pub struct Position {
     pub fraction: f64,
 }
 
-impl Default for Position {
-    fn default() -> Self {
-        Position {
-            chapter_idx: 0,
-            offset: 0,
-            fraction: 0.0,
-        }
-    }
-}
-
 impl Position {
-    /// Progress within the current chapter, as a percentage.
     pub fn percent(&self) -> u8 {
         (self.fraction.clamp(0.0, 1.0) * 100.0).round() as u8
     }

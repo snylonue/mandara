@@ -955,7 +955,7 @@ impl Library {
                     schema::book_files::content_external_id.eq(&entry.content_id),
                     schema::book_files::format.eq("plugin"),
                     schema::book_files::label.eq(&file_label),
-                    schema::book_files::visibility.eq(visibility.as_str()),
+                    schema::book_files::visibility.eq(visibility.as_ref()),
                     schema::book_files::owner_id.eq(&user.id),
                     schema::book_files::chapter_count.eq(*count as i64),
                     schema::book_files::volume_no.eq(volume_no as i64),
@@ -1282,7 +1282,7 @@ impl Library {
                 schema::book_files::external_id.eq(&file_id),
                 schema::book_files::format.eq(format),
                 schema::book_files::label.eq(label),
-                schema::book_files::visibility.eq(visibility.as_str()),
+                schema::book_files::visibility.eq(visibility.as_ref()),
                 schema::book_files::owner_id.eq(owner_id),
                 schema::book_files::chapter_count.eq(parsed.chapters.len() as i64),
                 schema::book_files::toc.eq(toc_json),
@@ -1952,7 +1952,7 @@ impl Library {
         diesel::update(schema::book_files::table.find(id))
             .set((
                 schema::book_files::visibility.eq(coalesce_opt_nn(
-                    visibility.map(|v| v.as_str().to_string()),
+                    visibility.map(|v| v.to_string()),
                     schema::book_files::visibility,
                 )),
                 schema::book_files::label.eq(coalesce_opt_nn(

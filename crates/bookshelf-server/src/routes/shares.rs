@@ -101,17 +101,13 @@ pub async fn create_share(
         return Err(ApiError::Forbidden);
     }
 
-    let kind = match req.kind.as_deref() {
-        None | Some("book") => ShareKind::Book,
-        Some("session") => ShareKind::Session,
-        Some(other) => return Err(ApiError::bad_request(format!("unknown kind: {other}"))),
+    let kind: ShareKind = match req.kind.as_deref() {
+        None => ShareKind::Book,
+        Some(s) => s.parse().map_err(ApiError::bad_request)?,
     };
 
     let mut session_id = None;
-    let mode = match kind {
-        ShareKind::Book => "read",
-        ShareKind::Session => "progress",
-    };
+    let mode = kind.mode();
 
     if kind == ShareKind::Session {
         let sid = req
@@ -148,10 +144,7 @@ pub async fn create_share(
     diesel::insert_into(shares::table)
         .values((
             shares::token.eq(&token),
-            shares::kind.eq(match kind {
-                ShareKind::Book => "book",
-                ShareKind::Session => "session",
-            }),
+            shares::kind.eq(kind.as_ref()),
             shares::mode.eq(mode),
             shares::file_id.eq(&file_id),
             shares::session_id.eq(&session_id),

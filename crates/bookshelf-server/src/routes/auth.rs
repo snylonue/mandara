@@ -53,9 +53,9 @@ pub async fn register(
     // way to create one.
     let first = users::table.count().get_result::<i64>(&mut conn).await? == 0;
     let role = if first {
-        Role::Admin.as_str().to_owned()
+        Role::Admin.to_string()
     } else {
-        Role::User.as_str().to_owned()
+        Role::User.to_string()
     };
     let result = diesel::insert_into(users::table)
         .values((

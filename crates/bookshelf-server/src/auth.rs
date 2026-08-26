@@ -73,7 +73,7 @@ impl AuthService {
         let claims = Claims {
             sub: user.id.clone(),
             username: user.username.clone(),
-            role: user.role.as_str().into(),
+            role: user.role.to_string(),
             iat: now,
             exp: now + TOKEN_TTL_SECS,
         };

@@ -23,8 +23,10 @@ impl UserRow {
         Ok(User {
             id: self.id,
             username: self.username,
-            role: Role::parse(&self.role)
-                .ok_or_else(|| ApiError::Internal(anyhow!("bad role in db: {}", self.role)))?,
+            role: self
+                .role
+                .parse::<Role>()
+                .map_err(|_| anyhow!("bad role in db: {}", self.role))?,
             created_at: self.created_at,
         })
     }
@@ -119,7 +121,10 @@ impl FileRow {
             content_external_id: self.content_external_id,
             format: self.format,
             label: self.label,
-            visibility: Visibility::parse(&self.visibility).unwrap_or(Visibility::Private),
+            visibility: self
+                .visibility
+                .parse::<Visibility>()
+                .unwrap_or(Visibility::Private),
             owner_id: self.owner_id,
             chapter_count: self.chapter_count.max(0) as u32,
             created_at: self.created_at,
@@ -218,13 +223,10 @@ impl ShareRow {
     pub fn into_model(self) -> Result<Share, ApiError> {
         Ok(Share {
             token: self.token,
-            kind: match self.kind.as_str() {
-                "book" => ShareKind::Book,
-                "session" => ShareKind::Session,
-                other => {
-                    return Err(ApiError::Internal(anyhow!("bad share kind in db: {other}")));
-                }
-            },
+            kind: self
+                .kind
+                .parse::<ShareKind>()
+                .map_err(|_| anyhow!("bad share kind in db: {}", self.kind))?,
             mode: self.mode,
             file_id: self.file_id,
             session_id: self.session_id,
