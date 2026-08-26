@@ -31,8 +31,21 @@ export type SourcePick = {
   item: PluginSearchItem;
 };
 
-/** How the frontend acquires books from a source. */
-export type SourceInteraction = "search" | "manual-id" | "browse";
+/**
+ * The acquisition affordances of a source. Search and manual-id entry
+ * are independent: a source with both `search` and `lookup` capabilities
+ * shows both (e.g. bangumi — search the catalog *and* enter an id
+ * directly), while a `lookup`-only source shows just the manual entry
+ * (wenku8-style) and a `declare`-only source offers nothing here.
+ */
+export type SourceInteraction = {
+  /** The primary interaction (kept for callers that render one mode). */
+  kind: "search" | "manual-id" | "browse";
+  /** The catalog is browsable with a query box (`search` capability). */
+  canSearch: boolean;
+  /** A book id can be entered directly (`lookup` capability). */
+  canManualId: boolean;
+};
 
 /** Whether a source supports the given capability. */
 function has(inst: PluginInstance, cap: string): boolean {
@@ -40,18 +53,30 @@ function has(inst: PluginInstance, cap: string): boolean {
 }
 
 /**
- * Resolve a source's interaction kind. The plugin's `source-info`
+ * Resolve a source's acquisition affordances. The plugin's `source-info`
  * declaration wins when it matches what this frontend can actually do
- * with the source's capabilities; otherwise the kind is derived from
- * capabilities (so a stale/unknown declared kind degrades gracefully).
+ * with the source's capabilities; otherwise the affordances are derived
+ * from capabilities (so a stale/unknown declared kind degrades
+ * gracefully). Search and manual-id are independent booleans.
  */
 export function sourceInteraction(inst: PluginInstance): SourceInteraction {
   const declared = inst.source_info?.kind;
-  if (declared === "search" && has(inst, "search")) return "search";
-  if (declared === "manual-id" && has(inst, "lookup")) return "manual-id";
-  if (has(inst, "search")) return "search";
-  if (has(inst, "lookup")) return "manual-id";
-  return "browse";
+  const canSearch = has(inst, "search");
+  const canManualId = has(inst, "lookup");
+  if (declared === "manual-id") {
+    return {
+      kind: canManualId ? "manual-id" : canSearch ? "search" : "browse",
+      canSearch,
+      canManualId,
+    };
+  }
+  if (canSearch) {
+    return { kind: "search", canSearch, canManualId };
+  }
+  if (canManualId) {
+    return { kind: "manual-id", canSearch, canManualId };
+  }
+  return { kind: "browse", canSearch, canManualId };
 }
 
 /** The search-box placeholder of a source (its declared hint, else the
@@ -106,6 +131,11 @@ export function SourceSearchPane({
 
   const selected = options.find((i) => i.id === sel);
   const interaction = selected ? sourceInteraction(selected) : null;
+  // Manual-id entry needs the source's `lookup` capability and is shown
+  // whenever the source has it — alongside the search box when the
+  // source also supports search (bangumi: search *and* direct id).
+  const showSearch = interaction?.canSearch ?? false;
+  const showManualId = interaction?.canManualId ?? false;
 
   // Keep the selection valid when the instance list changes (e.g. after
   // registration in the admin page).
@@ -132,14 +162,14 @@ export function SourceSearchPane({
   // Re-search when the instance or the query changes. Only searchable
   // sources are searched; others pick books by id.
   useEffect(() => {
-    if (!sel || interaction !== "search") {
+    if (!sel || !showSearch) {
       setResult(null);
       setError(null);
       return;
     }
     void load(sel, q, 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sel, q, interaction]);
+  }, [sel, q, showSearch]);
 
   const total = result?.total ?? 0;
   const shown = result?.items.length ?? 0;
@@ -164,7 +194,7 @@ export function SourceSearchPane({
             </option>
           ))}
         </select>
-        {sel && interaction === "search" && selected && (
+        {sel && showSearch && selected && (
           <input
             className="search"
             placeholder={searchPlaceholder(selected, t("plugin.searchPlaceholder"))}
@@ -176,38 +206,42 @@ export function SourceSearchPane({
 
       {error && <div className="error">{error}</div>}
       {loading && <p className="hint">{t("common.loading")}</p>}
-      {!loading && !error && interaction === "search" && sel && result && result.items.length === 0 && (
+      {!loading && !error && showSearch && sel && result && result.items.length === 0 && (
         <p className="hint">{t("plugin.noResults")}</p>
       )}
-      {!loading && !error && interaction === "manual-id" && sel && selected && (
+      {showManualId && sel && selected && (
         <div className="field">
-          <p className="hint">{t("plugin.noSearch")}</p>
-          <input
-            placeholder={idHint(selected, t("plugin.manualIdPlaceholder"))}
-            value={manual}
-            onChange={(e) => setManual(e.target.value)}
-          />
-          {manual.trim() && (
-            <button
-              className="link-btn"
-              disabled={picking !== null}
-              onClick={() =>
-                pick({
-                  id: manual.trim(),
-                  title: manual.trim(),
-                  authors: [],
-                  description: null,
-                  cover_url: null,
-                  book_id: null,
-                })
-              }
-            >
-              {picking !== null ? t("common.loading") : t("plugin.useManualId")}
-            </button>
-          )}
+          {!showSearch && <p className="hint">{t("plugin.noSearch")}</p>}
+          {showSearch && <p className="hint">{t("plugin.manualIdAlso")}</p>}
+          <div className="row">
+            <input
+              placeholder={idHint(selected, t("plugin.manualIdPlaceholder"))}
+              value={manual}
+              onChange={(e) => setManual(e.target.value)}
+              aria-label={t("plugin.manualIdPlaceholder")}
+            />
+            {manual.trim() && (
+              <button
+                className="link-btn"
+                disabled={picking !== null}
+                onClick={() =>
+                  pick({
+                    id: manual.trim(),
+                    title: manual.trim(),
+                    authors: [],
+                    description: null,
+                    cover_url: null,
+                    book_id: null,
+                  })
+                }
+              >
+                {picking !== null ? t("common.loading") : t("plugin.useManualId")}
+              </button>
+            )}
+          </div>
         </div>
       )}
-      {!loading && !error && interaction === "browse" && sel && (
+      {!loading && !error && interaction?.kind === "browse" && sel && (
         <p className="hint">{t("plugin.browseSynced")}</p>
       )}
       <ul className="source-results">

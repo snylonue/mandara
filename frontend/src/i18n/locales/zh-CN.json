@@ -187,6 +187,7 @@
     "more": "加载更多（还有 {{total}} 条）",
     "noSearch": "该来源不支持搜索，请直接输入书目 ID。",
     "manualIdPlaceholder": "输入书目 ID",
+    "manualIdAlso": "或直接输入条目 ID（需该来源支持 lookup）：",
     "useManualId": "使用该 ID",
     "browseSynced": "该来源的书目已同步到书架，无需在此选取。",
     "manageTitle": "插件管理",
