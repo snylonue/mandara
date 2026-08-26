@@ -241,9 +241,14 @@ Sources that store images should run with a raised fetch-timeout cap.
 provides plain network access — any host, http or https; the plugin
 decides what a status means (4xx/5xx are plain `response`s, not errors):
 
-- **Redirects**: at most 5 hops, curl-style method downgrade on 301–303.
+- **Redirects**: at most 5 hops, curl-style method downgrade on 301–303;
+  exceeding the cap is a `redirect-limit` error (not the last response).
 - **Timeout**: overall deadline = `min(requested,
   BOOKSHELF_PLUGIN_FETCH_TIMEOUT_MS)` (default 30 s).
+- **Proxy**: outbound requests honor the standard environment variables
+  (`ALL_PROXY` / `HTTPS_PROXY` / `HTTP_PROXY`, lowercase variants too);
+  hosts in `NO_PROXY` connect directly. Useful where the server has no
+  direct internet route.
 - **Size**: response bodies are capped
   (`BOOKSHELF_PLUGIN_FETCH_MAX_BYTES`, default 64 MiB); oversized
   responses abort with `size-limit` and no partial data.
@@ -323,6 +328,19 @@ and, when it has `lookup`, the book id).
 - `plugins/wiki-plugin/` — metadata-only over HTTP: `search` + `lookup`,
   config `base-url`/`api-key`/`site-name`/`page-size`; every entry points
   `content-source: "reader"`. Try it with `scripts/mock-source.py`.
+- `plugins/bangumi-plugin/` — a **real-world** metadata-only source:
+  Bangumi (`https://bgm.tv`) book subjects via the official v0 API.
+  `search` + `lookup`, no content — acquired entries are pure metadata;
+  attach content by uploading files or rebinding to a content plugin.
+  Config: `base-url` and an optional **access token**
+  (<https://next.bgm.tv/demo/access-token>) sent as
+  `Authorization: Bearer …` — NSFW subjects are hidden from
+  unauthenticated requests, so leave it empty for all-ages only. The
+  subject infobox is mapped onto authors/translators/illustrators and
+  the extended-metadata JSON (publisher/pub_date/isbn/pages/price/
+  subtitle/tags; ISBN checksum-verified guest-side, invalid ones skipped),
+  unknown keys preserved under `infobox_misc`. Every request carries a
+  descriptive User-Agent as required by the API guidelines.
 - `plugins/reader-plugin/` — reading-site source over HTTP: `search` +
   `lookup` + `content` + `book-file`; chapter mode for `r-N` books, and
   `get-book-file` returning the epub the source serves (file mode wins,

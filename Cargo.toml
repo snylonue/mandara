@@ -4,6 +4,7 @@ members = [
     "plugins/wiki-plugin",
     "plugins/reader-plugin",
     "plugins/wenku8-plugin",
+    "plugins/bangumi-plugin",
     "crates/bookshelf-core",
     "crates/bookshelf-formats",
     "crates/bookshelf-plugin",
@@ -28,6 +29,9 @@ opt-level = "s"
 opt-level = "s"
 
 [profile.release.package.wenku8-plugin]
+opt-level = "s"
+
+[profile.release.package.bangumi-plugin]
 opt-level = "s"
 
 [workspace.dependencies]

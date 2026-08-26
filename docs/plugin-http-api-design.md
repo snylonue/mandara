@@ -242,10 +242,10 @@ pipeline (`wasm-tools component new`, no adapter) stays untouched.
 - Q1 **Rate limiting**: per-instance QPS token bucket? (Self-hosted single
   user: probably unnecessary; a global
   `BOOKSHELF_PLUGIN_FETCH_CONCURRENCY` semaphore is a cheap middle ground.)
-- Q2 **HTTPS proxy**: forward plugin requests through the server's
-  configured proxy (`BOOKSHELF_HTTPS_PROXY`)? Needed for some networks;
-  conflicts with "no ambient credentials" — decide whether proxy use
-  requires an explicit flag.
+- Q2 **HTTPS proxy**: RESOLVED (2026-08-26) — the host upgraded to ureq 3,
+  whose default agent honors the standard `ALL_PROXY`/`HTTPS_PROXY`/
+  `HTTP_PROXY`/`NO_PROXY` environment variables. No bookshelf-specific
+  flag; deployments behind a proxy just export the usual vars.
 - Q3 **HTTP scheme default**: allow http by default (self-hosted sources)
   or require `BOOKSHELF_PLUGIN_FETCH_HTTP=true`? Leaning: default **on**
   with a warning, since the allow-list is the real gate.

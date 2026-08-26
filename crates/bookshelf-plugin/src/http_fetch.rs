@@ -1,6 +1,6 @@
 //! Outbound HTTP for plugins.
 //!
-//! One import (`http.fetch`) backed by a synchronous ureq client — the
+//! One import (`http.fetch`) backed by a synchronous ureq 3 client — the
 //! host provides plain network access, no destination policy:
 //!
 //! - **Timeout**: overall deadline = `min(requested,
@@ -10,16 +10,20 @@
 //!   responses abort with `size-limit` and no partial data.
 //! - **Redirects**: at most 5 hops, curl-style method downgrade on
 //!   301–303 (handled by ureq).
+//! - **Proxy**: outbound requests honor the standard environment
+//!   variables (`ALL_PROXY` / `HTTPS_PROXY` / `HTTP_PROXY`; `NO_PROXY`
+//!   exempts hosts) — ureq 3's default `proxy-from-env` behavior. Useful
+//!   where the server has no direct internet route.
 //! - **Logging**: URLs are logged `scheme://host/path` only — query and
 //!   fragment may carry secrets and must not reach the logs.
 //!
 //! 4xx/5xx are responses, not errors (the plugin decides what they
-//! mean).
+//! mean; status-as-error is disabled on the agent).
 
-use std::io::Read;
 use std::time::Duration;
 
 use tracing::{info, warn};
+use ureq::http::{HeaderName, HeaderValue};
 
 /// Maximum number of redirect hops per `fetch` call.
 pub const MAX_REDIRECTS: u32 = 5;
@@ -108,7 +112,7 @@ pub enum FetchError {
 }
 
 /// Headers the host manages itself; forwarding the plugin's own copies
-/// would be ignored at best and confuse ureq at worst.
+/// would be ignored at best and conflict at worst.
 fn is_host_managed_header(name: &str) -> bool {
     matches!(
         name.to_ascii_lowercase().as_str(),
@@ -116,43 +120,24 @@ fn is_host_managed_header(name: &str) -> bool {
     )
 }
 
-fn map_transport(t: ureq::Transport, policy_timeout_ms: u64) -> FetchError {
-    let msg = format!("{t}");
-    let lower = msg.to_ascii_lowercase();
-    if lower.contains("timed out") || lower.contains("too slow") {
-        return FetchError::Timeout(policy_timeout_ms);
-    }
-    match t.kind() {
-        ureq::ErrorKind::InvalidUrl | ureq::ErrorKind::UnknownScheme => FetchError::InvalidUrl(msg),
-        ureq::ErrorKind::TooManyRedirects => FetchError::RedirectLimit(MAX_REDIRECTS),
-        _ => FetchError::Transport(msg),
+fn map_error(e: ureq::Error, policy_timeout_ms: u64) -> FetchError {
+    match e {
+        ureq::Error::Timeout(_) => FetchError::Timeout(policy_timeout_ms),
+        ureq::Error::BadUri(msg) => FetchError::InvalidUrl(msg),
+        ureq::Error::TooManyRedirects => FetchError::RedirectLimit(MAX_REDIRECTS),
+        ureq::Error::RedirectFailed => FetchError::RedirectLimit(MAX_REDIRECTS),
+        ureq::Error::BodyExceedsLimit(limit) => FetchError::SizeLimit(limit),
+        ureq::Error::InvalidProxyUrl => {
+            FetchError::Denied("invalid proxy URL in environment".into())
+        }
+        ureq::Error::HostNotFound => FetchError::Transport("host not found".into()),
+        ureq::Error::Http(e) => FetchError::Transport(format!("http: {e}")),
+        ureq::Error::Protocol(e) => FetchError::Transport(format!("protocol: {e}")),
+        ureq::Error::Io(e) => FetchError::Transport(format!("io: {e}")),
+        other => FetchError::Transport(format!("{other}")),
     }
 }
 
-fn read_body(resp: ureq::Response, max_bytes: u64) -> Result<Vec<u8>, FetchError> {
-    let mut limited = resp.into_reader().take(max_bytes + 1);
-    let mut bytes = Vec::new();
-    limited
-        .read_to_end(&mut bytes)
-        .map_err(|e| FetchError::Transport(format!("reading response body: {e}")))?;
-    if bytes.len() as u64 > max_bytes {
-        return Err(FetchError::SizeLimit(max_bytes));
-    }
-    Ok(bytes)
-}
-
-fn response_headers(resp: &ureq::Response) -> Vec<(String, String)> {
-    resp.headers_names()
-        .into_iter()
-        .map(|name| {
-            let value = resp.header(&name).unwrap_or_default().to_string();
-            (name, value)
-        })
-        .collect()
-}
-
-/// `format!`-safe URL for logs and errors: query and fragment stripped
-/// (they may carry secrets).
 fn log_url(url: &str) -> String {
     url.split(['?', '#']).next().unwrap_or(url).to_string()
 }
@@ -170,44 +155,106 @@ pub fn fetch(policy: &FetchPolicy, request: FetchRequest) -> Result<FetchRespons
     if method.is_empty() {
         method = "GET".into();
     }
-    let agent = ureq::AgentBuilder::new()
-        .redirects(MAX_REDIRECTS)
-        .timeout(Duration::from_millis(capped_timeout))
-        .build();
-    let mut req = agent.request(&method, &request.url);
-    for (name, value) in &request.headers {
-        if !is_host_managed_header(name) {
-            req = req.set(name, value);
-        }
+
+    // Proxy selection from the environment (ALL_PROXY/HTTPS_PROXY/
+    // HTTP_PROXY + NO_PROXY) is ureq 3's default agent behavior.
+    let agent = ureq::Agent::new_with_config(
+        ureq::Agent::config_builder()
+            .max_redirects(MAX_REDIRECTS)
+            // Exceeding the hop cap is an error, not "last response".
+            .max_redirects_will_error(true)
+            .timeout_global(Some(Duration::from_millis(capped_timeout)))
+            // 4xx/5xx are plain responses for plugins, never errors.
+            .http_status_as_error(false)
+            .build(),
+    );
+
+    // Plugin-controlled headers, host-managed ones dropped, invalid
+    // ones skipped (they would fail the whole request).
+    let headers: Vec<(String, String)> = request
+        .headers
+        .iter()
+        .filter(|(name, _)| !is_host_managed_header(name))
+        .filter(|(name, value)| {
+            name.parse::<HeaderName>().is_ok() && value.parse::<HeaderValue>().is_ok()
+        })
+        .cloned()
+        .collect();
+    if headers.len()
+        < request.headers.len()
+            - request
+                .headers
+                .iter()
+                .filter(|(n, _)| is_host_managed_header(n))
+                .count()
+    {
+        warn!(fetch = %log_url(&request.url), "plugin fetch: dropping invalid header(s)");
     }
-    use ureq::OrAnyStatus;
-    let result = match &request.body {
-        Some(bytes) if !bytes.is_empty() => req.send_bytes(bytes).or_any_status(),
-        _ => req.call().or_any_status(),
+
+    let send = |with_bytes: bool| -> Result<FetchResponse, FetchError> {
+        let mut builder = ureq::http::Request::builder()
+            .method(method.as_str())
+            .uri(&request.url);
+        for (name, value) in &headers {
+            builder = builder.header(name, value);
+        }
+        // Each branch keeps its own concrete body type (`()` vs `&[u8]`).
+        let result = if with_bytes {
+            let bytes = request.body.as_deref().unwrap_or_default();
+            agent.run(builder.body(bytes).map_err(invalid_request)?)
+        } else {
+            agent.run(builder.body(()).map_err(invalid_request)?)
+        };
+        finish(result, policy, &request.url)
     };
 
+    match &request.body {
+        Some(bytes) if !bytes.is_empty() => send(true),
+        _ => send(false),
+    }
+}
+
+fn invalid_request(e: ureq::http::Error) -> FetchError {
+    FetchError::InvalidUrl(format!("invalid request: {e}"))
+}
+
+fn finish(
+    result: Result<ureq::http::Response<ureq::Body>, ureq::Error>,
+    policy: &FetchPolicy,
+    url: &str,
+) -> Result<FetchResponse, FetchError> {
     match result {
         Ok(resp) => {
-            let status = resp.status();
-            let final_url = resp.get_url().to_string();
-            let headers = response_headers(&resp);
+            let status = resp.status().as_u16();
+            use ureq::ResponseExt;
+            let final_url = resp.get_uri().to_string();
+            let response_headers: Vec<(String, String)> = resp
+                .headers()
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        k.as_str().to_string(),
+                        v.to_str().unwrap_or_default().to_string(),
+                    )
+                })
+                .collect();
             let bytes = read_body(resp, policy.max_bytes)?;
             info!(
-                fetch = %log_url(&request.url),
+                fetch = %log_url(url),
                 status,
                 bytes = bytes.len(),
                 "plugin fetch ok"
             );
             Ok(FetchResponse {
                 status,
-                headers,
+                headers: response_headers,
                 body: bytes,
                 final_url,
             })
         }
-        Err(t) => {
-            let fetched = log_url(&request.url);
-            match map_transport(t, policy.timeout_ms) {
+        Err(e) => {
+            let fetched = log_url(url);
+            match map_error(e, policy.timeout_ms) {
                 FetchError::Timeout(_) => {
                     warn!(fetch = %fetched, "plugin fetch timed out");
                     Err(FetchError::Timeout(policy.timeout_ms))
@@ -218,5 +265,17 @@ pub fn fetch(policy: &FetchPolicy, request: FetchRequest) -> Result<FetchRespons
                 }
             }
         }
+    }
+}
+
+fn read_body(
+    resp: ureq::http::Response<ureq::Body>,
+    max_bytes: u64,
+) -> Result<Vec<u8>, FetchError> {
+    let mut body = resp.into_body();
+    match body.with_config().limit(max_bytes).read_to_vec() {
+        Ok(bytes) => Ok(bytes),
+        Err(ureq::Error::BodyExceedsLimit(_)) => Err(FetchError::SizeLimit(max_bytes)),
+        Err(e) => Err(map_error(e, u64::MAX)),
     }
 }
