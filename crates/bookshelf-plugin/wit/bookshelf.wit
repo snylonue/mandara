@@ -1,6 +1,13 @@
-// bookshelf plugin interface v5 (dev phase: no backward compatibility).
+// bookshelf plugin interface v6 (dev phase: no backward compatibility).
 //
-// v5 adds `volume-info`/`book-entry.volumes`: sources with multi-volume
+// v6 adds `book-entry.extra`: an optional JSON object with extended
+// metadata (ISBN, publisher, dates, translators/illustrators, pages,
+// price, binding, language; series splits also read status/
+// total-volumes/tags from the same object). The host validates and
+// normalizes it at the storage boundary — future metadata fields never
+// require a WIT bump (see docs/metadata-ext-design.md).
+//
+// v5 added `volume-info`/`book-entry.volumes`: sources with multi-volume
 // books (light-novel series where vcss-style TOC rows group chapters into
 // 卷) declare the volume structure, and the host acquires each volume as
 // its own library book under one series entry instead of merging the whole
@@ -27,7 +34,7 @@
 //     unsupported features are declared via `capabilities()` and return
 //     `none`/empty).
 
-package bookshelf:plugin@0.6.0;
+package bookshelf:plugin@0.7.0;
 
 /// Shared types between bookshelf and plugins.
 interface types {
@@ -57,6 +64,12 @@ interface types {
         authors: list<string>,
         description: option<string>,
         cover-url: option<string>,
+        /// Optional extended metadata as a JSON object (`BookExt` shape:
+        /// subtitle/original-title/isbn/publisher/pub-date/translators/
+        /// illustrators/pages/price/binding/language + free-form extras;
+        /// series splits also read status/total-volumes/tags). The host
+        /// validates it — malformed objects fail the call.
+        extra: option<string>,
         /// Chapters come from another plugin instance when set.
         ///
         /// Metadata-only plugins set this to the id of a content plugin

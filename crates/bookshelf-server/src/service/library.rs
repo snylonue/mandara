@@ -278,7 +278,8 @@ impl Library {
         {
             let mut conn = self.diesel_db.get().await?;
             for entry in result.items {
-                let book = SourceBook::from(entry);
+                let book = SourceBook::try_from(entry)
+                    .map_err(|e| ApiError::bad_request(format!("invalid search result: {e}")))?;
                 let book_id: Option<String> = schema::book_files::table
                     .filter(
                         schema::book_files::source
@@ -1078,7 +1079,9 @@ impl Library {
     async fn plugin_book_entry(&self, source: &str, book_id: &str) -> Result<SourceBook, ApiError> {
         let entry = self.plugins.get_book(source, book_id).await?;
         entry
-            .map(SourceBook::from)
+            .map(SourceBook::try_from)
+            .transpose()
+            .map_err(|e| ApiError::bad_request(format!("invalid plugin book entry: {e}")))?
             .ok_or_else(|| ApiError::bad_request(format!("plugin does not offer book `{book_id}`")))
     }
 
@@ -1571,7 +1574,8 @@ impl Library {
                     "source `{source_id}` no longer offers book `{external_id}`"
                 ))
             })?;
-            let entry = SourceBook::from(entry);
+            let entry = SourceBook::try_from(entry)
+                .map_err(|e| ApiError::bad_request(format!("invalid plugin book entry: {e}")))?;
 
             // Metadata always from the metadata instance; titles from the
             // content instance.
@@ -2278,7 +2282,13 @@ impl Library {
                 .map_err(|e| warn!(source = %source_id, book = %external_id, "file-mode metadata unavailable: {e}"))
                 .ok()
                 .flatten()
-                .map(SourceBook::from);
+                .and_then(|entry| match SourceBook::try_from(entry) {
+                    Ok(b) => Some(b),
+                    Err(e) => {
+                        warn!(source = %source_id, book = %external_id, "invalid plugin book entry: {e}");
+                        None
+                    }
+                });
             if self.plugins.declares(source_id, "book-file").await?
                 && let Some(book_file) = self.plugins.get_book_file(source_id, external_id).await?
             {

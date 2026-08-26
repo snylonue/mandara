@@ -125,6 +125,7 @@ impl From<JsonEntry> for BookEntry {
             authors: e.authors,
             description: e.description,
             cover_url: e.cover_url,
+            extra: None,
             content_source: e.content_source,
             content_id: e.content_id,
             volumes: e.volumes.map(|vs| {

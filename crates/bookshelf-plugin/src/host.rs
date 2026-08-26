@@ -414,7 +414,9 @@ impl WasmPlugin {
         let book = self.call(config, |store, b| {
             b.call_identify_upload(store, filename, file_hash)
         })?;
-        Ok(book.map(SourceBook::from))
+        book.map(SourceBook::try_from)
+            .transpose()
+            .map_err(|e| Error::Plugin(format!("identify-upload entry invalid: {e}")))
     }
 
     /// Fetch a whole book file (`book-file` capability). `None` = the
@@ -445,15 +447,32 @@ impl WasmPlugin {
     }
 }
 
-impl From<BookEntry> for SourceBook {
-    fn from(b: BookEntry) -> Self {
-        SourceBook {
+/// Convert a plugin's `book-entry` into the core source model,
+/// validating + parsing the optional extended-metadata JSON object
+/// (`book-entry.extra`): it must be a valid `BookExt`-shaped object
+/// (unknown keys allowed); anything else fails the plugin call so bad
+/// data never lands.
+impl TryFrom<BookEntry> for SourceBook {
+    type Error = Error;
+
+    fn try_from(b: BookEntry) -> std::result::Result<Self, Self::Error> {
+        let ext = match b.extra {
+            None => None,
+            Some(raw) => {
+                let value: serde_json::Value = serde_json::from_str(&raw)
+                    .map_err(|e| Error::Plugin(format!("invalid `extra` metadata JSON: {e}")))?;
+                let validated = bookshelf_core::ext::BookExt::from_value(value.clone())
+                    .map_err(|e| Error::Plugin(format!("invalid `extra` metadata object: {e}")))?;
+                Some(serde_json::to_value(validated).unwrap_or(value))
+            }
+        };
+        Ok(Self {
             id: b.id,
             title: b.title,
             authors: b.authors,
             description: b.description,
             cover_url: b.cover_url,
-            ext: None,
+            ext,
             content_source: b.content_source,
             content_id: b.content_id,
             volumes: b
@@ -465,7 +484,7 @@ impl From<BookEntry> for SourceBook {
                     chapter_count: v.chapter_count,
                 })
                 .collect(),
-        }
+        })
     }
 }
 

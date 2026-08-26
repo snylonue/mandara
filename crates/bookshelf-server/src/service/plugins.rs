@@ -518,18 +518,23 @@ impl PluginService {
                 instance: row.id,
                 books: declared
                     .into_iter()
-                    .map(|b| DeclaredCatalogBook {
-                        book: SourceBook::from(b.book),
-                        chapters: b
-                            .chapters
-                            .into_iter()
-                            .map(|c| SourceChapter {
-                                title: c.title,
-                                content: c.content,
-                            })
-                            .collect(),
+                    .map(|b| -> Result<_, ApiError> {
+                        let book = SourceBook::try_from(b.book).map_err(|e| {
+                            ApiError::bad_request(format!("invalid declared book entry: {e}"))
+                        })?;
+                        Ok(DeclaredCatalogBook {
+                            book,
+                            chapters: b
+                                .chapters
+                                .into_iter()
+                                .map(|c| SourceChapter {
+                                    title: c.title,
+                                    content: c.content,
+                                })
+                                .collect(),
+                        })
                     })
-                    .collect(),
+                    .collect::<Result<Vec<_>, _>>()?,
             });
         }
         Ok(out)
@@ -559,18 +564,23 @@ impl PluginService {
                 instance: row.id,
                 books: declared
                     .into_iter()
-                    .map(|b| DeclaredCatalogBook {
-                        book: SourceBook::from(b.book),
-                        chapters: b
-                            .chapters
-                            .into_iter()
-                            .map(|c| SourceChapter {
-                                title: c.title,
-                                content: c.content,
-                            })
-                            .collect(),
+                    .map(|b| -> Result<_, ApiError> {
+                        let book = SourceBook::try_from(b.book).map_err(|e| {
+                            ApiError::bad_request(format!("invalid declared book entry: {e}"))
+                        })?;
+                        Ok(DeclaredCatalogBook {
+                            book,
+                            chapters: b
+                                .chapters
+                                .into_iter()
+                                .map(|c| SourceChapter {
+                                    title: c.title,
+                                    content: c.content,
+                                })
+                                .collect(),
+                        })
                     })
-                    .collect(),
+                    .collect::<Result<Vec<_>, _>>()?,
             }));
         }
         Ok(None)

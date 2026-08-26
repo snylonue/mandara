@@ -57,7 +57,7 @@ the full design. This guide is for plugin authors.
 ## Interface (WIT)
 
 Interface file: `crates/bookshelf-plugin/wit/bookshelf.wit`, world
-`bookshelf:plugin/bookshelf-plugin@0.5.0`. Every export is **required**
+`bookshelf:plugin/bookshelf-plugin@0.7.0`. Every export is **required**
 (the WIT parser has no optional exports) — unsupported features return
 `none`/empty and are declared via `capabilities()`:
 
@@ -75,6 +75,8 @@ interface types {
         authors: list<string>,
         description: option<string>,
         cover-url: option<string>,
+        // extended metadata (v0.7.0): JSON object, BookExt shape
+        extra: option<string>,
         // metadata/content separation (R5):
         content-source: option<string>,  // instance id providing the chapters
         content-id: option<string>,      // book id inside that instance
@@ -138,6 +140,33 @@ then auto-splits acquisition into **one series + one library book per
 `none`/empty (single book, previous behavior). Volume counts must match
 `chapter-titles` after the source's own 插图/etc. placement policy; the
 host clamps mismatches defensively.
+
+**Extended metadata (`book-entry.extra`, v0.7.0).** A source may
+attach a JSON object with catalog-style fields to every `book-entry`
+(see `docs/metadata-ext-design.md`):
+
+```json
+{
+  "subtitle": "…", "original_title": "…", "isbn": "9787536692930",
+  "publisher": "电击文库", "pub_date": "2012-5",
+  "translators": ["…"], "illustrators": ["…"], "pages": 256,
+  "price": "¥ 620", "binding": "文库", "language": "ja"
+}
+```
+
+- Every key is optional; **unknown keys are preserved verbatim**, so new
+  server-side fields flow through without WIT/host changes.
+- The host validates the object at the storage boundary: ISBNs are
+  checksum-verified and canonicalized to hyphenless ISBN-13 (valid
+  ISBN-10 inputs are converted); an invalid object fails the plugin call
+  — bad data never lands. Dates are stored verbatim; formatting is the
+  source's job.
+- Multi-volume splits seed both the series (`SeriesExt` subset:
+  `status` `ongoing|completed|hiatus`, `total_volumes`, `tags`) and each
+  volume book from the same object.
+- Manual acquire overrides (`POST /api/books` multipart field `ext`)
+  merge per-key on top of what the source produced; refresh replaces it
+  wholesale.
 
 Host caps: `search-books` limit ≤ 50 / offset ≤ 10 000 (400 beyond);
 `declare` ≤ 10 000 books / 100 000 chapters (error beyond, warn past 90%);

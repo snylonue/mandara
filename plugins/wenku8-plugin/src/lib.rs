@@ -854,6 +854,10 @@ fn parse_book_page(book: &str, html: &str) -> Option<BookEntry> {
         authors,
         description,
         cover_url: extract_cover(&inner),
+        // The wenku8 info page carries no publisher/ISBN fields; extended
+        // metadata stays empty (sources can add `extra` any time without
+        // host changes).
+        extra: None,
         content_source: None,
         content_id: None,
         volumes: None,

@@ -163,6 +163,7 @@ impl Guest for HelloPlugin {
                 "这是一本由 wasm 插件依据配置生成的示例书。当前配置：站点={site}，版本=default。{tail}"
             )),
             cover_url: None,
+            extra: None,
             content_source: None,
             content_id: None,
             volumes: None,
@@ -173,6 +174,11 @@ impl Guest for HelloPlugin {
             authors: vec!["Bookshelf Team".into()],
             description: Some("示例插件内部机制的说明。".into()),
             cover_url: None,
+            // Extended-metadata demo: known keys validate against BookExt,
+            // unknown keys round-trip verbatim.
+            extra: Some(
+                r#"{"publisher":"Bookshelf Press","pub-date":"2026-08","pages":42,"future_key":{"nested":true}}"#.into(),
+            ),
             content_source: None,
             content_id: None,
             volumes: None,
@@ -280,6 +286,7 @@ impl Guest for HelloPlugin {
                 authors: vec!["Bookshelf Team".into()],
                 description: Some("这是一本由 wasm 插件提供的示例书。".into()),
                 cover_url: None,
+                extra: None,
                 content_source: None,
                 content_id: None,
                 volumes: None,
