@@ -635,6 +635,7 @@ a.btn-primary:hover {
 }
 
 .book-card {
+  position: relative;
   background: var(--surface-raised);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -1741,16 +1742,23 @@ button.active {
 }
 
 .series-card-actions {
+  /* hover-revealed overlay on top of the cover; the card itself stays a link */
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  z-index: 2;
   display: flex;
   gap: var(--space-1);
-  padding: var(--space-2) var(--space-3);
-  border-top: 1px solid var(--border);
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.book-card:hover .series-card-actions,
+.book-card:focus-within .series-card-actions {
+  opacity: 1;
 }
 
 .series-card-actions .mini-btn {
-  flex: 1;
-  justify-content: center;
-}
 
 .book-card-muted {
   opacity: 0.6;

@@ -18,8 +18,9 @@ import { Modal } from "../components/Modal";
 import { useToast } from "../components/toast";
 import type { BookDetail, BookListEntry, SeriesBrief, SeriesDetail } from "../types";
 
-/// One volume card of the series. In manage mode the card shows the
-/// reorder/remove controls instead of linking.
+/// One volume card of the series. Manageable cards additionally show
+/// hover-revealed reorder/remove controls overlaid on the cover; the card
+/// itself always links to the book.
 function VolumeCard({
   entry,
   canManage,
@@ -59,7 +60,7 @@ function VolumeCard({
   );
   return (
     <div className={`book-card ${!readable ? "book-card-muted" : ""}`}>
-      {readable && !canManage ? <Link to={`/book/${book.id}`}>{inner}</Link> : inner}
+      {readable ? <Link to={`/book/${book.id}`}>{inner}</Link> : inner}
       {canManage && (
         <div className="series-card-actions">
           <button
