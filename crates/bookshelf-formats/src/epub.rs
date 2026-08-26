@@ -149,6 +149,12 @@ fn parse_path(path: &Path) -> Result<ParsedBook> {
 
     let description = doc.mdata("description").map(|m| m.value.trim().to_string());
 
+    // Extended metadata from the OPF dc elements (bangumi/douban-style;
+    // docs/metadata-ext-design.md). Values are stored verbatim except the
+    // ISBN, which is validated + canonicalized; anything unparseable or
+    // invalid is skipped — a broken field never fails the upload.
+    let ext = extract_opf_ext(&doc);
+
     // TOC (nav doc / NCX) → tree, with a flattened path → label map for
     // chapter titles (leaf entries win for documents with nested entries).
     let branches = extract_toc_tree(&mut doc);
@@ -257,10 +263,55 @@ fn parse_path(path: &Path) -> Result<ParsedBook> {
         images,
         chapters,
         toc,
-        // EPUB OPF extraction lands with the metadata-extraction change;
-        // until then uploads carry no extended metadata.
-        ext: BookExt::default(),
+        ext,
     })
+}
+
+/// Extended metadata from the OPF's Dublin Core elements: ISBN (first
+/// `dc:identifier` that validates, `urn:isbn:` prefix allowed), publisher,
+/// date, language, and translator-credited creators (`opf:role="trl"` /
+/// EPUB3 `role` refinement).
+fn extract_opf_ext(doc: &epub::doc::EpubDoc<std::io::BufReader<std::fs::File>>) -> BookExt {
+    let mut ext = BookExt::default();
+    let md = &doc.metadata;
+    let by_property = |name: &str| {
+        md.iter()
+            .find(|d| d.property.eq_ignore_ascii_case(name))
+            .map(|d| d.value.trim().to_string())
+            .filter(|v| !v.is_empty())
+    };
+    ext.publisher = by_property("publisher");
+    ext.pub_date = by_property("date");
+    ext.language = by_property("language");
+    for ident in md
+        .iter()
+        .filter(|d| d.property.eq_ignore_ascii_case("identifier"))
+    {
+        let raw = ident.value.trim();
+        let candidate = raw
+            .strip_prefix("urn:isbn:")
+            .or_else(|| raw.strip_prefix("URN:ISBN:"))
+            .unwrap_or(raw);
+        if let Ok(isbn) = bookshelf_core::ext::normalize_isbn(candidate) {
+            ext.isbn = Some(isbn);
+            break;
+        }
+    }
+    let translators: Vec<String> = md
+        .iter()
+        .filter(|d| d.property.eq_ignore_ascii_case("creator"))
+        .filter(|d| {
+            d.refined.iter().any(|r| {
+                r.property.eq_ignore_ascii_case("role")
+                    && matches!(r.value.to_lowercase().as_str(), "trl" | "translator")
+            })
+        })
+        .map(|d| d.value.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .collect();
+    ext.translators = (!translators.is_empty()).then_some(translators);
+    let _ = ext.sanitize();
+    ext
 }
 
 // ---- table of contents ------------------------------------------------
@@ -828,6 +879,9 @@ mod tests {
         version: &'static str,
         spine: Vec<(String, bool)>, // (file name, linear)
         toc: Vec<TocFixture>,
+        /// Raw XML injected into `<metadata>` (extra dc elements for the
+        /// extended-metadata tests).
+        metadata_extra: &'static str,
     }
 
     /// Minimal but spec-shaped EPUB: container.xml + OPF + (NCX or nav) +
@@ -899,15 +953,17 @@ mod tests {
                 &format!(
                     r#"<?xml version="1.0"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="{v}" unique-identifier="uid">
-  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
     <dc:identifier id="uid">test-{v}</dc:identifier>
     <dc:title>测试书</dc:title>
     <dc:creator>测试作者</dc:creator>
+    {extra}
   </metadata>
   <manifest>{manifest}</manifest>
   {spine_xml}
 </package>"#,
                     v = fx.version,
+                    extra = fx.metadata_extra,
                 ),
             );
 
@@ -1017,6 +1073,7 @@ mod tests {
                 ("ch2.xhtml".into(), true),
                 ("ch2b.xhtml".into(), true),
             ],
+            metadata_extra: "",
             toc: vec![
                 e("第一章 起点", "ch1.xhtml", vec![]),
                 e(
@@ -1100,6 +1157,7 @@ mod tests {
                 ("ch2.xhtml".into(), true),
                 ("ch2b.xhtml".into(), true),
             ],
+            metadata_extra: "",
             toc: vec![
                 e("插图", "pic.xhtml", vec![]),
                 e("序章", "ch1.xhtml", vec![]),
@@ -1140,6 +1198,7 @@ mod tests {
                 ("h3.xhtml".into(), true),
                 ("c4.xhtml".into(), true),
             ],
+            metadata_extra: "",
             toc: vec![
                 e(
                     "第一卷",
@@ -1249,6 +1308,7 @@ mod tests {
                 ("e3.xhtml".into(), true),
                 ("pic.xhtml".into(), true), // image-only leaf: dropped
             ],
+            metadata_extra: "",
             toc: vec![
                 e("序言", "e1.xhtml", vec![]),
                 e(
@@ -1306,6 +1366,7 @@ mod tests {
                     ("e2.xhtml".into(), true),
                     ("e3.xhtml".into(), true),
                 ],
+                metadata_extra: "",
                 toc: vec![
                     e("序章", "e1.xhtml", vec![]),
                     e(
@@ -1358,6 +1419,7 @@ mod tests {
         let bytes = build_epub(&Fixture {
             version: "2.0",
             spine: vec![("ch1.xhtml".into(), true)],
+            metadata_extra: "",
             toc: vec![],
         });
         let book = parse(&bytes).unwrap();
@@ -1380,11 +1442,67 @@ mod tests {
         let bytes = build_epub(&Fixture {
             version: "3.0",
             spine: vec![("ch1.xhtml".into(), true)],
+            metadata_extra: "",
             toc: vec![e("第一章", "ch1.xhtml", vec![])],
         });
         let book = parse(&bytes).unwrap();
         let cover = book.cover.expect("epub3 cover-image property");
         assert_eq!(cover.mime, "image/png");
         assert_eq!(cover.bytes, PNG_1PX);
+    }
+
+    #[test]
+    fn extracts_extended_metadata_epub2() {
+        let bytes = build_epub(&Fixture {
+            version: "2.0",
+            spine: vec![("ch1.xhtml".into(), true)],
+            metadata_extra: r#"
+                <dc:identifier opf:scheme="ISBN">1-55860-832-X</dc:identifier>
+                <dc:publisher>新潮社</dc:publisher>
+                <dc:date>2012-5</dc:date>
+                <dc:language>ja</dc:language>
+                <dc:creator opf:role="trl">李译者</dc:creator>"#,
+            toc: vec![e("第一章", "ch1.xhtml", vec![])],
+        });
+        let book = parse(&bytes).unwrap();
+        assert_eq!(book.ext.isbn.as_deref(), Some("9781558608320"));
+        assert_eq!(book.ext.publisher.as_deref(), Some("新潮社"));
+        assert_eq!(book.ext.pub_date.as_deref(), Some("2012-5"));
+        assert_eq!(book.ext.language.as_deref(), Some("ja"));
+        assert_eq!(book.ext.translators, Some(vec!["李译者".to_string()]));
+    }
+
+    #[test]
+    fn extracts_extended_metadata_epub3() {
+        let bytes = build_epub(&Fixture {
+            version: "3.0",
+            spine: vec![("ch1.xhtml".into(), true)],
+            metadata_extra: r##"
+                <dc:identifier>urn:isbn:9787536692930</dc:identifier>
+                <dc:publisher>重庆出版社</dc:publisher>
+                <dc:language>zh-CN</dc:language>
+                <meta property="role" refines="#creator" scheme="marc:relators">trl</meta>"##,
+            toc: vec![e("第一章", "ch1.xhtml", vec![])],
+        });
+        let book = parse(&bytes).unwrap();
+        // urn:isbn prefix stripped, checksum verified, stored canonically
+        assert_eq!(book.ext.isbn.as_deref(), Some("9787536692930"));
+        assert_eq!(book.ext.publisher.as_deref(), Some("重庆出版社"));
+        assert_eq!(book.ext.language.as_deref(), Some("zh-CN"));
+    }
+
+    #[test]
+    fn invalid_isbn_in_opf_is_skipped() {
+        let bytes = build_epub(&Fixture {
+            version: "2.0",
+            spine: vec![("ch1.xhtml".into(), true)],
+            metadata_extra: r#"
+                <dc:identifier opf:scheme="ISBN">1234567890123</dc:identifier>
+                <dc:publisher>出版社</dc:publisher>"#,
+            toc: vec![e("第一章", "ch1.xhtml", vec![])],
+        });
+        let book = parse(&bytes).unwrap();
+        assert_eq!(book.ext.isbn, None, "invalid ISBN never lands");
+        assert_eq!(book.ext.publisher.as_deref(), Some("出版社"));
     }
 }
