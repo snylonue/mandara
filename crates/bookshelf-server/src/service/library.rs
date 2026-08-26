@@ -457,20 +457,24 @@ impl Library {
 
         // Keep metadata fresh on every sync/claim. When a user claims an
         // upload as this plugin book, the metadata gains that user as its
-        // creator (so they can maintain and refresh it).
+        // creator (so they can maintain and refresh it). Without an owner
+        // the column is left untouched — writing `''` would violate the
+        // `created_by REFERENCES users(id)` foreign key.
         diesel::update(schema::books::table.find(&book_id))
             .set((
                 schema::books::title.eq(&book.title),
                 schema::books::authors.eq(&authors),
                 schema::books::description.eq(&book.description),
                 schema::books::cover_url.eq(&book.cover_url),
-                schema::books::created_by.eq(coalesce(
-                    schema::books::created_by,
-                    owner.unwrap_or_default(),
-                )),
             ))
             .execute(&mut self.diesel_db.get().await?)
             .await?;
+        if let Some(owner) = owner {
+            diesel::update(schema::books::table.find(&book_id))
+                .set(schema::books::created_by.eq(coalesce(schema::books::created_by, owner)))
+                .execute(&mut self.diesel_db.get().await?)
+                .await?;
+        }
         // Content indirection comes from the entry; the metadata instance
         // owns the `books` row, the content instance the chapters.
         diesel::update(
