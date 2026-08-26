@@ -36,6 +36,7 @@ impl bookshelf_plugin::host::ImageStore for DbImageStore {
     fn store_image(&self, bytes: &[u8], mime: &str) -> std::result::Result<String, String> {
         self.rt
             .block_on(store_image(&self.db, &self.files_dir, bytes, mime))
+            .map(|id| id.to_string())
             .map_err(|e| e.to_string())
     }
 }

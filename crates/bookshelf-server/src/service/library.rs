@@ -25,7 +25,7 @@ use anyhow::Context as _;
 use tracing::{info, warn};
 
 use bookshelf_core::model::{
-    BookMeta, Chapter, ChapterMeta, FileMeta, Role, SeriesMeta, TocNode, User, Visibility,
+    BookMeta, Chapter, ChapterMeta, FileMeta, ImageId, Role, SeriesMeta, TocNode, User, Visibility,
 };
 use bookshelf_core::source::{SourceBook, SourceBookFile, SourceChapter, SourceVolume};
 use bookshelf_formats::ParsedBook;
@@ -2457,10 +2457,10 @@ fn original_path(files_dir: &Path, file_id: &str, ext: &str) -> PathBuf {
 }
 
 impl Library {
-    /// The stored mime type of a stored image (by sha256 hex id).
-    pub async fn image_mime(&self, id: &str) -> Result<Option<String>, ApiError> {
+    /// The stored mime type of a stored image.
+    pub async fn image_mime(&self, id: &ImageId) -> Result<Option<String>, ApiError> {
         let mime: Option<String> = schema::images::table
-            .find(id)
+            .find(id.as_str())
             .select(schema::images::mime)
             .first(&mut self.diesel_db.get().await?)
             .await
@@ -2468,9 +2468,9 @@ impl Library {
         Ok(mime)
     }
 
-    /// Read a localized image's bytes (by sha256 hex id).
-    pub async fn image_bytes(&self, id: &str) -> Result<Option<Vec<u8>>, ApiError> {
-        match tokio::fs::read(self.files_dir.join("images").join(id)).await {
+    /// Read a localized image's bytes from disk.
+    pub async fn image_bytes(&self, id: &ImageId) -> Result<Option<Vec<u8>>, ApiError> {
+        match tokio::fs::read(self.files_dir.join("images").join(id.as_str())).await {
             Ok(bytes) => Ok(Some(bytes)),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(anyhow::Error::new(e).context("read image").into()),
@@ -2489,7 +2489,7 @@ pub async fn store_image(
     files_dir: &Path,
     bytes: &[u8],
     mime: &str,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<ImageId> {
     let id = sha256_hex(bytes);
     let dims = bookshelf_formats::imgdim::image_dimensions(bytes);
     let dir = files_dir.join("images");
@@ -2514,7 +2514,7 @@ pub async fn store_image(
         .on_conflict_do_nothing()
         .execute(&mut db.get().await?)
         .await?;
-    Ok(id)
+    Ok(ImageId::from_sha256_hex(id).expect("sha256 hex is always a valid image id"))
 }
 
 /// Ingest boundary for parsed book files: stores every extracted image in

@@ -160,6 +160,63 @@ pub struct OriginalInfo {
     pub sha256: String,
 }
 
+/// Id of an image in the content-addressed image store: the lowercase hex
+/// sha-256 digest of its bytes (64 chars). The id doubles as a disk
+/// filename and a `/api/images/{id}` URL path segment, so it is validated
+/// at construction — any [`ImageId`] in circulation is guaranteed to be a
+/// plain hex string and safe to embed in paths.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ImageId(String);
+
+impl ImageId {
+    /// Validate raw sha-256 hex output (exactly 64 lowercase hex chars).
+    /// Returns the rejected input on failure.
+    pub fn from_sha256_hex(id: impl Into<String>) -> Result<Self, String> {
+        let id = id.into();
+        let is_lower_hex = id.len() == 64
+            && id
+                .bytes()
+                .all(|b| b.is_ascii_digit() || matches!(b, b'a'..=b'f'));
+        if is_lower_hex { Ok(Self(id)) } else { Err(id) }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for ImageId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::str::FromStr for ImageId {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::from_sha256_hex(s.to_owned()).map_err(|bad| format!("invalid image id: {bad}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn image_id_accepts_sha256_hex_only() {
+        let ok = "0123456789abcdef".repeat(4);
+        assert!(ImageId::from_sha256_hex(ok.clone()).is_ok());
+        assert_eq!(ImageId::from_sha256_hex(ok).unwrap().as_str().len(), 64);
+
+        // uppercase hex, wrong length, path traversal, empty
+        assert!(ImageId::from_sha256_hex("A".repeat(64)).is_err());
+        assert!(ImageId::from_sha256_hex("a".repeat(63)).is_err());
+        assert!(ImageId::from_sha256_hex("../../etc/passwd").is_err());
+        assert!(ImageId::from_sha256_hex("").is_err());
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChapterMeta {
     pub idx: u32,

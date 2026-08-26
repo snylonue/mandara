@@ -5,23 +5,50 @@
 //! model as book covers and share tokens (ids are unguessable sha256
 //! hashes of the bytes).
 
-use axum::extract::{Path, State};
+use axum::extract::{FromRequestParts, Path, State};
 use axum::http::header;
+use axum::http::header::CONTENT_TYPE;
+use axum::http::request::Parts;
 use axum::response::IntoResponse;
+
+use bookshelf_core::model::ImageId;
 
 use crate::error::ApiError;
 use crate::routes::St;
 
+/// Typed path extractor for image ids: an id that is not valid sha256 hex
+/// can never reach the service layer (it is rejected as unknown, i.e. 404).
+/// A wrapper is required because [`ImageId`] lives in `bookshelf-core`,
+/// which knows nothing about axum.
+#[derive(Debug, Clone)]
+pub struct ImagePath(pub ImageId);
+
+impl std::ops::Deref for ImagePath {
+    type Target = ImageId;
+
+    fn deref(&self) -> &ImageId {
+        &self.0
+    }
+}
+
+impl FromRequestParts<St> for ImagePath {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &St) -> Result<Self, Self::Rejection> {
+        let Path(raw): Path<String> = Path::from_request_parts(parts, state)
+            .await
+            .map_err(|_| ApiError::not_found("image"))?;
+        ImageId::from_sha256_hex(raw)
+            .map(Self)
+            .map_err(|_| ApiError::not_found("image"))
+    }
+}
+
 /// GET /api/images/{id} — the stored image bytes (public).
 pub async fn get_image(
     State(st): State<St>,
-    Path(id): Path<String>,
+    ImagePath(id): ImagePath,
 ) -> Result<impl IntoResponse, ApiError> {
-    // The id doubles as the filename — only sha256 hex is accepted, so
-    // nothing outside data/files/images/ is reachable.
-    if id.len() != 64 || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err(ApiError::not_found("image"));
-    }
     let Some(bytes) = st.library.image_bytes(&id).await? else {
         return Err(ApiError::not_found("image"));
     };
@@ -31,7 +58,7 @@ pub async fn get_image(
         .await?
         .unwrap_or_else(|| "image/jpeg".into());
     Ok((
-        [(header::CONTENT_TYPE, mime)],
+        [(CONTENT_TYPE, mime)],
         [(header::CACHE_CONTROL, "public, max-age=31536000, immutable")],
         bytes,
     ))
