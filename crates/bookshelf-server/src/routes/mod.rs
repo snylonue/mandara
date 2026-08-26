@@ -9,8 +9,10 @@ pub mod series;
 pub mod sessions;
 pub mod shares;
 
-use axum::extract::{DefaultBodyLimit, State};
-use axum::http::HeaderMap;
+use axum::extract::{DefaultBodyLimit, Request, State};
+use axum::http::{HeaderMap, HeaderValue, header};
+use axum::middleware::{self, Next};
+use axum::response::Response;
 use axum::routing::{delete, get, patch, post, put};
 use axum::{Json, Router};
 use serde::Deserialize;
@@ -169,8 +171,40 @@ pub fn router(state: St) -> Router {
     let dist = state.cfg.frontend_dir.join("dist");
     if dist.is_dir() {
         let files = ServeDir::new(&dist).not_found_service(ServeFile::new(dist.join("index.html")));
-        app = app.fallback_service(files);
+        // Cache policy: hashed `/assets/*` files are content-addressed by
+        // Vite and cacheable forever; everything else (above all
+        // `index.html` and the SPA fallback, which reference the hashed
+        // bundle names) must revalidate on every load — without this,
+        // browsers heuristically cache stale HTML that points at an old
+        // bundle after a redeploy.
+        let static_app = Router::new()
+            .fallback_service(files)
+            .layer(middleware::from_fn(static_cache_headers));
+        app = app.fallback_service(static_app);
     }
 
     app
+}
+
+/// Cache headers for the static frontend (applied only to the SPA file
+/// server, never to API routes).
+async fn static_cache_headers(req: Request, next: Next) -> Response {
+    let is_asset = req.uri().path().starts_with("/assets/");
+    let mut res = next.run(req).await;
+    let value = if is_asset && res.status() == 200 {
+        Some("public, max-age=31536000, immutable")
+    } else if !is_asset {
+        // Everything else — `index.html`, the SPA fallback (which
+        // tower_http serves with the original 404 status), misc dist
+        // files — must revalidate every time; ETag/Last-Modified still
+        // turn this into a cheap 304 for unchanged files.
+        Some("no-cache")
+    } else {
+        None
+    };
+    if let Some(value) = value {
+        res.headers_mut()
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static(value));
+    }
+    res
 }
