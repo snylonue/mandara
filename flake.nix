@@ -72,6 +72,15 @@
                 # backend dev conveniences
                 pkgs.sqlite
                 pkgs.pkg-config
+                # Diesel schema regeneration (`just schema`): sqlite-only,
+                # mirroring `cargo install diesel_cli --no-default-features
+                # --features sqlite` (see AGENTS.md — run after every new
+                # migration).
+                (pkgs.diesel-cli.override {
+                  sqliteSupport = true;
+                  postgresqlSupport = false;
+                  mysqlSupport = false;
+                })
                 inputs.llm-agents.packages.${system}.pi
                 pkgs.just
                 pkgs.python3
