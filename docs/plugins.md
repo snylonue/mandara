@@ -192,6 +192,14 @@ Caps: 20 MiB per image, 96 MiB per call; exceeding them traps. A failed
 download should fall back to the remote URL (degraded rendering, retried
 on the next re-materialization) — see the wenku8 plugin.)
 
+The host sniffs the intrinsic dimensions (PNG/GIF/JPEG/WebP header) of
+every stored image and emits `width`/`height` attributes on chapter
+`<img>` tags, so readers reserve layout space before the bytes load —
+without it every image load grows the page and the view keeps
+re-anchoring while scrolling. Dimensions are looked up at chapter read
+time too, so chapters materialized before this existed get annotated on
+the fly.
+
 **Epoch budget note.** Every `fetch` (pages *and* images) spends the
 same call budget (`BOOKSHELF_PLUGIN_FETCH_TIMEOUT_MS`, default 30 s).
 A plate-heavy chapter fetched over a slow CDN can need more: the wenku8

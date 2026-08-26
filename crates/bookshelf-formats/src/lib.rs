@@ -5,6 +5,7 @@
 
 pub mod epub;
 pub mod htmlize;
+pub mod imgdim;
 pub mod txt;
 
 use std::path::Path;

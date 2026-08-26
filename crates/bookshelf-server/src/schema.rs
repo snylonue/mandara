@@ -62,6 +62,8 @@ diesel::table! {
         mime -> Text,
         size -> BigInt,
         created_at -> Text,
+        width -> Nullable<BigInt>,
+        height -> Nullable<BigInt>,
     }
 }
 

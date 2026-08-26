@@ -80,6 +80,14 @@ async fn main() -> anyhow::Result<()> {
     // the plugins' `store-image` import.
     let files_dir = data_dir.join("files");
     tokio::fs::create_dir_all(&files_dir).await?;
+    // Backfill intrinsic dimensions for images stored before they were
+    // sniffed (migration 0011): lets the read path annotate stored img
+    // tags with width/height so image loads stop re-anchoring the view.
+    match service::library::backfill_image_dimensions(&diesel_db, &files_dir).await {
+        Ok(n) if n > 0 => tracing::info!(backfilled = n, "image dimensions backfilled"),
+        Ok(_) => {}
+        Err(e) => tracing::warn!(error = %e, "image dimension backfill failed"),
+    }
     let image_store = service::images::DbImageStore::new(diesel_db.clone(), files_dir.clone());
     let wasms = load_dir(&cfg.plugins_dir, fetch_policy, image_store)?;
     tracing::info!(files = wasms.len(), "loaded wasm plugin files");

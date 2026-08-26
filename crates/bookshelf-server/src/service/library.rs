@@ -17,6 +17,7 @@
 //! Visibility is per file: `private` = owner + admins only, `public` =
 //! visible to every logged-in user.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -513,7 +514,11 @@ impl Library {
     ) -> Result<(), ApiError> {
         let mut conn = self.diesel_db.get().await?;
         for (idx, chapter) in chapters.iter().enumerate() {
-            let content = bookshelf_formats::htmlize::plugin_text_to_html(&chapter.content);
+            let content = annotate_image_dims(
+                &self.diesel_db,
+                &bookshelf_formats::htmlize::plugin_text_to_html(&chapter.content),
+            )
+            .await;
             // Empty bodies never overwrite materialized content: keep the
             // stored text when the incoming chapter is a lazy placeholder.
             diesel::insert_into(schema::chapters::table)
@@ -2074,7 +2079,12 @@ impl Library {
             // Title-only placeholder rows are materialized by
             // `ensure_titles`; fetch the real content lazily.
             if !row.content.is_empty() {
-                return Ok(Some(row.into_model()));
+                let mut model = row.into_model();
+                // Best-effort width/height on stored img tags (chapters
+                // materialized before the dimensions existed lack them;
+                // without them every image load re-anchors the view).
+                model.content = annotate_image_dims(&self.diesel_db, &model.content).await;
+                return Ok(Some(model));
             }
         }
 
@@ -2203,7 +2213,11 @@ impl Library {
         else {
             return Ok(None);
         };
-        let content = bookshelf_formats::htmlize::plugin_text_to_html(&chapter.content);
+        let content = annotate_image_dims(
+            &self.diesel_db,
+            &bookshelf_formats::htmlize::plugin_text_to_html(&chapter.content),
+        )
+        .await;
         diesel::insert_into(schema::chapters::table)
             .values((
                 schema::chapters::file_id.eq(&file.id),
@@ -2433,6 +2447,7 @@ pub async fn store_image(
     mime: &str,
 ) -> anyhow::Result<String> {
     let id = sha256_hex(bytes);
+    let dims = bookshelf_formats::imgdim::image_dimensions(bytes);
     let dir = files_dir.join("images");
     tokio::fs::create_dir_all(&dir)
         .await
@@ -2449,6 +2464,8 @@ pub async fn store_image(
             schema::images::id.eq(&id),
             schema::images::mime.eq(mime),
             schema::images::size.eq(bytes.len() as i64),
+            schema::images::width.eq(dims.map(|(w, _)| w as i64)),
+            schema::images::height.eq(dims.map(|(_, h)| h as i64)),
         ))
         .on_conflict_do_nothing()
         .execute(&mut db.get().await?)
@@ -2476,13 +2493,145 @@ pub async fn ingest_parsed_book(
     for chapter in &mut parsed.chapters {
         for (n, id) in ids.iter().enumerate() {
             let placeholder = format!("src=\"image:{n}\"");
-            let reference = format!("src=\"/api/images/{id}\"");
+            // width/height attributes reserve layout space before the
+            // bytes load (otherwise every image load grows the page and
+            // the reader view keeps re-anchoring while scrolling).
+            let reference =
+                match bookshelf_formats::imgdim::image_dimensions(&parsed.images[n].bytes) {
+                    Some((w, h)) => {
+                        format!("src=\"/api/images/{id}\" width=\"{w}\" height=\"{h}\"")
+                    }
+                    None => format!("src=\"/api/images/{id}\""),
+                };
             if chapter.content.contains(&placeholder) {
                 chapter.content = chapter.content.replace(&placeholder, &reference);
             }
         }
     }
     Ok(())
+}
+
+/// The `/api/images/{id}` references contained in `html`, in order of
+/// first appearance (duplicates removed).
+fn image_ids_in_html(html: &str) -> Vec<String> {
+    const NEEDLE: &str = "src=\"/api/images/";
+    let mut ids = Vec::new();
+    let mut rest = html;
+    while let Some(pos) = rest.find(NEEDLE) {
+        let after_id = &rest[pos + NEEDLE.len()..];
+        let Some(id_len) = after_id.find('"') else {
+            break;
+        };
+        let id = &after_id[..id_len];
+        if !ids.iter().any(|seen: &String| seen == id) {
+            ids.push(id.to_string());
+        }
+        rest = &after_id[id_len..];
+    }
+    ids
+}
+
+/// Add `width`/`height` attributes to `/api/images/{id}` `<img>` tags that
+/// lack them (plugin-generated chapter HTML; the dimensions live in the
+/// image store from when the plugin stored the bytes). Best-effort: on a
+/// lookup error the HTML is returned unchanged.
+pub fn annotate_image_dimensions(html: &str, dims_by_id: &HashMap<String, (i64, i64)>) -> String {
+    const NEEDLE: &str = "src=\"/api/images/";
+    if dims_by_id.is_empty() || !html.contains(NEEDLE) {
+        return html.to_string();
+    }
+    let mut out = String::with_capacity(html.len());
+    let mut rest = html;
+    while let Some(pos) = rest.find(NEEDLE) {
+        let after_id = &rest[pos + NEEDLE.len()..];
+        let Some(id_len) = after_id.find('"') else {
+            break;
+        };
+        let id = &after_id[..id_len];
+        let Some(tag_end_rel) = after_id[id_len..].find('>') else {
+            break;
+        };
+        let tag_end = pos + NEEDLE.len() + id_len + tag_end_rel;
+        // Insert before a self-closing tag's `/` (`<img … />`), otherwise
+        // directly before the `>`.
+        let insert_at = if tag_end > 0 && rest.as_bytes()[tag_end - 1] == b'/' {
+            tag_end - 1
+        } else {
+            tag_end
+        };
+        out.push_str(&rest[..insert_at]);
+        let already = rest[pos..insert_at].contains("width=");
+        if let (false, Some((w, h))) = (already, dims_by_id.get(id)) {
+            out.push_str(&format!(" width=\"{w}\" height=\"{h}\""));
+        }
+        out.push_str(&rest[insert_at..tag_end]);
+        rest = &rest[tag_end..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Look up stored dimensions for the `/api/images/{id}` references in
+/// `html` and add width/height attributes to the img tags (best-effort:
+/// any lookup failure returns the HTML unchanged).
+async fn annotate_image_dims(db: &DieselDb, html: &str) -> String {
+    const NEEDLE: &str = "src=\"/api/images/";
+    if !html.contains(NEEDLE) {
+        return html.to_string();
+    }
+    let ids = image_ids_in_html(html);
+    if ids.is_empty() {
+        return html.to_string();
+    }
+    let rows: Vec<(String, Option<i64>, Option<i64>)> = match db.get().await {
+        Ok(mut conn) => schema::images::table
+            .filter(schema::images::id.eq_any(ids))
+            .select((
+                schema::images::id,
+                schema::images::width,
+                schema::images::height,
+            ))
+            .load(&mut conn)
+            .await
+            .unwrap_or_default(),
+        Err(_) => return html.to_string(),
+    };
+    let dims_by_id: HashMap<String, (i64, i64)> = rows
+        .into_iter()
+        .filter_map(|(id, w, h)| w.zip(h).map(|(w, h)| (id, (w, h))))
+        .collect();
+    annotate_image_dimensions(html, &dims_by_id)
+}
+
+/// Startup backfill: sniff intrinsic dimensions for images stored before
+/// they were recorded (migration 0011 added the columns; older rows are
+/// NULL). Returns the number of rows updated.
+pub async fn backfill_image_dimensions(db: &DieselDb, files_dir: &Path) -> anyhow::Result<usize> {
+    let rows: Vec<String> = schema::images::table
+        .filter(schema::images::width.is_null())
+        .select(schema::images::id)
+        .load(&mut db.get().await?)
+        .await?;
+    let mut updated = 0;
+    for id in rows {
+        let path = files_dir.join("images").join(&id);
+        let bytes = match tokio::fs::read(&path).await {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(anyhow::Error::new(e).context("read image for backfill")),
+        };
+        if let Some((w, h)) = bookshelf_formats::imgdim::image_dimensions(&bytes) {
+            diesel::update(schema::images::table.find(&id))
+                .set((
+                    schema::images::width.eq(w as i64),
+                    schema::images::height.eq(h as i64),
+                ))
+                .execute(&mut db.get().await?)
+                .await?;
+            updated += 1;
+        }
+    }
+    Ok(updated)
 }
 
 /// One-shot upgrade migration (`--reparse-originals`, owner decision:
@@ -2722,7 +2871,8 @@ mod tests {
             let mut conn = db.get().await.unwrap();
             conn.batch_execute(
                 "CREATE TABLE images (id TEXT PRIMARY KEY NOT NULL, mime TEXT NOT NULL, \
-                 size INTEGER NOT NULL, created_at TEXT NOT NULL DEFAULT '');",
+                 size INTEGER NOT NULL, width INTEGER, height INTEGER, \
+                 created_at TEXT NOT NULL DEFAULT '');",
             )
             .await
             .unwrap();
@@ -2783,5 +2933,32 @@ mod tests {
         assert!(content.contains(&format!("/api/images/{id_a}")));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn annotates_image_dimensions_on_img_tags() {
+        let dims = HashMap::from([
+            ("aaa".to_string(), (800, 600)),
+            ("bbb".to_string(), (320, 200)),
+        ]);
+        let html = concat!(
+            "<p>前文</p>",
+            "<figure><img src=\"/api/images/aaa\"/></figure>",
+            "<figure><img src=\"https://remote.example/x.jpg\"/></figure>",
+            "<img src=\"/api/images/bbb\" alt=\"插图\">",
+            // already annotated: untouched; unknown id: left alone
+            "<img src=\"/api/images/aaa\" width=\"1\" height=\"1\">",
+            "<img src=\"/api/images/ccc\">"
+        );
+        let out = annotate_image_dimensions(html, &dims);
+        assert!(out.contains("<img src=\"/api/images/aaa\" width=\"800\" height=\"600\"/>"));
+        assert!(
+            out.contains("<img src=\"/api/images/bbb\" alt=\"插图\" width=\"320\" height=\"200\">")
+        );
+        assert!(out.contains("width=\"1\" height=\"1\""));
+        assert!(!out.contains("ccc\" width"));
+        assert!(!out.contains("remote.example/x.jpg\" width"));
+        // empty lookup map → unchanged
+        assert_eq!(annotate_image_dimensions(html, &HashMap::new()), html);
     }
 }
