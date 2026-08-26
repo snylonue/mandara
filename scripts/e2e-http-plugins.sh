@@ -314,6 +314,21 @@ if api_form /api/books "plugin_source=reader" "plugin_book_id=r-6" \
 fi
 pass "cross-plugin: wiki metadata + reader content, conflict on re-acquire"
 
+# 一条元数据可对应多本书/多文件：同一 wiki w-5 元数据再挂 reader r-7 内容，
+# 复用同一元数据条目（book id 不变），文件数变为 2。
+XP2=$(api_form /api/books "plugin_source=reader" "plugin_book_id=r-7" \
+    "meta_plugin_source=wiki" "meta_plugin_book_id=w-5" "visibility=public")
+XP2BOOK=$(echo "$XP2" | jq_field "d['books'][0]['book']['id']")
+[ "$XP2BOOK" = "$XPBOOK" ] || fail "cross-plugin: same metadata source reuses the same entry (got $XP2BOOK, want $XPBOOK)"
+NFILES=$(api GET "/api/books/$XPBOOK" | jq_field "len(d['files'])")
+[ "$NFILES" = "2" ] || fail "cross-plugin: one metadata entry should hold both files (got $NFILES)"
+pass "cross-plugin: metadata entry reused across two content books (one metadata <-> many files)"
+
+# 刷新元数据只从记录的元数据源（wiki w-5）取，不被内容源（reader）覆盖。
+api POST "/api/books/$XPBOOK/refresh" | grep -q "旧书店的猫" || fail "refresh must keep wiki metadata (旧书店的猫), not reader's content title"
+api GET "/api/books/$XPBOOK" | grep -q "旧书店的猫" || fail "refresh overwrote the recorded metadata source"
+pass "cross-plugin: refresh pulls metadata only from the recorded source, never overwrites it"
+
 rm -f /tmp/e2e-upload.txt
 
 echo ""

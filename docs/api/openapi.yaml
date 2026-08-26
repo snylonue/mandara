@@ -641,10 +641,13 @@ paths:
     post:
       tags: [books]
       summary: |
-        Update metadata from the book's plugin source(s) (creator or
-        admin). Re-pulls title/authors/description/cover-url and refreshes
-        the plugin file's chapter titles; materialized chapter content is
-        never overwritten.
+        Update metadata from the book's recorded metadata source (creator
+        or admin). Re-pulls title/authors/description/cover-url from that
+        source only and refreshes each plugin file's chapter titles from
+        its own content source; materialized chapter content is never
+        overwritten. A book whose metadata came from plugin A but holds
+        files from plugin B is refreshed without B ever overwriting A's
+        metadata.
       operationId: refreshBook
       security:
         - bearerAuth: []

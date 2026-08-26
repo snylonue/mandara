@@ -75,6 +75,11 @@ pub struct BookRow {
     pub series_id: Option<String>,
     pub volume_no: i64,
     pub ext_meta: String,
+    /// Plugin source that provided this entry's metadata (migration
+    /// 0013); independent of the files' content sources. `None` = no
+    /// plugin metadata source.
+    pub meta_source: Option<String>,
+    pub meta_external_id: Option<String>,
 }
 
 impl BookRow {

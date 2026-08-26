@@ -45,6 +45,8 @@ diesel::table! {
         series_id -> Nullable<Text>,
         volume_no -> BigInt,
         ext_meta -> Text,
+        meta_source -> Nullable<Text>,
+        meta_external_id -> Nullable<Text>,
     }
 }
 
