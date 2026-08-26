@@ -226,8 +226,14 @@ export function SourceSearchPane({
                 disabled={picking !== null}
                 onClick={() =>
                   pick({
+                    // A manual id is a *lookup key*, not metadata: the
+                    // entry's title/authors/description are unknown until
+                    // the source resolves the id (via `get-book` on the
+                    // backend). Filling `title` with the id would be sent
+                    // as a metadata override and clobber the real title
+                    // (e.g. the id "50538" would overwrite 游戏人生).
                     id: manual.trim(),
-                    title: manual.trim(),
+                    title: "",
                     authors: [],
                     description: null,
                     cover_url: null,

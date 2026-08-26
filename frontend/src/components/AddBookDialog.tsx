@@ -123,6 +123,11 @@ export function AddBookDialog({
   /** Adopt a picked source entry as the metadata source (从插件源 mode). */
   function usePluginMeta(pick: SourcePick) {
     setPluginMetaRef(pick);
+    // Manual-id picks carry no metadata (the id is a lookup key, not a
+    // title — see SourceSearch). Only prefill the refinement fields when
+    // the pick actually has metadata; otherwise leave them empty so the
+    // real entry is fetched by the backend (`get-book`) and no bogus
+    // `title` override is submitted.
     setTitle(pick.item.title);
     setAuthors(pick.item.authors.join("，"));
     setDescription(pick.item.description ?? "");
