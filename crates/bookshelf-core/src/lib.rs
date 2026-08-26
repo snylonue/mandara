@@ -5,9 +5,11 @@
 //! models.
 
 pub mod error;
+pub mod ext;
 pub mod model;
 pub mod source;
 
 pub use error::{Error, Result};
+pub use ext::{BookExt, SeriesExt, SeriesStatus, normalize_isbn};
 pub use model::*;
 pub use source::*;

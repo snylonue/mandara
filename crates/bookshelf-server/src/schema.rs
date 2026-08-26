@@ -44,6 +44,7 @@ diesel::table! {
         cover_mime -> Nullable<Text>,
         series_id -> Nullable<Text>,
         volume_no -> BigInt,
+        ext_meta -> Text,
     }
 }
 
@@ -86,6 +87,7 @@ diesel::table! {
         cover_url -> Nullable<Text>,
         created_by -> Nullable<Text>,
         created_at -> Text,
+        ext_meta -> Text,
     }
 }
 

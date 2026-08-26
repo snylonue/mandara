@@ -29,6 +29,7 @@ use bookshelf_core::model::{
     Visibility,
 };
 use bookshelf_core::source::{SourceBook, SourceBookFile, SourceChapter, SourceVolume};
+use bookshelf_core::{BookExt, SeriesExt};
 use bookshelf_formats::ParsedBook;
 
 // `NULLIF(a, b)` — not built into Diesel's DSL; declared once so upsert
@@ -85,6 +86,18 @@ diesel::define_sql_function! {
         x: diesel::sql_types::Nullable<diesel::sql_types::Text>,
         y: diesel::sql_types::Text,
     ) -> diesel::sql_types::Text;
+}
+
+/// Validate + normalize a source's extended metadata object and render it
+/// as the stored column value. Invalid payloads fail the acquisition —
+/// bad data never lands (docs/metadata-ext-design.md).
+fn source_ext_column(ext: Option<&serde_json::Value>) -> Result<String, ApiError> {
+    match ext {
+        None => Ok("{}".into()),
+        Some(v) => BookExt::from_value(v.clone())
+            .map(|e| e.to_column())
+            .map_err(ApiError::bad_request),
+    }
 }
 
 // Diesel translation (docs/sql-refactor-plan.md): module-wide traits so
@@ -145,13 +158,15 @@ pub enum AcquireMetadata<'a> {
 }
 
 /// User-supplied fields that override the metadata produced by the file
-/// parser or a plugin source.
+/// parser or a plugin source. `ext` overrides per-key (see
+/// [`BookExt::apply_override`]).
 #[derive(Default)]
 pub struct MetadataOverrides {
     pub title: Option<String>,
     pub authors: Option<Vec<String>>,
     pub description: Option<String>,
     pub cover_url: Option<String>,
+    pub ext: Option<BookExt>,
 }
 
 impl MetadataOverrides {
@@ -160,6 +175,7 @@ impl MetadataOverrides {
             && self.authors.is_none()
             && self.description.is_none()
             && self.cover_url.is_none()
+            && self.ext.is_none()
     }
 }
 
@@ -409,6 +425,7 @@ impl Library {
         titles: &[String],
     ) -> Result<(String, String), ApiError> {
         let authors = serde_json::to_string(&book.authors).unwrap_or_else(|_| "[]".into());
+        let ext_json = source_ext_column(book.ext.as_ref())?;
 
         // Reuse the metadata entry when this plugin file was synced
         // before, otherwise create both the book metadata and its virtual
@@ -436,6 +453,7 @@ impl Library {
                         schema::books::authors.eq(&authors),
                         schema::books::description.eq(&book.description),
                         schema::books::cover_url.eq(&book.cover_url),
+                        schema::books::ext_meta.eq(&ext_json),
                         schema::books::created_by.eq(owner),
                     ))
                     .execute(&mut conn)
@@ -470,6 +488,9 @@ impl Library {
                 schema::books::authors.eq(&authors),
                 schema::books::description.eq(&book.description),
                 schema::books::cover_url.eq(&book.cover_url),
+                // Refresh replaces the extended metadata wholesale (same
+                // overwrite rule as title/description/cover).
+                schema::books::ext_meta.eq(&ext_json),
             ))
             .execute(&mut self.diesel_db.get().await?)
             .await?;
@@ -714,6 +735,7 @@ impl Library {
                         overrides.description.as_deref(),
                         overrides.authors.as_ref(),
                         overrides.cover_url.as_deref(),
+                        overrides.ext.as_ref(),
                     )
                     .await?;
                 }
@@ -763,6 +785,7 @@ impl Library {
                                 overrides.description.as_deref(),
                                 overrides.authors.as_ref(),
                                 overrides.cover_url.as_deref(),
+                                overrides.ext.as_ref(),
                             )
                             .await?;
                         }
@@ -804,6 +827,7 @@ impl Library {
                         overrides.description.as_deref(),
                         overrides.authors.as_ref(),
                         overrides.cover_url.as_deref(),
+                        overrides.ext.as_ref(),
                     )
                     .await?;
                 }
@@ -898,6 +922,18 @@ impl Library {
             .cover_url
             .clone()
             .or_else(|| entry.cover_url.clone());
+        let series_ext =
+            SeriesExt::from_source(entry.ext.as_ref()).map_err(ApiError::bad_request)?;
+        // Extended metadata: the source's object, manual overrides win
+        // per-key. The series keeps its own subset of the same object.
+        let mut book_ext = match &entry.ext {
+            Some(v) => BookExt::from_value(v.clone()).map_err(ApiError::bad_request)?,
+            None => BookExt::default(),
+        };
+        if let Some(o) = &overrides.ext {
+            book_ext.apply_override(o);
+        }
+        let book_ext_json = book_ext.to_column();
 
         let series_id = uuid::Uuid::new_v4().simple().to_string();
 
@@ -915,6 +951,7 @@ impl Library {
                 schema::series::authors.eq(&authors_json),
                 schema::series::description.eq(&description),
                 schema::series::cover_url.eq(&cover_url),
+                schema::series::ext_meta.eq(series_ext.to_column()),
                 schema::series::created_by.eq(&user.id),
             ))
             .execute(&mut conn)
@@ -932,6 +969,7 @@ impl Library {
                     schema::books::cover_url.eq(&cover_url),
                     schema::books::series_id.eq(&series_id),
                     schema::books::volume_no.eq(volume_no as i64),
+                    schema::books::ext_meta.eq(&book_ext_json),
                     schema::books::created_by.eq(&user.id),
                 ))
                 .execute(&mut conn)
@@ -986,6 +1024,7 @@ impl Library {
                     authors: parse_authors(&authors_json),
                     description: description.clone(),
                     cover_url: cover_url.clone(),
+                    ext: book_ext.clone(),
                     created_by: Some(user.id.clone()),
                     created_at: chrono::Utc::now(),
                     series_id: Some(series_id.clone()),
@@ -1018,6 +1057,7 @@ impl Library {
             authors: parse_authors(&authors_json),
             description: description.clone(),
             cover_url: cover_url.clone(),
+            ext: series_ext,
             created_by: Some(user.id.clone()),
             created_at: chrono::Utc::now(),
         };
@@ -1149,6 +1189,13 @@ impl Library {
             Some(a) => serde_json::to_string(a).unwrap_or_else(|_| "[]".into()),
             None => serde_json::to_string(&parsed.authors).unwrap_or_else(|_| "[]".into()),
         };
+        // Extended metadata: parsed (epub OPF) first, manual overrides
+        // win per-key.
+        let mut ext = parsed.ext.clone();
+        if let Some(o) = &overrides.ext {
+            ext.apply_override(o);
+        }
+        ext.sanitize().map_err(ApiError::bad_request)?;
         diesel::insert_into(schema::books::table)
             .values((
                 schema::books::id.eq(&book_id),
@@ -1167,6 +1214,7 @@ impl Library {
                     .or_else(|| parsed.cover_url.clone())),
                 schema::books::cover.eq(parsed.cover.as_ref().map(|c| c.bytes.clone())),
                 schema::books::cover_mime.eq(parsed.cover.as_ref().map(|c| c.mime.clone())),
+                schema::books::ext_meta.eq(ext.to_column()),
                 schema::books::created_by.eq(owner_id),
             ))
             .execute(&mut self.diesel_db.get().await?)
@@ -1404,6 +1452,7 @@ impl Library {
         row.map(BookRow::into_model).transpose()
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn update_book(
         &self,
         id: &str,
@@ -1411,9 +1460,16 @@ impl Library {
         description: Option<&str>,
         authors: Option<&Vec<String>>,
         cover_url: Option<&str>,
+        ext: Option<&BookExt>,
     ) -> Result<BookMeta, ApiError> {
         let authors_json =
             authors.map(|a| serde_json::to_string(a).unwrap_or_else(|_| "[]".into()));
+        // Extended metadata merges per-key on top of the stored object
+        // (create-time overrides never clear what the source produced).
+        if let Some(ext) = ext {
+            self.merge_book_ext(id, &serde_json::to_value(ext).unwrap_or_default())
+                .await?;
+        }
         diesel::update(schema::books::table.find(id))
             .set((
                 schema::books::title.eq(coalesce_opt_nn(title, schema::books::title)),
@@ -1432,6 +1488,40 @@ impl Library {
         self.get_book(id)
             .await?
             .ok_or_else(|| ApiError::not_found("book"))
+    }
+
+    /// Merge-patch a book's extended metadata (`PATCH /api/books/{id}`):
+    /// absent key = keep, `null` = clear, value = set. The merged object
+    /// is re-validated (ISBN normalization etc.) before it lands.
+    pub async fn merge_book_ext(
+        &self,
+        id: &str,
+        patch: &serde_json::Value,
+    ) -> Result<(), ApiError> {
+        let Some(obj) = patch.as_object() else {
+            return Err(ApiError::bad_request("`ext` must be a JSON object"));
+        };
+        let stored: String = schema::books::table
+            .find(id)
+            .select(schema::books::ext_meta)
+            .first(&mut self.diesel_db.get().await?)
+            .await?;
+        let mut map = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&stored)
+            .unwrap_or_default();
+        for (k, v) in obj {
+            if v.is_null() {
+                map.remove(k);
+            } else {
+                map.insert(k.clone(), v.clone());
+            }
+        }
+        let ext =
+            BookExt::from_value(serde_json::Value::Object(map)).map_err(ApiError::bad_request)?;
+        diesel::update(schema::books::table.find(id))
+            .set(schema::books::ext_meta.eq(ext.to_column()))
+            .execute(&mut self.diesel_db.get().await?)
+            .await?;
+        Ok(())
     }
 
     /// Re-pull metadata from the plugin source(s) backing this book via
@@ -1496,12 +1586,15 @@ impl Library {
                 });
 
             let authors = serde_json::to_string(&entry.authors).unwrap_or_else(|_| "[]".into());
+            let ext_json = source_ext_column(entry.ext.as_ref())?;
             diesel::update(schema::books::table.find(book_id))
                 .set((
                     schema::books::title.eq(&entry.title),
                     schema::books::authors.eq(authors),
                     schema::books::description.eq(&entry.description),
                     schema::books::cover_url.eq(&entry.cover_url),
+                    // Refresh replaces the extended metadata wholesale.
+                    schema::books::ext_meta.eq(&ext_json),
                 ))
                 .execute(&mut self.diesel_db.get().await?)
                 .await?;
@@ -1678,6 +1771,7 @@ impl Library {
         title: &str,
         authors: Option<&Vec<String>>,
         description: Option<&str>,
+        ext: Option<SeriesExt>,
     ) -> Result<SeriesMeta, ApiError> {
         let id = uuid::Uuid::new_v4().simple().to_string();
         let authors_json =
@@ -1689,6 +1783,7 @@ impl Library {
                 schema::series::authors.eq(authors_json.unwrap_or_else(|| "[]".into())),
                 schema::series::description.eq(description),
                 schema::series::cover_url.eq(Option::<String>::None),
+                schema::series::ext_meta.eq(ext.unwrap_or_default().to_column()),
                 schema::series::created_by.eq(&user.id),
             ))
             .execute(&mut self.diesel_db.get().await?)
@@ -1698,7 +1793,9 @@ impl Library {
             .ok_or_else(|| ApiError::not_found("series"))
     }
 
-    /// Edit series metadata (creator/admin).
+    /// Edit series metadata (creator/admin). `ext_patch` is a JSON
+    /// merge-patch over the extended metadata (absent key = keep, null =
+    /// clear, value = set).
     pub async fn update_series(
         &self,
         user: &User,
@@ -1706,6 +1803,7 @@ impl Library {
         title: Option<&str>,
         authors: Option<&Vec<String>>,
         description: Option<&str>,
+        ext_patch: Option<&serde_json::Value>,
     ) -> Result<SeriesMeta, ApiError> {
         let series = self
             .get_series(id)
@@ -1713,6 +1811,28 @@ impl Library {
             .ok_or_else(|| ApiError::not_found("series"))?;
         if series.created_by.as_deref() != Some(user.id.as_str()) && user.role != Role::Admin {
             return Err(ApiError::Forbidden);
+        }
+        if let Some(patch) = ext_patch {
+            let Some(obj) = patch.as_object() else {
+                return Err(ApiError::bad_request("`ext` must be a JSON object"));
+            };
+            let mut map = serde_json::to_value(series.ext.clone())
+                .ok()
+                .and_then(|v| v.as_object().cloned())
+                .unwrap_or_default();
+            for (k, v) in obj {
+                if v.is_null() {
+                    map.remove(k);
+                } else {
+                    map.insert(k.clone(), v.clone());
+                }
+            }
+            let ext = SeriesExt::from_value(serde_json::Value::Object(map))
+                .map_err(ApiError::bad_request)?;
+            diesel::update(schema::series::table.find(id))
+                .set(schema::series::ext_meta.eq(ext.to_column()))
+                .execute(&mut self.diesel_db.get().await?)
+                .await?;
         }
         let authors_json =
             authors.map(|a| serde_json::to_string(a).unwrap_or_else(|_| "[]".into()));
@@ -2204,12 +2324,14 @@ impl Library {
                     // Keep the metadata fresh from the source entry.
                     let authors =
                         serde_json::to_string(&entry.authors).unwrap_or_else(|_| "[]".into());
+                    let ext_json = source_ext_column(entry.ext.as_ref())?;
                     diesel::update(schema::books::table.find(&file.book_id))
                         .set((
                             schema::books::title.eq(&entry.title),
                             schema::books::authors.eq(authors),
                             schema::books::description.eq(&entry.description),
                             schema::books::cover_url.eq(&entry.cover_url),
+                            schema::books::ext_meta.eq(&ext_json),
                         ))
                         .execute(&mut conn)
                         .await?;
@@ -2944,6 +3066,7 @@ mod tests {
                     mime: "image/jpeg".into(),
                 },
             ],
+            ext: Default::default(),
             chapters: vec![bookshelf_formats::ParsedChapter {
                 title: "c0".into(),
                 content: "<p><img src=\"image:1\"/></p><figure><img src=\"image:0\"/></figure>\

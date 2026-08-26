@@ -1,6 +1,7 @@
 //! Domain models: users, book metadata, files, chapters, reading sessions,
 //! shares.
 
+use crate::ext::{BookExt, SeriesExt};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -93,6 +94,9 @@ pub struct SeriesMeta {
     pub authors: Vec<String>,
     pub description: Option<String>,
     pub cover_url: Option<String>,
+    /// Extended metadata (publisher/status/tags/…; see [`SeriesExt`]).
+    #[serde(default = "SeriesExt::default")]
+    pub ext: SeriesExt,
     pub created_by: Option<String>,
     pub created_at: DateTime<Utc>,
 }
@@ -108,6 +112,9 @@ pub struct BookMeta {
     pub authors: Vec<String>,
     pub description: Option<String>,
     pub cover_url: Option<String>,
+    /// Extended metadata (ISBN/publisher/…; see [`BookExt`]).
+    #[serde(default = "BookExt::default")]
+    pub ext: BookExt,
     pub created_by: Option<String>,
     pub created_at: DateTime<Utc>,
     /// Series this book is a volume of (`None` = standalone).

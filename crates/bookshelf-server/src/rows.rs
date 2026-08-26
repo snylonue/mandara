@@ -6,6 +6,7 @@ use bookshelf_core::model::{
     BookMeta, Chapter, ChapterMeta, FileFormat, FileMeta, OriginalInfo, Position, ReadingSession,
     Role, SeriesMeta, Share, ShareKind, User, Visibility,
 };
+use bookshelf_core::{BookExt, SeriesExt};
 
 use crate::error::ApiError;
 use crate::time::parse_ts;
@@ -43,6 +44,7 @@ pub struct SeriesRow {
     pub cover_url: Option<String>,
     pub created_by: Option<String>,
     pub created_at: String,
+    pub ext_meta: String,
 }
 
 impl SeriesRow {
@@ -53,6 +55,7 @@ impl SeriesRow {
             authors: serde_json::from_str(&self.authors).unwrap_or_default(),
             description: self.description,
             cover_url: self.cover_url,
+            ext: SeriesExt::from_column(&self.ext_meta),
             created_by: self.created_by,
             created_at: parse_ts(&self.created_at),
         }
@@ -71,6 +74,7 @@ pub struct BookRow {
     pub created_at: String,
     pub series_id: Option<String>,
     pub volume_no: i64,
+    pub ext_meta: String,
 }
 
 impl BookRow {
@@ -81,6 +85,7 @@ impl BookRow {
             authors: serde_json::from_str(&self.authors).unwrap_or_default(),
             description: self.description,
             cover_url: self.cover_url,
+            ext: BookExt::from_column(&self.ext_meta),
             created_by: self.created_by,
             created_at: parse_ts(&self.created_at),
             series_id: self.series_id,

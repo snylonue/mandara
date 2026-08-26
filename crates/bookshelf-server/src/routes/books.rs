@@ -8,6 +8,7 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 
+use bookshelf_core::BookExt;
 use bookshelf_core::model::{BookMeta, FileMeta, SeriesMeta, Visibility};
 
 use crate::error::ApiError;
@@ -72,6 +73,9 @@ struct UploadFields {
     authors: Option<Vec<String>>,
     description: Option<String>,
     cover_url: Option<String>,
+    /// Extended metadata (JSON object; ISBN/publisher/…, see
+    /// `BookExt`). Overrides the parsed/plugin value per-key.
+    ext: Option<serde_json::Value>,
 }
 
 async fn field_text(field: axum::extract::multipart::Field<'_>) -> Result<String, ApiError> {
@@ -144,6 +148,18 @@ async fn read_upload(
                     fields.cover_url = Some(v);
                 }
             }
+            Some("ext") => {
+                let raw = field_text(field).await?;
+                if !raw.is_empty() {
+                    let value: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
+                        ApiError::bad_request(format!("`ext` must be a JSON object: {e}"))
+                    })?;
+                    if !value.is_object() {
+                        return Err(ApiError::bad_request("`ext` must be a JSON object"));
+                    }
+                    fields.ext = Some(value);
+                }
+            }
             _ => {}
         }
     }
@@ -205,13 +221,17 @@ fn content_source<'a>(
     })
 }
 
-fn overrides(fields: &UploadFields) -> MetadataOverrides {
-    MetadataOverrides {
+fn overrides(fields: &UploadFields) -> Result<MetadataOverrides, ApiError> {
+    Ok(MetadataOverrides {
         title: fields.title.clone(),
         authors: fields.authors.clone(),
         description: fields.description.clone(),
         cover_url: fields.cover_url.clone(),
-    }
+        ext: match &fields.ext {
+            None => None,
+            Some(raw) => Some(BookExt::from_value(raw.clone()).map_err(ApiError::bad_request)?),
+        },
+    })
 }
 
 // GET /api/books -----------------------------------------------------------
@@ -265,7 +285,7 @@ pub async fn upload_book(
 ) -> Result<impl IntoResponse, ApiError> {
     let user = current_user(&st, &headers).await?;
     let (file, visibility, label, fields) = read_upload(multipart).await?;
-    let overrides = overrides(&fields);
+    let overrides = overrides(&fields)?;
     let outcome = st
         .library
         .acquire_book(
@@ -404,6 +424,9 @@ pub async fn get_book_cover(
 pub struct PatchBook {
     pub title: Option<String>,
     pub description: Option<String>,
+    /// Extended-metadata merge patch (JSON object): absent key = keep,
+    /// `null` = clear, value = set. Re-validated on merge.
+    pub ext: Option<serde_json::Value>,
     /// Series assignment (see `library::set_book_series`): a series id
     /// moves the book into it, `null` unassigns, absent keeps the
     /// current series.
@@ -436,12 +459,17 @@ pub async fn patch_book(
             .set_book_series(&user, &id, req.series_id, req.volume_no)
             .await?;
     }
+    // Extended metadata merge-patch (three-state per key).
+    if let Some(patch) = &req.ext {
+        st.library.merge_book_ext(&id, patch).await?;
+    }
     let updated = st
         .library
         .update_book(
             &id,
             req.title.as_deref(),
             req.description.as_deref(),
+            None,
             None,
             None,
         )

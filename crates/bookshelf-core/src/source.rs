@@ -23,6 +23,10 @@ pub struct SourceBook {
     pub authors: Vec<String>,
     pub description: Option<String>,
     pub cover_url: Option<String>,
+    /// Extended metadata as a raw JSON object (`BookExt` shape plus
+    /// free-form extras; see `docs/metadata-ext-design.md`). Validated at
+    /// the storage boundary; `None` = no extended metadata.
+    pub ext: Option<serde_json::Value>,
     /// When set, the book's chapters come from another plugin instance
     /// (metadata/content source separation). `None` = this instance also
     /// provides the content.

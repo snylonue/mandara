@@ -702,6 +702,7 @@ export interface components {
             authors: string[];
             description: string | null;
             cover_url: string | null;
+            ext: components["schemas"]["BookExt"];
             /** @description Id of the user who created this metadata entry */
             created_by: string | null;
             /** Format: date-time */
@@ -715,6 +716,66 @@ export interface components {
             series_id: string | null;
             /** @description 1-based volume ordinal inside the series (0 = standalone) */
             volume_no: number;
+        };
+        /**
+         * @description Extended book metadata (bangumi/douban-style). Every known key is
+         *     optional; `null`/absent = unset. Unknown keys are preserved
+         *     verbatim so future server fields round-trip through old clients.
+         *     `isbn` is stored canonically as a hyphenless ISBN-13 (valid
+         *     ISBN-10 inputs are converted); invalid ISBNs are rejected with
+         *     400.
+         */
+        BookExt: {
+            /** @description 副标题 */
+            subtitle?: string | null;
+            /** @description 原作名 */
+            original_title?: string | null;
+            /** @description Canonical hyphenless ISBN-13 */
+            isbn?: string | null;
+            /** @description 出版社 */
+            publisher?: string | null;
+            /** @description 出版时间 (stored exactly as supplied) */
+            pub_date?: string | null;
+            /** @description 译者 */
+            translators?: string[] | null;
+            /** @description 插画师 */
+            illustrators?: string[] | null;
+            /** @description 页数 */
+            pages?: number | null;
+            /** @description 定价 (currency as printed) */
+            price?: string | null;
+            /** @description 装帧 (文库/单行本/…) */
+            binding?: string | null;
+            /** @description BCP-47 language hint ("zh-CN", "ja") */
+            language?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * @description Extended series metadata: edition-independent facts of the
+         *     publication family. Same rules as `BookExt` (all optional,
+         *     unknown keys preserved).
+         */
+        SeriesExt: {
+            /** @description 原作名 */
+            original_title?: string | null;
+            /** @description 出版社 */
+            publisher?: string | null;
+            /** @description 首卷发售时间 (verbatim) */
+            pub_date?: string | null;
+            /** @description BCP-47 language hint */
+            language?: string | null;
+            /**
+             * @description Publication status
+             * @enum {string|null}
+             */
+            status?: "ongoing" | "completed" | "hiatus" | null;
+            /** @description Planned volume count */
+            total_volumes?: number | null;
+            /** @description 类型标签 */
+            tags?: string[] | null;
+        } & {
+            [key: string]: unknown;
         };
         FileMeta: {
             id: string;
@@ -803,6 +864,12 @@ export interface components {
             authors: string[];
             description: string | null;
             cover_url: string | null;
+            ext: components["schemas"]["SeriesExt"];
+            /**
+             * @description Publication status projected from `ext.status` (null = unset)
+             * @enum {string|null}
+             */
+            status: "ongoing" | "completed" | "hiatus" | null;
             /** @description Number of member books (all visibilities) */
             volume_count: number;
             created_by: string | null;
@@ -848,6 +915,8 @@ export interface components {
             description?: string;
             series_id?: string | null;
             volume_no?: number | null;
+            /** @description Extended-metadata merge patch (absent = keep, null = clear, value = set) */
+            ext?: components["schemas"]["BookExt"];
         };
         PatchFile: {
             visibility?: components["schemas"]["Visibility"];
@@ -1509,6 +1578,13 @@ export interface operations {
                     description?: string;
                     /** @description Manual metadata: cover image URL */
                     cover_url?: string;
+                    /**
+                     * @description Manual metadata: extended fields as a JSON object
+                     *     (see `BookExt`), e.g.
+                     *     `{"isbn":"9787536692930","publisher":"出版社"}`.
+                     *     Overrides the parsed/identified value per-key.
+                     */
+                    ext?: string;
                 };
             };
         };
@@ -1746,6 +1822,7 @@ export interface operations {
                     title: string;
                     authors?: string[];
                     description?: string;
+                    ext?: components["schemas"]["SeriesExt"];
                 };
             };
         };
@@ -1827,6 +1904,8 @@ export interface operations {
                     title?: string;
                     authors?: string[];
                     description?: string;
+                    /** @description Extended-metadata merge patch (absent = keep, null = clear, value = set) */
+                    ext?: components["schemas"]["SeriesExt"];
                 };
             };
         };

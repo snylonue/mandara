@@ -11,6 +11,7 @@ use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 
 use bookshelf_core::model::SeriesMeta;
+use bookshelf_core::{SeriesExt, SeriesStatus};
 
 use crate::error::ApiError;
 use crate::routes::books::BookDetail;
@@ -24,24 +25,39 @@ pub struct SeriesBrief {
     pub authors: Vec<String>,
     pub description: Option<String>,
     pub cover_url: Option<String>,
+    /// Extended series metadata (publisher/status/tags/…).
+    #[serde(default)]
+    pub ext: SeriesExt,
+    /// Convenience projection: publication status (`null` = unset).
+    pub status: Option<SeriesStatus>,
     pub volume_count: u32,
     pub created_by: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
 impl SeriesBrief {
-    pub(crate) async fn from_meta(st: &St, series: SeriesMeta) -> Result<SeriesBrief, ApiError> {
-        let volume_count = st.library.series_volume_count(&series.id).await?;
-        Ok(SeriesBrief {
+    fn project(series: SeriesMeta, volume_count: u32) -> Self {
+        let ext = series.ext;
+        let status = ext.status;
+        Self {
             id: series.id,
             title: series.title,
             authors: series.authors,
             description: series.description,
             cover_url: series.cover_url,
+            ext,
+            status,
             volume_count,
             created_by: series.created_by,
             created_at: series.created_at,
-        })
+        }
+    }
+}
+
+impl SeriesBrief {
+    pub(crate) async fn from_meta(st: &St, series: SeriesMeta) -> Result<SeriesBrief, ApiError> {
+        let volume_count = st.library.series_volume_count(&series.id).await?;
+        Ok(SeriesBrief::project(series, volume_count))
     }
 }
 
@@ -63,16 +79,7 @@ pub async fn list_series(
     let series_list = st.library.list_series(&user).await?;
     let mut out = Vec::with_capacity(series_list.len());
     for (series, count) in series_list {
-        out.push(SeriesBrief {
-            id: series.id,
-            title: series.title,
-            authors: series.authors,
-            description: series.description,
-            cover_url: series.cover_url,
-            volume_count: count,
-            created_by: series.created_by,
-            created_at: series.created_at,
-        });
+        out.push(SeriesBrief::project(series, count));
     }
     Ok(Json(out))
 }
@@ -84,6 +91,8 @@ pub struct CreateSeries {
     pub title: String,
     pub authors: Option<Vec<String>>,
     pub description: Option<String>,
+    /// Extended series metadata (publisher/status/tags/…).
+    pub ext: Option<SeriesExt>,
 }
 
 pub async fn create_series(
@@ -103,6 +112,7 @@ pub async fn create_series(
             title,
             req.authors.as_ref(),
             req.description.as_deref(),
+            req.ext,
         )
         .await?;
     Ok((
@@ -139,16 +149,7 @@ async fn load_series_detail(
         });
     }
     Ok(SeriesDetail {
-        series: SeriesBrief {
-            id: series.id,
-            title: series.title,
-            authors: series.authors,
-            description: series.description,
-            cover_url: series.cover_url,
-            volume_count,
-            created_by: series.created_by,
-            created_at: series.created_at,
-        },
+        series: SeriesBrief::project(series, volume_count),
         books,
     })
 }
@@ -169,6 +170,9 @@ pub struct PatchSeries {
     pub title: Option<String>,
     pub authors: Option<Vec<String>>,
     pub description: Option<String>,
+    /// Extended-metadata merge patch (JSON object): absent key = keep,
+    /// `null` = clear, value = set.
+    pub ext: Option<serde_json::Value>,
 }
 
 pub async fn patch_series(
@@ -186,6 +190,7 @@ pub async fn patch_series(
             req.title.as_deref(),
             req.authors.as_ref(),
             req.description.as_deref(),
+            req.ext.as_ref(),
         )
         .await?;
     Ok(Json(SeriesBrief::from_meta(&st, updated).await?))

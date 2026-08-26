@@ -453,6 +453,7 @@ impl From<BookEntry> for SourceBook {
             authors: b.authors,
             description: b.description,
             cover_url: b.cover_url,
+            ext: None,
             content_source: b.content_source,
             content_id: b.content_id,
             volumes: b

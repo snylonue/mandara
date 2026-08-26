@@ -11,6 +11,7 @@ pub mod txt;
 use std::path::Path;
 
 use bookshelf_core::error::{Error, Result};
+use bookshelf_core::ext::BookExt;
 use bookshelf_core::model::TocNode;
 
 /// A parsed book in normalized form.
@@ -33,6 +34,9 @@ pub struct ParsedBook {
     /// Hierarchical table of contents per the ebook's nav/NCX. `idx`
     /// references entries of `chapters`; pure group nodes have `None`.
     pub toc: Vec<TocNode>,
+    /// Extended metadata extracted from the source (epub OPF: ISBN,
+    /// publisher, dates, translators, language). Empty for txt.
+    pub ext: BookExt,
 }
 
 /// Cover image bytes with their content type (e.g. `image/jpeg`).

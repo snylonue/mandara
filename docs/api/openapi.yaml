@@ -479,6 +479,13 @@ paths:
                 cover_url:
                   type: string
                   description: "Manual metadata: cover image URL"
+                ext:
+                  type: string
+                  description: |
+                    Manual metadata: extended fields as a JSON object
+                    (see `BookExt`), e.g.
+                    `{"isbn":"9787536692930","publisher":"出版社"}`.
+                    Overrides the parsed/identified value per-key.
       responses:
         "201":
           description: |
@@ -714,6 +721,8 @@ paths:
                     type: string
                 description:
                   type: string
+                ext:
+                  $ref: "#/components/schemas/SeriesExt"
       responses:
         "201":
           description: Created series
@@ -772,6 +781,9 @@ paths:
                     type: string
                 description:
                   type: string
+                ext:
+                  description: Extended-metadata merge patch (absent = keep, null = clear, value = set)
+                  $ref: "#/components/schemas/SeriesExt"
       responses:
         "200":
           description: Updated series
@@ -1412,7 +1424,7 @@ components:
 
     BookMeta:
       type: object
-      required: [id, title, authors, description, cover_url, created_by, created_at, series_id, volume_no]
+      required: [id, title, authors, description, cover_url, ext, created_by, created_at, series_id, volume_no]
       properties:
         id:
           type: string
@@ -1426,6 +1438,8 @@ components:
           type: [string, "null"]
         cover_url:
           type: [string, "null"]
+        ext:
+          $ref: "#/components/schemas/BookExt"
         created_by:
           description: Id of the user who created this metadata entry
           type: [string, "null"]
@@ -1443,6 +1457,90 @@ components:
           description: 1-based volume ordinal inside the series (0 = standalone)
           type: integer
           minimum: 0
+
+    BookExt:
+      type: object
+      description: |
+        Extended book metadata (bangumi/douban-style). Every known key is
+        optional; `null`/absent = unset. Unknown keys are preserved
+        verbatim so future server fields round-trip through old clients.
+        `isbn` is stored canonically as a hyphenless ISBN-13 (valid
+        ISBN-10 inputs are converted); invalid ISBNs are rejected with
+        400.
+      properties:
+        subtitle:
+          description: 副标题
+          type: [string, "null"]
+        original_title:
+          description: 原作名
+          type: [string, "null"]
+        isbn:
+          description: Canonical hyphenless ISBN-13
+          type: [string, "null"]
+        publisher:
+          description: 出版社
+          type: [string, "null"]
+        pub_date:
+          description: 出版时间 (stored exactly as supplied)
+          type: [string, "null"]
+        translators:
+          description: 译者
+          type: [array, "null"]
+          items:
+            type: string
+        illustrators:
+          description: 插画师
+          type: [array, "null"]
+          items:
+            type: string
+        pages:
+          description: 页数
+          type: [integer, "null"]
+          minimum: 0
+        price:
+          description: 定价 (currency as printed)
+          type: [string, "null"]
+        binding:
+          description: 装帧 (文库/单行本/…)
+          type: [string, "null"]
+        language:
+          description: BCP-47 language hint ("zh-CN", "ja")
+          type: [string, "null"]
+      additionalProperties: true
+
+    SeriesExt:
+      type: object
+      description: |
+        Extended series metadata: edition-independent facts of the
+        publication family. Same rules as `BookExt` (all optional,
+        unknown keys preserved).
+      properties:
+        original_title:
+          description: 原作名
+          type: [string, "null"]
+        publisher:
+          description: 出版社
+          type: [string, "null"]
+        pub_date:
+          description: 首卷发售时间 (verbatim)
+          type: [string, "null"]
+        language:
+          description: BCP-47 language hint
+          type: [string, "null"]
+        status:
+          description: Publication status
+          type: [string, "null"]
+          enum: [ongoing, completed, hiatus]
+        total_volumes:
+          description: Planned volume count
+          type: [integer, "null"]
+          minimum: 0
+        tags:
+          description: 类型标签
+          type: [array, "null"]
+          items:
+            type: string
+      additionalProperties: true
 
     FileMeta:
       type: object
@@ -1600,7 +1698,7 @@ components:
         A series: metadata grouping for the volumes of one publication
         family (e.g. a light-novel series split from a multi-volume
         plugin source). Member books carry `series_id` + `volume_no`.
-      required: [id, title, authors, description, cover_url, volume_count, created_by, created_at]
+      required: [id, title, authors, description, cover_url, ext, status, volume_count, created_by, created_at]
       properties:
         id:
           type: string
@@ -1614,6 +1712,12 @@ components:
           type: [string, "null"]
         cover_url:
           type: [string, "null"]
+        ext:
+          $ref: "#/components/schemas/SeriesExt"
+        status:
+          description: Publication status projected from `ext.status` (null = unset)
+          type: [string, "null"]
+          enum: [ongoing, completed, hiatus]
         volume_count:
           description: Number of member books (all visibilities)
           type: integer
@@ -1717,6 +1821,9 @@ components:
         volume_no:
           type: [integer, "null"]
           minimum: 1
+        ext:
+          description: Extended-metadata merge patch (absent = keep, null = clear, value = set)
+          $ref: "#/components/schemas/BookExt"
 
     PatchFile:
       type: object

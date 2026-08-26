@@ -25,6 +25,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::ParsedImage;
 use bookshelf_core::error::{Error, Result};
+use bookshelf_core::ext::BookExt;
 use bookshelf_core::model::TocNode;
 use ego_tree::NodeRef;
 use epub::doc::{EpubDoc, NavPoint};
@@ -256,6 +257,9 @@ fn parse_path(path: &Path) -> Result<ParsedBook> {
         images,
         chapters,
         toc,
+        // EPUB OPF extraction lands with the metadata-extraction change;
+        // until then uploads carry no extended metadata.
+        ext: BookExt::default(),
     })
 }
 

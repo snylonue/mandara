@@ -4,6 +4,7 @@
 //! for Chinese light novels downloaded as txt).
 
 use bookshelf_core::error::{Error, Result};
+use bookshelf_core::ext::BookExt;
 use bookshelf_core::model::TocNode;
 
 use crate::{ParsedBook, ParsedChapter, htmlize};
@@ -47,6 +48,7 @@ pub fn parse(bytes: &[u8], filename: &str) -> Result<ParsedBook> {
         images: Vec::new(),
         chapters,
         toc,
+        ext: BookExt::default(),
     })
 }
 
