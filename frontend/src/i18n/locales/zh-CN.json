@@ -1,6 +1,5 @@
 {
   "nav": {
-    "localMode": "本地模式",
     "logout": "退出",
     "login": "登录",
     "plugins": "插件管理",
@@ -29,8 +28,6 @@
     "toRegister": "去注册",
     "haveAccount": "已有账号？",
     "toLogin": "去登录",
-    "localModeDesc": "服务器以本地模式运行（未启用登录）。",
-    "backToShelf": "返回书架",
     "tagline": "支持 epub / txt 格式的轻小说阅读站"
   },
   "library": {

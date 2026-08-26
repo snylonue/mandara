@@ -23,8 +23,7 @@ metadata sources.
 4. **Permissions per uploaded book**: the uploader chooses to publish or
    hide each uploaded book (per-file `public`/`private` visibility). A single
    metadata entry can be linked to **multiple book files** (formats,
-   editions, translations). The whole auth layer can additionally be switched
-   off for single-user use (`BOOKSHELF_AUTH_ENABLED=false`).
+   editions, translations).
 5. **wasm plugin system** for user-defined book and metadata sources.
 6. Frontend: reading, **progress management**, and **sharing**.
 7. Progress management must support **multiple sessions** (e.g. several
@@ -60,7 +59,7 @@ metadata sources.
 | Backend | Rust 2021, cargo workspace | 4 crates, see layout below |
 | Web framework | axum 0.8 | `{param}` path syntax, multipart upload |
 | DB | SQLite via sqlx 0.9 | runtime queries only (`sqlx::query*`, no `query!` macros) so no `DATABASE_URL` is needed at compile time (nix-friendly). Migrations in `crates/bookshelf-server/migrations/`. Two-level model: `books` = pure metadata, `book_files` = actual files (uploads or virtual plugin books); chapters/sessions/shares attach to files |
-| Auth | JWT (jsonwebtoken 11, `rust_crypto` backend) + Argon2 | roles `admin`/`user`; optional via `BOOKSHELF_AUTH_ENABLED` |
+| Auth | JWT (jsonwebtoken 11, `rust_crypto` backend) + Argon2 | roles `admin`/`user`; the first registered account becomes admin |
 | Plugin host | wasmtime 48 (component model) | WIT world `bookshelf:plugin/bookshelf-plugin` in `crates/bookshelf-plugin/wit/`; plugins loaded from `data/plugins/*.wasm`; chapters materialized into the central DB on first read |
 | Plugin guest | wit-bindgen 0.60 (`generate!` + `export!`), `wasm32-unknown-unknown` | module is lifted with `wasm-tools component new` (no adapter needed, world imports no wasi) |
 | Formats | `epub` (epub-rs) + `html2text`/`scraper`; custom txt parser | txt: UTF-8/UTF-16/GB18030 detection + chapter-heading split (CJK ordinal-marker headings, Chapter N, VOL.N, prologues, ...) |
@@ -243,8 +242,8 @@ scripts/build-plugin-hello.sh      # build example plugin → plugins-built/
   `query!` macros → no `DATABASE_URL`).
 - **ApiError** implements `std::error::Error`; new domain errors should plug
   into the `ApiError::*` variants in `crates/bookshelf-server/src/error.rs`.
-- **Auth disabled mode**: `seed_local_user` inserts the `local` admin row so
-  FKs on sessions/shares keep working — don't remove.
+- **Admin bootstrap**: the first registered account gets the `admin` role
+  (there is no other way to create an admin).
 - **Checks before commit**: `just fmt` (cargo fmt --all), then `just check`
   (cargo check + clippy -D warnings),
   `just test`, `cd frontend && npm run typecheck` (use

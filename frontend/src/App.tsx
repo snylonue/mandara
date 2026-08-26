@@ -21,7 +21,7 @@ function RequireAuth({ children }: { children: ReactNode }) {
   const { health, user } = useAuth();
   const { t } = useTranslation();
   if (!health) return <div className="page-loading">{t("common.loading")}</div>;
-  if (health.auth_enabled && !user) return <Navigate to="/login" replace />;
+  if (!user) return <Navigate to="/login" replace />;
   return <>{children}</>;
 }
 
@@ -36,7 +36,7 @@ function loadTheme(): AppTheme {
 }
 
 export default function App() {
-  const { user, health, logout } = useAuth();
+  const { user, logout } = useAuth();
   const { t } = useTranslation();
   const [theme, setTheme] = useState<AppTheme>(loadTheme);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -80,11 +80,6 @@ export default function App() {
             )}
           </div>
           <div className="nav-right">
-            {health && !health.auth_enabled && (
-              <span className="badge" title="BOOKSHELF_AUTH_ENABLED=false">
-                {t("nav.localMode")}
-              </span>
-            )}
             <button
               className="icon-btn"
               onClick={() => setTheme(theme === "dark" ? "light" : "dark")}

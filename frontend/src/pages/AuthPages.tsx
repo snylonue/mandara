@@ -7,7 +7,7 @@ import { LogoMark } from "../components/icons";
 import type { AuthResp } from "../types";
 
 function AuthForm({ mode }: { mode: "login" | "register" }) {
-  const { health, login } = useAuth();
+  const { login } = useAuth();
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [username, setUsername] = useState("");
@@ -31,23 +31,6 @@ function AuthForm({ mode }: { mode: "login" | "register" }) {
     } finally {
       setBusy(false);
     }
-  }
-
-  if (health && !health.auth_enabled) {
-    return (
-      <div className="auth-wrap">
-        <div className="card auth-card">
-          <div className="auth-brand">
-            <LogoMark size={30} className="brand-mark" />
-          </div>
-          <p className="center">{t("auth.localModeDesc")}</p>
-          <Link to="/" className="btn-primary">
-            {t("auth.backToShelf")}
-          </Link>
-        </div>
-        <p className="hint center">{t("auth.tagline")}</p>
-      </div>
-    );
   }
 
   const isLogin = mode === "login";

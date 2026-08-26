@@ -33,11 +33,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const h = await api<Health>("/health").catch(() => null);
     setHealth(h);
     if (!h) return;
-    if (!h.auth_enabled) {
-      // local single-user mode: act as the local admin
-      setUser({ id: "local", username: "local", role: "admin", created_at: "" });
-      return;
-    }
     if (getToken()) {
       const u = await api<User>("/auth/me").catch(() => null);
       setUser(u);

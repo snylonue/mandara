@@ -11,7 +11,6 @@ start)
     for pid in $(pgrep -f 'mock-source.py' || true); do kill "$pid" 2>/dev/null || true; done
     sleep 0.5
     python3 scripts/mock-source.py 8765 > /tmp/mock-source.log 2>&1 &
-    BOOKSHELF_AUTH_ENABLED=false \
     BOOKSHELF_DB="${BOOKSHELF_DB:-/tmp/e2e.db}" \
     BOOKSHELF_PLUGINS_DIR="${BOOKSHELF_PLUGINS_DIR:-$PWD/plugins-built}" \
     nohup target/debug/bookshelf-server > /tmp/bookshelf-server.log 2>&1 &

@@ -14,9 +14,6 @@ info:
     one metadata entry. Chapters, reading sessions and shares attach to
     files. Every file is either `private` (owner + admins only) or `public`
     (all logged-in users).
-
-    Auth is optional: with `BOOKSHELF_AUTH_ENABLED=false` the server runs as
-    a single local admin and all endpoints behave as if authenticated.
 servers:
   - url: http://127.0.0.1:8080
     description: Local development server (default)
@@ -1359,16 +1356,13 @@ components:
 
     Health:
       type: object
-      required: [status, version, auth_enabled, allow_register]
+      required: [status, version, allow_register]
       properties:
         status:
           type: string
           enum: [ok]
         version:
           type: string
-        auth_enabled:
-          type: boolean
-          description: false = single-user local mode
         allow_register:
           type: boolean
 

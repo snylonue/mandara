@@ -36,9 +36,6 @@ pub async fn register(
     State(st): State<St>,
     Json(req): Json<Credentials>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !st.auth.enabled() {
-        return Err(ApiError::bad_request("authentication is disabled"));
-    }
     if !st.auth.allow_register() {
         return Err(ApiError::Forbidden);
     }
@@ -52,12 +49,20 @@ pub async fn register(
     let hash = st.auth.hash_password(&req.password)?;
 
     let mut conn = st.diesel_db.get().await?;
+    // The very first account bootstraps the admin role — there is no other
+    // way to create one.
+    let first = users::table.count().get_result::<i64>(&mut conn).await? == 0;
+    let role = if first {
+        Role::Admin.as_str().to_owned()
+    } else {
+        Role::User.as_str().to_owned()
+    };
     let result = diesel::insert_into(users::table)
         .values((
             users::id.eq(&id),
             users::username.eq(&username),
             users::password_hash.eq(&hash),
-            users::role.eq(Role::User.as_str()),
+            users::role.eq(&role),
         ))
         .execute(&mut conn)
         .await;
@@ -75,8 +80,12 @@ pub async fn register(
     let user = User {
         id,
         username,
-        role: bookshelf_core::model::Role::User,
         created_at: String::new(),
+        role: if first {
+            bookshelf_core::model::Role::Admin
+        } else {
+            bookshelf_core::model::Role::User
+        },
     };
     let token = st.auth.issue_token(&user)?;
     Ok(Json(AuthResponse { token, user }))
@@ -86,9 +95,6 @@ pub async fn login(
     State(st): State<St>,
     Json(req): Json<Credentials>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !st.auth.enabled() {
-        return Err(ApiError::bad_request("authentication is disabled"));
-    }
     let mut conn = st.diesel_db.get().await?;
     let row: Option<(String, String, String, String, String)> = users::table
         .filter(users::username.eq(&req.username))

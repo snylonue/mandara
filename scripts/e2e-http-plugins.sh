@@ -28,6 +28,7 @@ done
 
 PORT=8765
 BASE=http://127.0.0.1:8080
+TOKEN=""  # set by the bootstrap step below (set -u)
 DB=data/e2e-http.db
 SERVER_LOG=/tmp/e2e-http-server.log
 MOCK_LOG=/tmp/e2e-http-mock.log
@@ -72,7 +73,6 @@ start_mock() {
 start_server() {
     stop_server
     rm -f "$DB"
-    BOOKSHELF_AUTH_ENABLED=false \
     BOOKSHELF_DB="$DB" \
     BOOKSHELF_PLUGINS_DIR="$PWD/plugins-built" \
     nohup target/debug/bookshelf-server > "$SERVER_LOG" 2>&1 &
@@ -87,9 +87,9 @@ start_server() {
 api() { # api <method> <path> [json body] -> prints response body
     local method="$1" path="$2" body="${3:-}"
     if [ -n "$body" ]; then
-        curl -sf -X "$method" "$BASE$path" -H 'content-type: application/json' -d "$body"
+        curl -sf -X "$method" "$BASE$path" -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' -d "$body"
     else
-        curl -sf -X "$method" "$BASE$path"
+        curl -sf -X "$method" "$BASE$path" -H "authorization: Bearer $TOKEN"
     fi
 }
 
@@ -99,7 +99,7 @@ api_form() { # api_form <path> fields...
     local path="$1"; shift
     local args=()
     for f in "$@"; do args+=(-F "$f"); done
-    curl -sf -X POST "$BASE$path" "${args[@]}"
+    curl -sf -X POST "$BASE$path" -H "authorization: Bearer $TOKEN" "${args[@]}"
 }
 
 # Acquire a plugin book through the unified endpoint (public, like the
@@ -118,6 +118,11 @@ cargo build -p bookshelf-server > /dev/null 2>&1 || fail "server build"
 
 start_mock
 start_server
+
+# --- bootstrap an account (the first registered user becomes admin) -------
+TOKEN=$(api POST /api/auth/register '{"username":"e2e-admin","password":"e2e-password"}' | jq_field "d['token']")
+[ -n "$TOKEN" ] || fail "register/login produced no token"
+pass "registered the first (admin) user"
 
 # --- register sources -----------------------------------------------------
 api POST /api/plugins/instances '{"id":"wiki","wasm_file":"wiki.wasm"}' > /dev/null

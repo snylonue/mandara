@@ -13,8 +13,7 @@ and a **wasm plugin system** for user-provided book and metadata sources.
 - 🔒 **Permission model**: every uploaded file is either `private` (visible
   only to its uploader and admins) or `public` (visible to every logged-in
   user) — the uploader chooses at upload time and can toggle it later.
-  The whole auth layer can additionally be switched off
-  (`BOOKSHELF_AUTH_ENABLED=false` → single-user local mode).
+  The first registered account becomes the `admin`.
 - 📚 **One metadata entry ↔ many files**: a book record (title, authors,
   description) can hold several files — different formats, editions or
   translations. Chapters, sessions and shares attach to files, since
@@ -96,7 +95,6 @@ cargo run -p bookshelf-server                 # serves frontend/dist (SPA) at /
 | `BOOKSHELF_DATA_DIR` | db's directory | runtime data directory |
 | `BOOKSHELF_PLUGINS_DIR` | `data/plugins` | directory scanned for `*.wasm` plugins |
 | `BOOKSHELF_JWT_SECRET` | `dev-only-change-me` | JWT secret (change in production) |
-| `BOOKSHELF_AUTH_ENABLED` | `true` | `false` disables auth/permissions (single-user mode) |
 | `BOOKSHELF_ALLOW_REGISTER` | `true` | allow new user registration |
 | `BOOKSHELF_MAX_UPLOAD_MB` | `64` | max upload size |
 | `BOOKSHELF_FRONTEND_DIR` | `frontend` | frontend dir (its `dist/` is served at `/` if present) |
@@ -132,7 +130,7 @@ users  ─┬─< books      (metadata: title, authors, ...)
 ```
 POST /api/auth/register|login            -> {token, user}
 GET  /api/auth/me
-GET  /api/health                         -> {auth_enabled, allow_register, ...}
+GET  /api/health                         -> {allow_register, ...}
 
 GET  /api/books?q=&source=               -> [{book, files:[...visible files]}]
 POST /api/books                          <- multipart: file + visibility + label

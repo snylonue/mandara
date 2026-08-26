@@ -674,8 +674,6 @@ export interface components {
             /** @enum {string} */
             status: "ok";
             version: string;
-            /** @description false = single-user local mode */
-            auth_enabled: boolean;
             allow_register: boolean;
         };
         /** @enum {string} */

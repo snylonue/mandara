@@ -36,11 +36,6 @@ async fn main() -> anyhow::Result<()> {
 
     let cfg = config::Config::parse();
     tracing::info!(version = env!("CARGO_PKG_VERSION"), addr = %cfg.addr, "starting bookshelf-server");
-    if !cfg.auth_enabled {
-        tracing::warn!(
-            "authentication is DISABLED: running as a single local admin (BOOKSHELF_AUTH_ENABLED=false)"
-        );
-    }
 
     let data_dir = cfg.data_dir();
     tokio::fs::create_dir_all(&data_dir).await?;
@@ -52,7 +47,6 @@ async fn main() -> anyhow::Result<()> {
 
     db::run_migrations(&cfg.db).await?;
     let diesel_db = db::connect_diesel(&cfg.db)?;
-    db::seed_local_user(&diesel_db, cfg.auth_enabled).await?;
 
     // One-shot upgrade migration (`--reparse-originals`): re-parse every
     // retained original with the current parser, then exit. Runs before
@@ -101,7 +95,7 @@ async fn main() -> anyhow::Result<()> {
         Err(e) => tracing::warn!(error = %e, "startup plugin sync failed"),
     }
 
-    let auth = auth::AuthService::new(cfg.auth_enabled, cfg.allow_register, &cfg.jwt_secret);
+    let auth = auth::AuthService::new(cfg.allow_register, &cfg.jwt_secret);
     let state = Arc::new(AppState {
         cfg: cfg.clone(),
         diesel_db,

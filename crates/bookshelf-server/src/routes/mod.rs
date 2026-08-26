@@ -63,7 +63,6 @@ pub async fn health(State(st): State<St>) -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "status": "ok",
         "version": env!("CARGO_PKG_VERSION"),
-        "auth_enabled": st.auth.enabled(),
         "allow_register": st.auth.allow_register(),
     }))
 }

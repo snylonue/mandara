@@ -1,7 +1,4 @@
-//! Authentication: optional JWT-based auth with role checks.
-//!
-//! When `auth_enabled` is false every request acts as the local admin user
-//! (the whole permission layer can be switched off: single-user mode).
+//! Authentication: JWT-based auth with role checks.
 
 use argon2::Argon2;
 use argon2::password_hash::rand_core::OsRng;
@@ -25,7 +22,6 @@ use diesel_async::RunQueryDsl as _;
 
 #[derive(Debug, Clone)]
 pub struct AuthService {
-    enabled: bool,
     allow_register: bool,
     secret: String,
 }
@@ -42,30 +38,15 @@ struct Claims {
 const TOKEN_TTL_SECS: usize = 7 * 24 * 3600;
 
 impl AuthService {
-    pub fn new(enabled: bool, allow_register: bool, secret: &str) -> Self {
+    pub fn new(allow_register: bool, secret: &str) -> Self {
         AuthService {
-            enabled,
             allow_register,
             secret: secret.into(),
         }
     }
 
-    pub fn enabled(&self) -> bool {
-        self.enabled
-    }
-
     pub fn allow_register(&self) -> bool {
         self.allow_register
-    }
-
-    /// The user every request acts as when auth is disabled.
-    pub fn local_user(&self) -> User {
-        User {
-            id: "local".into(),
-            username: "local".into(),
-            role: Role::Admin,
-            created_at: String::new(),
-        }
     }
 
     pub fn hash_password(&self, password: &str) -> Result<String, ApiError> {
@@ -106,9 +87,6 @@ impl AuthService {
 
     /// Resolve the current user from the Authorization header.
     pub async fn require_user(&self, headers: &HeaderMap, db: &DieselDb) -> Result<User, ApiError> {
-        if !self.enabled {
-            return Ok(self.local_user());
-        }
         let token = bearer(headers).ok_or(ApiError::Unauthorized)?;
         let data = decode::<Claims>(
             token,

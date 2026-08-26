@@ -36,11 +36,6 @@ pub struct Config {
     )]
     pub jwt_secret: String,
 
-    /// Enable authentication and permissions. When disabled the server runs
-    /// as a single local admin user (single-user mode).
-    #[arg(long, env = "BOOKSHELF_AUTH_ENABLED", default_value_t = true)]
-    pub auth_enabled: bool,
-
     /// Allow new user registration.
     #[arg(long, env = "BOOKSHELF_ALLOW_REGISTER", default_value_t = true)]
     pub allow_register: bool,
