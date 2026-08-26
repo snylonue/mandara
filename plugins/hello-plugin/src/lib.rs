@@ -177,7 +177,7 @@ impl Guest for HelloPlugin {
             // Extended-metadata demo: known keys validate against BookExt,
             // unknown keys round-trip verbatim.
             extra: Some(
-                r#"{"publisher":"Bookshelf Press","pub-date":"2026-08","pages":42,"future_key":{"nested":true}}"#.into(),
+                r#"{"publisher":"Bookshelf Press","pub_date":"2026-08","pages":42,"future_key":{"nested":true}}"#.into(),
             ),
             content_source: None,
             content_id: None,
