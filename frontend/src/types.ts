@@ -44,4 +44,5 @@ export type ConfigError = Schemas["ConfigError"];
 export type ValidationErrorResponse = {
   error: string;
   errors: ConfigError[];
-};
+};export type BookExt = Schemas["BookExt"];
+export type SeriesExt = Schemas["SeriesExt"];

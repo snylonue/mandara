@@ -134,7 +134,10 @@
     "seriesNone": "不在系列中",
     "seriesVolumePlaceholder": "卷号（留空自动分配）",
     "seriesHint": "卷号在系列内唯一；留空则自动取下一个可用卷号。",
-    "seriesSaved": "系列信息已更新"
+    "seriesSaved": "系列信息已更新",
+    "editInfo": "编辑信息",
+    "editInfoTitle": "编辑扩展信息",
+    "extSaved": "扩展信息已更新"
   },
   "reader": {
     "prev": "上一章",
@@ -221,5 +224,26 @@
     "moveDown": "下移",
     "remove": "移出",
     "noUnassigned": "没有可加入系列的书籍（书籍不在任何系列中，且由你管理）。"
+  },
+  "ext": {
+    "subtitle": "副标题",
+    "original_title": "原作名",
+    "isbn": "ISBN",
+    "publisher": "出版社",
+    "pub_date": "出版时间",
+    "translators": "译者",
+    "illustrators": "插画师",
+    "pages": "页数",
+    "price": "定价",
+    "binding": "装帧",
+    "language": "语言",
+    "status": "连载状态",
+    "total_volumes": "计划卷数",
+    "tags": "标签",
+    "ongoing": "连载中",
+    "completed": "完结",
+    "hiatus": "休刊中",
+    "totalVolumesLine": "全 {{count}} 卷",
+    "formHint": "留空的字段不填写即可；保存时清空已填字段会删除对应信息。"
   }
 }

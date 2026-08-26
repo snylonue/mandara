@@ -8,6 +8,7 @@ import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { useAuth } from "../auth";
 import { BookCover } from "../components/BookCover";
+import { ExtMetaForm, ExtMetaTable, extMergePatch, type ExtRecord } from "../components/ExtMetaForm";
 import {
   IconArrowLeft,
   IconEdit,
@@ -222,8 +223,21 @@ export function SeriesPage() {
                 ),
               })}
             </span>
+            {series?.status && (
+              <>
+                <span>·</span>
+                <span className={`tag ext-status-${series.status}`}>{t(`ext.${series.status}`)}</span>
+              </>
+            )}
+            {series?.ext?.total_volumes != null && (
+              <>
+                <span>·</span>
+                <span>{t("ext.totalVolumesLine", { count: series.ext.total_volumes })}</span>
+              </>
+            )}
           </div>
           {series?.description && <p className="detail-desc">{series.description}</p>}
+          <ExtMetaTable kind="series" value={(series?.ext ?? {}) as ExtRecord} />
           {canManage && (
             <div className="detail-actions">
               <button className="ghost" onClick={() => setEditOpen(true)}>
@@ -321,6 +335,7 @@ function EditSeriesDialog({
   const [title, setTitle] = useState("");
   const [authors, setAuthors] = useState("");
   const [description, setDescription] = useState("");
+  const [ext, setExt] = useState<ExtRecord>({});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -330,6 +345,7 @@ function EditSeriesDialog({
       setTitle(series.title);
       setAuthors(series.authors.join("，"));
       setDescription(series.description ?? "");
+      setExt({ ...(series.ext ?? {}) });
       setError(null);
     }
   }, [open, series]);
@@ -343,6 +359,8 @@ function EditSeriesDialog({
       if (title.trim()) body.title = title.trim();
       if (authors.trim()) body.authors = authors.split(/[,，]/).map((s) => s.trim()).filter(Boolean);
       if (description.trim()) body.description = description.trim();
+      const extPatch = extMergePatch((series.ext ?? {}) as ExtRecord, ext);
+      if (extPatch) body.ext = extPatch;
       await api<SeriesBrief>(`/series/${series.id}`, { method: "PATCH", body: JSON.stringify(body) });
       toast.push("success", t("series.saved"));
       await onSaved();
@@ -359,6 +377,7 @@ function EditSeriesDialog({
         <input placeholder={t("library.bookPlaceholder")} value={title} onChange={(e) => setTitle(e.target.value)} />
         <input placeholder={t("library.authorsPlaceholder")} value={authors} onChange={(e) => setAuthors(e.target.value)} />
         <textarea placeholder={t("library.descriptionPlaceholder")} value={description} onChange={(e) => setDescription(e.target.value)} />
+        <ExtMetaForm kind="series" value={ext} onChange={setExt} />
       </div>
       {error && <div className="error">{error}</div>}
       <div className="modal-actions">

@@ -15,6 +15,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
+import { ExtMetaForm, type ExtRecord } from "./ExtMetaForm";
 import { Modal } from "./Modal";
 import { SourceSearchPane, type SourcePick } from "./SourceSearch";
 import { useToast } from "./toast";
@@ -69,6 +70,8 @@ export function AddBookDialog({
   const [title, setTitle] = useState("");
   const [authors, setAuthors] = useState("");
   const [description, setDescription] = useState("");
+  // manual mode: extended metadata (ISBN/publisher/…)
+  const [ext, setExt] = useState<ExtRecord>({});
 
   const suggestion = pluginAcq ?? pluginMetaRef;
 
@@ -83,6 +86,7 @@ export function AddBookDialog({
     setTitle("");
     setAuthors("");
     setDescription("");
+    setExt({});
     setPluginAcq(null);
     setPluginMetaRef(null);
   };
@@ -172,6 +176,7 @@ export function AddBookDialog({
           if (title.trim()) form.append("title", title.trim());
           if (authors.trim()) form.append("authors", JSON.stringify(splitAuthors(authors)));
           if (description.trim()) form.append("description", description.trim());
+          if (Object.keys(ext).length > 0) form.append("ext", JSON.stringify(ext));
         }
       }
 
@@ -330,6 +335,7 @@ export function AddBookDialog({
               value={description}
               onChange={(e) => setDescription(e.target.value)}
             />
+            <ExtMetaForm kind="book" value={ext} onChange={setExt} />
             {tab === "upload" && (
               <>
                 <p className="hint">{t("library.modeManualHint")}</p>

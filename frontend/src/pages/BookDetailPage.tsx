@@ -6,12 +6,14 @@ import { useAuth } from "../auth";
 import { BookCover } from "../components/BookCover";
 import {
   IconArrowLeft,
+  IconEdit,
   IconLayers,
   IconRefresh,
   IconShare,
   IconTrash,
 } from "../components/icons";
 import { Modal } from "../components/Modal";
+import { ExtMetaForm, ExtMetaTable, extMergePatch, type ExtRecord } from "../components/ExtMetaForm";
 import { useToast } from "../components/toast";
 import {
   SourceBrowserDialog,
@@ -273,6 +275,10 @@ export function BookDetailPage() {
   const [deleting, setDeleting] = useState(false);
   const [descExpanded, setDescExpanded] = useState(false);
   const [fileCount409, setFileCount409] = useState<number | null>(null);
+  // Extended-metadata edit dialog (creator/admin).
+  const [extOpen, setExtOpen] = useState(false);
+  const [extDraft, setExtDraft] = useState<ExtRecord>({});
+  const [extSaving, setExtSaving] = useState(false);
   const attachRef = { current: null as HTMLInputElement | null };
 
   const load = useCallback(async () => {
@@ -379,6 +385,29 @@ export function BookDetailPage() {
     }
   }
 
+  /** Save the extended-metadata edit (merge-patch: null clears a key). */
+  async function saveExt() {
+    const book = detail?.book;
+    if (!book) return;
+    setExtSaving(true);
+    try {
+      const patch = extMergePatch((book.ext ?? {}) as ExtRecord, extDraft);
+      if (patch) {
+        await api<BookMeta>(`/books/${book.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ ext: patch }),
+        });
+      }
+      setExtOpen(false);
+      toast.push("success", t("book.extSaved"));
+      await load();
+    } catch (err) {
+      toast.push("error", err instanceof Error ? err.message : t("book.opFailed"));
+    } finally {
+      setExtSaving(false);
+    }
+  }
+
   /**
    * Delete the metadata entry only. Metadata deletion never cascades into
    * files: while files remain the server answers 409, and the caller may
@@ -464,6 +493,7 @@ export function BookDetailPage() {
             <span>·</span>
             <span>{t("book.metaCount", { count: files.length })}</span>
           </div>
+          <ExtMetaTable kind="book" value={(book.ext ?? {}) as ExtRecord} />
           {book.description && (
             <p className={`detail-desc ${descExpanded ? "expanded" : ""}`}>
               {book.description}
@@ -499,6 +529,17 @@ export function BookDetailPage() {
             {canManage && (
               <button className="ghost" onClick={() => void openSeriesDialog()}>
                 {t("book.manageSeries")}
+              </button>
+            )}
+            {canManage && (
+              <button
+                className="ghost"
+                onClick={() => {
+                  setExtDraft({ ...(book.ext ?? {}) });
+                  setExtOpen(true);
+                }}
+              >
+                <IconEdit size={14} /> {t("book.editInfo")}
               </button>
             )}
             {canManage && (
@@ -622,6 +663,17 @@ export function BookDetailPage() {
           <button onClick={() => setSeriesOpen(false)}>{t("library.cancel")}</button>
           <button className="primary" disabled={seriesSaving} onClick={() => void saveSeries()}>
             {seriesSaving ? t("library.uploading") : t("series.save")}
+          </button>
+        </div>
+      </Modal>
+
+      {/* Extended metadata edit (creator/admin). */}
+      <Modal open={extOpen} onClose={() => setExtOpen(false)} title={t("book.editInfoTitle")}>
+        <ExtMetaForm kind="book" value={extDraft} onChange={setExtDraft} />
+        <div className="modal-actions">
+          <button onClick={() => setExtOpen(false)}>{t("library.cancel")}</button>
+          <button className="primary" disabled={extSaving} onClick={() => void saveExt()}>
+            {extSaving ? t("library.uploading") : t("series.save")}
           </button>
         </div>
       </Modal>

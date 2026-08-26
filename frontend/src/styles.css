@@ -1789,3 +1789,50 @@ button.active {
   padding: 0.5rem 0.6rem;
   cursor: pointer;
 }
+
+/* ---- extended metadata (docs/metadata-ext-design.md) -------------------- */
+
+.ext-table {
+  margin: 0.35rem 0 0;
+  border-collapse: collapse;
+  font-size: var(--fs-md);
+}
+
+.ext-table th {
+  color: var(--muted);
+  font-weight: 500;
+  text-align: left;
+  padding: 2px 12px 2px 0;
+  white-space: nowrap;
+  vertical-align: top;
+}
+
+.ext-table td {
+  padding: 2px 0;
+  color: var(--text);
+}
+
+.detail-info .ext-table th::after {
+  content: "：";
+}
+
+/* compact two-column grid of ext inputs inside dialogs */
+.ext-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: var(--space-2);
+}
+
+.ext-form-grid input {
+  width: 100%;
+}
+
+.tag.ext-status-ongoing {
+  border-color: var(--accent, #4a90d9);
+  color: var(--accent, #4a90d9);
+}
+
+.tag.ext-status-completed {
+  border-color: #3a9e5f;
+  color: #3a9e5f;
+}
