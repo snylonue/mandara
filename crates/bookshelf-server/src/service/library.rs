@@ -38,11 +38,12 @@ diesel::define_sql_function! {
 }
 
 // `COALESCE(?, col)` for optional string updates: `None` keeps the
-// stored value.
+// stored value (nullable target column).
 diesel::define_sql_function! {
     #[sql_name = "COALESCE"]
     fn coalesce_opt(
         x: diesel::sql_types::Nullable<diesel::sql_types::Text>,
+        y: diesel::sql_types::Nullable<diesel::sql_types::Text>,
     ) -> diesel::sql_types::Nullable<diesel::sql_types::Text>;
 }
 
@@ -51,6 +52,7 @@ diesel::define_sql_function! {
     #[sql_name = "COALESCE"]
     fn coalesce_opt_nn(
         x: diesel::sql_types::Nullable<diesel::sql_types::Text>,
+        y: diesel::sql_types::Text,
     ) -> diesel::sql_types::Text;
 }
 
@@ -1412,10 +1414,16 @@ impl Library {
             authors.map(|a| serde_json::to_string(a).unwrap_or_else(|_| "[]".into()));
         diesel::update(schema::books::table.find(id))
             .set((
-                schema::books::title.eq(coalesce_opt_nn(title)),
-                schema::books::description.eq(coalesce_opt(description.map(str::to_string))),
-                schema::books::authors.eq(coalesce_opt_nn(authors_json)),
-                schema::books::cover_url.eq(coalesce_opt(cover_url.map(str::to_string))),
+                schema::books::title.eq(coalesce_opt_nn(title, schema::books::title)),
+                schema::books::description.eq(coalesce_opt(
+                    description.map(str::to_string),
+                    schema::books::description,
+                )),
+                schema::books::authors.eq(coalesce_opt_nn(authors_json, schema::books::authors)),
+                schema::books::cover_url.eq(coalesce_opt(
+                    cover_url.map(str::to_string),
+                    schema::books::cover_url,
+                )),
             ))
             .execute(&mut self.diesel_db.get().await?)
             .await?;
@@ -1708,9 +1716,12 @@ impl Library {
             authors.map(|a| serde_json::to_string(a).unwrap_or_else(|_| "[]".into()));
         diesel::update(schema::series::table.find(id))
             .set((
-                schema::series::title.eq(coalesce_opt_nn(title)),
-                schema::series::description.eq(coalesce_opt(description.map(str::to_string))),
-                schema::series::authors.eq(coalesce_opt_nn(authors_json)),
+                schema::series::title.eq(coalesce_opt_nn(title, schema::series::title)),
+                schema::series::description.eq(coalesce_opt(
+                    description.map(str::to_string),
+                    schema::series::description,
+                )),
+                schema::series::authors.eq(coalesce_opt_nn(authors_json, schema::series::authors)),
             ))
             .execute(&mut self.diesel_db.get().await?)
             .await?;
@@ -1940,9 +1951,14 @@ impl Library {
     ) -> Result<FileMeta, ApiError> {
         diesel::update(schema::book_files::table.find(id))
             .set((
-                schema::book_files::visibility
-                    .eq(coalesce_opt_nn(visibility.map(|v| v.as_str().to_string()))),
-                schema::book_files::label.eq(coalesce_opt_nn(label.map(str::to_string))),
+                schema::book_files::visibility.eq(coalesce_opt_nn(
+                    visibility.map(|v| v.as_str().to_string()),
+                    schema::book_files::visibility,
+                )),
+                schema::book_files::label.eq(coalesce_opt_nn(
+                    label.map(str::to_string),
+                    schema::book_files::label,
+                )),
             ))
             .execute(&mut self.diesel_db.get().await?)
             .await?;
