@@ -1,6 +1,6 @@
 # SQL Layer Refactor Plan: sqlx runtime → Diesel
 
-Status: proposed. Owner decisions recorded: **delete `localize_images`**
+Status: **implemented** (commits 7287550..3668ca7, 2026-08). Owner decisions recorded: **delete `localize_images`**
 (image localization is dropped entirely), fix the N+1s as part of the
 translation, keep the existing SQL migration files.
 
