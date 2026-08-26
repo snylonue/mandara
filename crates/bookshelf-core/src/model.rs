@@ -1,6 +1,7 @@
 //! Domain models: users, book metadata, files, chapters, reading sessions,
 //! shares.
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 /// User role. Administrators can manage every book and every file.
@@ -79,7 +80,7 @@ pub struct User {
     pub id: String,
     pub username: String,
     pub role: Role,
-    pub created_at: String,
+    pub created_at: DateTime<Utc>,
 }
 
 /// A series: metadata grouping for the volumes of one publication family
@@ -93,7 +94,7 @@ pub struct SeriesMeta {
     pub description: Option<String>,
     pub cover_url: Option<String>,
     pub created_by: Option<String>,
-    pub created_at: String,
+    pub created_at: DateTime<Utc>,
 }
 
 /// Pure book metadata. One entry can be linked to many
@@ -108,7 +109,7 @@ pub struct BookMeta {
     pub description: Option<String>,
     pub cover_url: Option<String>,
     pub created_by: Option<String>,
-    pub created_at: String,
+    pub created_at: DateTime<Utc>,
     /// Series this book is a volume of (`None` = standalone).
     pub series_id: Option<String>,
     /// 1-based volume ordinal inside the series (`0` = standalone).
@@ -137,7 +138,7 @@ pub struct FileMeta {
     pub visibility: Visibility,
     pub owner_id: Option<String>,
     pub chapter_count: u32,
-    pub created_at: String,
+    pub created_at: DateTime<Utc>,
     /// Volume slice of the source book this file covers (0 = the whole
     /// book, today's semantics).
     pub volume_no: u32,
@@ -331,7 +332,7 @@ pub struct ReadingSession {
     pub file_id: String,
     pub label: String,
     pub position: Position,
-    pub updated_at: String,
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -353,6 +354,6 @@ pub struct Share {
     pub file_id: String,
     pub session_id: Option<String>,
     pub created_by: Option<String>,
-    pub expires_at: Option<String>,
-    pub created_at: String,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
 }

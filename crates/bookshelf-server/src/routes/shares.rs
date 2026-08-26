@@ -22,10 +22,7 @@ use crate::routes::{St, can_manage_file, current_user, load_visible_file};
 use crate::rows::ShareRow;
 #[allow(unused_imports)]
 use crate::schema::{sessions, shares, users};
-
-fn now() -> String {
-    Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
-}
+use crate::time::{parse_ts, rfc3339_millis};
 
 #[derive(Serialize)]
 pub struct ShareResponse {
@@ -35,8 +32,8 @@ pub struct ShareResponse {
     pub mode: String,
     pub file_id: String,
     pub session_id: Option<String>,
-    pub expires_at: Option<String>,
-    pub created_at: String,
+    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
 impl ShareResponse {
@@ -66,9 +63,8 @@ async fn load_share(st: &St, token: &str) -> Result<ShareRow, ApiError> {
         return Err(ApiError::not_found("share"));
     };
     if let Some(expires) = &row.expires_at
-        && expires.as_str() < now().as_str()
+        && parse_ts(expires) < chrono::Utc::now()
     {
-        // RFC3339 strings with the same prefix format compare correctly
         return Err(ApiError::not_found("share"));
     }
     Ok(row)
@@ -135,10 +131,9 @@ pub async fn create_share(
     }
 
     let token = uuid::Uuid::new_v4().simple().to_string();
-    let expires_at = req.expires_days.map(|days| {
-        (Utc::now() + Duration::days(days as i64))
-            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
-    });
+    let expires_at = req
+        .expires_days
+        .map(|days| rfc3339_millis(Utc::now() + Duration::days(days as i64)));
 
     let mut conn = st.diesel_db.get().await?;
     diesel::insert_into(shares::table)
@@ -190,7 +185,7 @@ pub struct ShareSessionView {
     pub owner_username: String,
     pub position: Position,
     pub percent: u8,
-    pub updated_at: String,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Serialize)]
@@ -200,8 +195,8 @@ pub struct ShareView {
     pub book: ShareBookView,
     pub file: ShareFileView,
     pub session: Option<ShareSessionView>,
-    pub created_at: String,
-    pub expires_at: Option<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 // GET /api/shares/{token} --------------------------------------------------------
@@ -251,9 +246,9 @@ pub async fn get_share(
                 id: sid.clone(),
                 label,
                 owner_username: owner.unwrap_or_default(),
-                position,
                 percent: position.percent(),
-                updated_at,
+                position,
+                updated_at: parse_ts(&updated_at),
             });
         }
     }

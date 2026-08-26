@@ -153,11 +153,9 @@ pub async fn update_session(
     }
     .clamped(chapter_count);
 
-    // Timestamp generated on the Rust side (same format as the SQLite
-    // strftime default; the DB clock is no longer consulted for updates).
-    let now = chrono::Utc::now()
-        .format("%Y-%m-%dT%H:%M:%S%.3fZ")
-        .to_string();
+    // Timestamp generated on the Rust side in the stored format (the DB
+    // clock is no longer consulted for updates).
+    let now = crate::time::now();
     diesel::update(sessions::table.find(&session_id))
         .set((
             sessions::chapter_idx.eq(i64::from(position.chapter_idx)),

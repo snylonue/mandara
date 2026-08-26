@@ -1382,6 +1382,7 @@ components:
           $ref: "#/components/schemas/Role"
         created_at:
           type: string
+          format: date-time
 
     Credentials:
       type: object
@@ -1430,6 +1431,7 @@ components:
           type: [string, "null"]
         created_at:
           type: string
+          format: date-time
         series_id:
           description: |
             Series this book is a volume of (null = standalone). Volume
@@ -1495,6 +1497,7 @@ components:
           type: integer
         created_at:
           type: string
+          format: date-time
         volume_no:
           description: |
             Volume slice of the source book this file covers (0 = the
@@ -1618,6 +1621,7 @@ components:
           type: [string, "null"]
         created_at:
           type: string
+          format: date-time
 
     SeriesDetail:
       type: object
@@ -1738,6 +1742,7 @@ components:
           $ref: "#/components/schemas/Position"
         updated_at:
           type: string
+          format: date-time
 
     SessionsResponse:
       type: object
@@ -1821,6 +1826,7 @@ components:
           type: [string, "null"]
         created_at:
           type: string
+          format: date-time
 
     ShareBookView:
       type: object
@@ -1867,6 +1873,7 @@ components:
           description: Progress within the current chapter, 0..100
         updated_at:
           type: string
+          format: date-time
 
     ShareView:
       type: object
@@ -1888,6 +1895,7 @@ components:
           description: Present when kind is "session"
         created_at:
           type: string
+          format: date-time
         expires_at:
           type: [string, "null"]
 

@@ -26,7 +26,7 @@ pub struct SeriesBrief {
     pub cover_url: Option<String>,
     pub volume_count: u32,
     pub created_by: Option<String>,
-    pub created_at: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
 impl SeriesBrief {

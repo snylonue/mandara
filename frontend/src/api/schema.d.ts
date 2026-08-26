@@ -682,6 +682,7 @@ export interface components {
             id: string;
             username: string;
             role: components["schemas"]["Role"];
+            /** Format: date-time */
             created_at: string;
         };
         Credentials: {
@@ -703,6 +704,7 @@ export interface components {
             cover_url: string | null;
             /** @description Id of the user who created this metadata entry */
             created_by: string | null;
+            /** Format: date-time */
             created_at: string;
             /**
              * @description Series this book is a volume of (null = standalone). Volume
@@ -735,6 +737,7 @@ export interface components {
             visibility: components["schemas"]["Visibility"];
             owner_id: string | null;
             chapter_count: number;
+            /** Format: date-time */
             created_at: string;
             /**
              * @description Volume slice of the source book this file covers (0 = the
@@ -803,6 +806,7 @@ export interface components {
             /** @description Number of member books (all visibilities) */
             volume_count: number;
             created_by: string | null;
+            /** Format: date-time */
             created_at: string;
         };
         SeriesDetail: {
@@ -855,6 +859,7 @@ export interface components {
             file_id: string;
             label: string;
             position: components["schemas"]["Position"];
+            /** Format: date-time */
             updated_at: string;
         };
         SessionsResponse: {
@@ -889,6 +894,7 @@ export interface components {
             file_id: string;
             session_id: string | null;
             expires_at: string | null;
+            /** Format: date-time */
             created_at: string;
         };
         ShareBookView: {
@@ -910,6 +916,7 @@ export interface components {
             position: components["schemas"]["Position"];
             /** @description Progress within the current chapter, 0..100 */
             percent: number;
+            /** Format: date-time */
             updated_at: string;
         };
         ShareView: {
@@ -920,6 +927,7 @@ export interface components {
             file: components["schemas"]["ShareFileView"];
             /** @description Present when kind is "session" */
             session: components["schemas"]["ShareSessionView"] | null;
+            /** Format: date-time */
             created_at: string;
             expires_at: string | null;
         };

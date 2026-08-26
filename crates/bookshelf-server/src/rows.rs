@@ -8,6 +8,7 @@ use bookshelf_core::model::{
 };
 
 use crate::error::ApiError;
+use crate::time::parse_ts;
 
 #[derive(Debug, diesel::prelude::Queryable, diesel::prelude::Selectable)]
 #[diesel(table_name = crate::schema::users, check_for_backend(diesel::sqlite::Sqlite))]
@@ -27,7 +28,7 @@ impl UserRow {
                 .role
                 .parse::<Role>()
                 .map_err(|_| anyhow!("bad role in db: {}", self.role))?,
-            created_at: self.created_at,
+            created_at: parse_ts(&self.created_at),
         })
     }
 }
@@ -53,7 +54,7 @@ impl SeriesRow {
             description: self.description,
             cover_url: self.cover_url,
             created_by: self.created_by,
-            created_at: self.created_at,
+            created_at: parse_ts(&self.created_at),
         }
     }
 }
@@ -81,7 +82,7 @@ impl BookRow {
             description: self.description,
             cover_url: self.cover_url,
             created_by: self.created_by,
-            created_at: self.created_at,
+            created_at: parse_ts(&self.created_at),
             series_id: self.series_id,
             volume_no: self.volume_no.max(0) as u32,
         })
@@ -127,7 +128,7 @@ impl FileRow {
                 .unwrap_or(Visibility::Private),
             owner_id: self.owner_id,
             chapter_count: self.chapter_count.max(0) as u32,
-            created_at: self.created_at,
+            created_at: parse_ts(&self.created_at),
             volume_no: self.volume_no.max(0) as u32,
             volume_offset: self.volume_offset.max(0) as u32,
             original: match (self.orig_ext, self.orig_sha256, self.orig_size) {
@@ -201,7 +202,7 @@ impl SessionRow {
                 offset: self.offset.max(0) as u32,
                 fraction: self.fraction.clamp(0.0, 1.0),
             },
-            updated_at: self.updated_at,
+            updated_at: parse_ts(&self.updated_at),
         }
     }
 }
@@ -231,8 +232,8 @@ impl ShareRow {
             file_id: self.file_id,
             session_id: self.session_id,
             created_by: self.created_by,
-            expires_at: self.expires_at,
-            created_at: self.created_at,
+            expires_at: self.expires_at.map(|e| parse_ts(&e)),
+            created_at: parse_ts(&self.created_at),
         })
     }
 }

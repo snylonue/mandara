@@ -80,7 +80,7 @@ pub async fn register(
     let user = User {
         id,
         username,
-        created_at: String::new(),
+        created_at: chrono::Utc::now(),
         role: if first {
             bookshelf_core::model::Role::Admin
         } else {
