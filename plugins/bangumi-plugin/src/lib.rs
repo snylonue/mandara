@@ -133,12 +133,32 @@ struct ApiSubject {
     date: String,
     #[serde(default)]
     images: Option<ApiImages>,
+    /// Whether this subject is a multi-volume series entry: `true` (bool)
+    /// on the current API, an object `{id,type,name,name_cn}` on
+    /// v0.34+. Single volumes are `false`/absent.
+    #[serde(default)]
+    series: Option<serde_json::Value>,
+    /// Number of volumes when this subject is a series entry (0 for
+    /// single volumes / non-series subjects).
+    #[serde(default)]
+    volumes: u32,
     /// `[{key: "出版社", value: "电击文库"}, {key: "作者", value: [...]}, …]`
     #[serde(default)]
     infobox: Vec<ApiInfobox>,
     /// `[{name: "科幻", count: 12}, …]`
     #[serde(default)]
     tags: Vec<ApiTag>,
+}
+
+impl ApiSubject {
+    /// Is this subject a multi-volume series entry (bangumi marks these
+    /// with `series` truthy and a volume count in `volumes`)?
+    fn is_series(&self) -> bool {
+        matches!(
+            &self.series,
+            Some(serde_json::Value::Bool(true)) | Some(serde_json::Value::Object(_))
+        )
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -375,7 +395,24 @@ impl From<&ApiSubject> for BookEntry {
             extra: serde_json::to_string(&extra).ok(),
             content_source: None,
             content_id: None,
-            volumes: None, // one bangumi subject ≈ one volume/book
+            // A bangumi **series** subject (e.g. 狼与香辛料 = 24 卷) is a
+            // multi-volume publication family. Declare one volume-info per
+            // 卷 (each with a single placeholder chapter — bangumi is
+            // metadata-only, the host splits into one metadata book per
+            // 卷 under a series; content can be attached later). Single
+            // volumes stay `None`.
+            volumes: if s.is_series() && s.volumes > 1 {
+                Some(
+                    (1..=s.volumes)
+                        .map(|v| VolumeInfo {
+                            title: format!("第{v}卷"),
+                            chapter_count: 1,
+                        })
+                        .collect(),
+                )
+            } else {
+                None
+            },
         }
     }
 }

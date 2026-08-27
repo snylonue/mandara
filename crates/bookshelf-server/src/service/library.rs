@@ -1168,9 +1168,26 @@ impl Library {
             .plugins
             .chapter_titles(content_inst, content_id)
             .await?;
-        let Some(slices) = volume_slices(&entry.volumes, titles.len() as u32) else {
-            // Declared volumes collapsed (all empty): fall back to today's
-            // single-book acquisition.
+        // Metadata-only sources (e.g. bangumi series subjects) declare
+        // their volumes but have no chapter content (`content` capability
+        // absent → empty titles). Treat each declared volume as a
+        // metadata-only book (no file) under the series — content can be
+        // attached later. Chapter-bearing sources use the real slice math.
+        let maybe_slices = if titles.is_empty() {
+            // One metadata-only book per declared volume.
+            let vols = entry
+                .volumes
+                .iter()
+                .enumerate()
+                .map(|(i, v)| (v.title.clone(), i as u32, 0u32))
+                .collect::<Vec<_>>();
+            (vols.len() > 1).then_some(vols)
+        } else {
+            volume_slices(&entry.volumes, titles.len() as u32)
+        };
+        let Some(slices) = maybe_slices else {
+            // Declared volumes collapsed (all empty, or fewer than two):
+            // fall back to today's single-book acquisition.
             return Ok(None);
         };
 
@@ -1267,45 +1284,70 @@ impl Library {
 
             // One virtual chapter-mode file per volume; the volume's
             // chapter range is a slice of the source's flat list, so lazy
-            // `get-chapter(source, volume_offset + idx)` works.
+            // `get-chapter(source, volume_offset + idx)` works. Metadata-
+            // only volumes (bangumi series subjects: count == 0) get no
+            // file — the book is a bare metadata entry content can be
+            // attached to later.
             let file_label = if vol_title.is_empty() {
                 format!("第{volume_no}卷")
             } else {
                 vol_title.clone()
             };
             let file_id = uuid::Uuid::new_v4().simple().to_string();
-            diesel::insert_into(schema::book_files::table)
-                .values((
-                    schema::book_files::id.eq(&file_id),
-                    schema::book_files::book_id.eq(&book_id),
-                    schema::book_files::source.eq(source),
-                    schema::book_files::external_id.eq(&entry.id),
-                    schema::book_files::content_source.eq(&entry.content_source),
-                    schema::book_files::content_external_id.eq(&entry.content_id),
-                    schema::book_files::format.eq(FileFormat::Plugin.as_ref()),
-                    schema::book_files::label.eq(&file_label),
-                    schema::book_files::visibility.eq(visibility.as_ref()),
-                    schema::book_files::owner_id.eq(&user.id),
-                    schema::book_files::chapter_count.eq(*count as i64),
-                    schema::book_files::volume_no.eq(volume_no as i64),
-                    schema::book_files::volume_offset.eq(*start as i64),
-                ))
-                .execute(&mut conn)
-                .await?;
-
-            // Title-only placeholder rows for this volume's slice.
-            let slice = &titles[*start as usize..(*start + *count) as usize];
-            for (idx, t) in slice.iter().enumerate() {
-                diesel::insert_into(schema::chapters::table)
+            let file_meta = if *count > 0 {
+                diesel::insert_into(schema::book_files::table)
                     .values((
-                        schema::chapters::file_id.eq(&file_id),
-                        schema::chapters::idx.eq(idx as i64),
-                        schema::chapters::title.eq(t.trim()),
-                        schema::chapters::content.eq(""),
+                        schema::book_files::id.eq(&file_id),
+                        schema::book_files::book_id.eq(&book_id),
+                        schema::book_files::source.eq(source),
+                        schema::book_files::external_id.eq(&entry.id),
+                        schema::book_files::content_source.eq(&entry.content_source),
+                        schema::book_files::content_external_id.eq(&entry.content_id),
+                        schema::book_files::format.eq(FileFormat::Plugin.as_ref()),
+                        schema::book_files::label.eq(&file_label),
+                        schema::book_files::visibility.eq(visibility.as_ref()),
+                        schema::book_files::owner_id.eq(&user.id),
+                        schema::book_files::chapter_count.eq(*count as i64),
+                        schema::book_files::volume_no.eq(volume_no as i64),
+                        schema::book_files::volume_offset.eq(*start as i64),
                     ))
                     .execute(&mut conn)
                     .await?;
-            }
+
+                // Title-only placeholder rows for this volume's slice.
+                let slice = &titles[*start as usize..(*start + *count) as usize];
+                for (idx, t) in slice.iter().enumerate() {
+                    diesel::insert_into(schema::chapters::table)
+                        .values((
+                            schema::chapters::file_id.eq(&file_id),
+                            schema::chapters::idx.eq(idx as i64),
+                            schema::chapters::title.eq(t.trim()),
+                            schema::chapters::content.eq(""),
+                        ))
+                        .execute(&mut conn)
+                        .await?;
+                }
+
+                Some(FileMeta {
+                    id: file_id,
+                    book_id: book_id.clone(),
+                    source: source.to_string(),
+                    external_id: entry.id.clone(),
+                    content_source: entry.content_source.clone(),
+                    content_external_id: entry.content_id.clone(),
+                    format: FileFormat::Plugin,
+                    label: file_label,
+                    visibility,
+                    owner_id: Some(user.id.clone()),
+                    chapter_count: *count,
+                    created_at: chrono::Utc::now(),
+                    volume_no,
+                    volume_offset: *start,
+                    original: None,
+                })
+            } else {
+                None
+            };
 
             books.push((
                 BookMeta {
@@ -1320,23 +1362,7 @@ impl Library {
                     series_id: Some(series_id.clone()),
                     volume_no,
                 },
-                Some(FileMeta {
-                    id: file_id,
-                    book_id,
-                    source: source.to_string(),
-                    external_id: entry.id.clone(),
-                    content_source: entry.content_source.clone(),
-                    content_external_id: entry.content_id.clone(),
-                    format: FileFormat::Plugin,
-                    label: file_label,
-                    visibility,
-                    owner_id: Some(user.id.clone()),
-                    chapter_count: *count,
-                    created_at: chrono::Utc::now(),
-                    volume_no,
-                    volume_offset: *start,
-                    original: None,
-                }),
+                file_meta,
             ));
         }
         drop(conn);
