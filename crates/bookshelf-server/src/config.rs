@@ -40,6 +40,11 @@ pub struct Config {
     #[arg(long, env = "BOOKSHELF_ALLOW_REGISTER", default_value_t = true)]
     pub allow_register: bool,
 
+    /// Mark the session cookie `Secure` (only sent over https). Enable
+    /// when the server is served behind TLS.
+    #[arg(long, env = "BOOKSHELF_COOKIE_SECURE", default_value_t = false)]
+    pub cookie_secure: bool,
+
     /// Maximum upload size in MiB.
     #[arg(long, env = "BOOKSHELF_MAX_UPLOAD_MB", default_value_t = 64)]
     pub max_upload_mb: u64,

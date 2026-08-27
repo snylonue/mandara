@@ -6,7 +6,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { api, getToken, setToken } from "./api";
+import { api, setToken } from "./api";
 import type { Health, User } from "./types";
 
 interface AuthState {
@@ -33,12 +33,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const h = await api<Health>("/health").catch(() => null);
     setHealth(h);
     if (!h) return;
-    if (getToken()) {
-      const u = await api<User>("/auth/me").catch(() => null);
-      setUser(u);
-    } else {
-      setUser(null);
-    }
+    // Cookie or Bearer token: after a page refresh the localStorage
+    // token is still there, but the session cookie alone is enough —
+    // `/auth/me` accepts either.
+    const u = await api<User>("/auth/me").catch(() => null);
+    setUser(u);
+    if (!u) setToken(null);
   }, []);
 
   useEffect(() => {
@@ -53,6 +53,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(() => {
     setToken(null);
     setUser(null);
+    // Clear the server-side session cookie (best-effort).
+    void api("/auth/logout", { method: "POST" }).catch(() => undefined);
   }, []);
 
   return (

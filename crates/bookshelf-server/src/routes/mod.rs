@@ -79,6 +79,7 @@ pub fn router(state: St) -> Router {
         .route("/api/auth/register", post(auth::register))
         .route("/api/auth/login", post(auth::login))
         .route("/api/auth/me", get(auth::me))
+        .route("/api/auth/logout", post(auth::logout))
         .route("/api/plugins", get(plugins::list_plugins))
         .route("/api/plugins/sync", post(plugins::sync_plugins))
         .route("/api/plugins/wasm-files", get(plugins::wasm_files))

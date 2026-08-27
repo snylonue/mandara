@@ -3,8 +3,8 @@
 use argon2::Argon2;
 use argon2::password_hash::rand_core::OsRng;
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
-use axum::http::HeaderMap;
 use axum::http::header::AUTHORIZATION;
+use axum::http::{HeaderMap, HeaderValue};
 use chrono::Utc;
 use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
@@ -20,10 +20,19 @@ use diesel::QueryDsl as _;
 use diesel::prelude::SelectableHelper as _;
 use diesel_async::RunQueryDsl as _;
 
+/// Name of the session cookie carrying the JWT (HttpOnly — the browser
+/// sends it automatically, so a page refresh never drops the login).
+pub const TOKEN_COOKIE: &str = "bookshelf_token";
+
+/// Lifetime of the session cookie; matches the JWT TTL.
+pub const TOKEN_TTL_SECS: usize = 7 * 24 * 3600;
+
 #[derive(Debug, Clone)]
 pub struct AuthService {
     allow_register: bool,
     secret: String,
+    /// Mark the session cookie `Secure` (only sent over https).
+    cookie_secure: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -35,14 +44,32 @@ struct Claims {
     exp: usize,
 }
 
-const TOKEN_TTL_SECS: usize = 7 * 24 * 3600;
-
 impl AuthService {
-    pub fn new(allow_register: bool, secret: &str) -> Self {
+    pub fn new(allow_register: bool, secret: &str, cookie_secure: bool) -> Self {
         AuthService {
             allow_register,
             secret: secret.into(),
+            cookie_secure,
         }
+    }
+
+    /// `Set-Cookie` header value that persists `token` in the session
+    /// cookie (HttpOnly + SameSite=Lax; the token is a 7-day JWT).
+    pub fn set_token_cookie(&self, token: &str) -> HeaderValue {
+        let secure = if self.cookie_secure { "; Secure" } else { "" };
+        HeaderValue::from_str(&format!(
+            "{TOKEN_COOKIE}={token}; Path=/; Max-Age={TOKEN_TTL_SECS}; HttpOnly; SameSite=Lax{secure}"
+        ))
+        .expect("JWT is a valid cookie value")
+    }
+
+    /// `Set-Cookie` header value that clears the session cookie (logout).
+    pub fn clear_token_cookie(&self) -> HeaderValue {
+        let secure = if self.cookie_secure { "; Secure" } else { "" };
+        HeaderValue::from_str(&format!(
+            "{TOKEN_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax{secure}"
+        ))
+        .expect("static cookie value")
     }
 
     pub fn allow_register(&self) -> bool {
@@ -85,9 +112,13 @@ impl AuthService {
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e)))
     }
 
-    /// Resolve the current user from the Authorization header.
+    /// Resolve the current user from the Authorization header, falling
+    /// back to the session cookie (so a page refresh keeps the login).
     pub async fn require_user(&self, headers: &HeaderMap, db: &DieselDb) -> Result<User, ApiError> {
-        let token = bearer(headers).ok_or(ApiError::Unauthorized)?;
+        let token = bearer(headers)
+            .map(|t| t.to_string())
+            .or_else(|| cookie_token(headers))
+            .ok_or(ApiError::Unauthorized)?;
         let data = decode::<Claims>(
             token,
             &DecodingKey::from_secret(self.secret.as_bytes()),
@@ -122,4 +153,17 @@ fn bearer(headers: &HeaderMap) -> Option<&str> {
         .strip_prefix("Bearer ")
         .map(str::trim)
         .filter(|s| !s.is_empty())
+}
+
+/// The session cookie value (`bookshelf_token=…`) from the `Cookie`
+/// header, if present.
+fn cookie_token(headers: &HeaderMap) -> Option<String> {
+    let cookie = headers.get(axum::http::header::COOKIE)?.to_str().ok()?;
+    for pair in cookie.split(';') {
+        let (k, v) = pair.trim().split_once('=')?;
+        if k == TOKEN_COOKIE && !v.is_empty() {
+            return Some(v.to_string());
+        }
+    }
+    None
 }

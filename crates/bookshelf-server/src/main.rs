@@ -96,7 +96,7 @@ async fn main() -> anyhow::Result<()> {
         Err(e) => tracing::warn!(error = %e, "startup plugin sync failed"),
     }
 
-    let auth = auth::AuthService::new(cfg.allow_register, &cfg.jwt_secret);
+    let auth = auth::AuthService::new(cfg.allow_register, &cfg.jwt_secret, cfg.cookie_secure);
     let state = Arc::new(AppState {
         cfg: cfg.clone(),
         diesel_db,

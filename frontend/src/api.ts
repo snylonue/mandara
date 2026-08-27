@@ -24,7 +24,11 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (!(init.body instanceof FormData)) headers["Content-Type"] = "application/json";
   const token = getToken();
   if (token) headers["Authorization"] = `Bearer ${token}`;
-  const res = await fetch(`/api${path}`, { ...init, headers });
+  // Same-origin requests (dev proxy / served dist) automatically carry
+  // the session cookie; without it the server falls back to the
+  // Authorization header. `credentials: "include"` makes the cookie
+  // explicit for the XHR/fetch path.
+  const res = await fetch(`/api${path}`, { ...init, headers, credentials: "include" });
   if (!res.ok) {
     let msg = res.statusText;
     let details: unknown;
@@ -51,7 +55,7 @@ export async function downloadBinary(path: string, filename: string): Promise<vo
   const headers: Record<string, string> = {};
   const token = getToken();
   if (token) headers["Authorization"] = `Bearer ${token}`;
-  const res = await fetch(`/api${path}`, { headers });
+  const res = await fetch(`/api${path}`, { headers, credentials: "include" });
   if (!res.ok) throw new Error(res.statusText);
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);

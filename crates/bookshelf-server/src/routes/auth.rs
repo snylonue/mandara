@@ -2,7 +2,8 @@
 
 use axum::Json;
 use axum::extract::State;
-use axum::http::HeaderMap;
+use axum::http::header::{HeaderMap, SET_COOKIE};
+use axum::http::{HeaderValue, StatusCode};
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 
@@ -30,6 +31,14 @@ pub struct Credentials {
 pub struct AuthResponse {
     pub token: String,
     pub user: User,
+}
+
+impl AuthResponse {
+    /// The response tuple with the session-cookie header attached.
+    fn with_cookie(self, st: &St) -> ([(axum::http::HeaderName, HeaderValue); 1], Json<Self>) {
+        let cookie = st.auth.set_token_cookie(&self.token);
+        ([(SET_COOKIE, cookie)], Json(self))
+    }
 }
 
 pub async fn register(
@@ -88,7 +97,7 @@ pub async fn register(
         },
     };
     let token = st.auth.issue_token(&user)?;
-    Ok(Json(AuthResponse { token, user }))
+    Ok(AuthResponse { token, user }.with_cookie(&st))
 }
 
 pub async fn login(
@@ -122,7 +131,20 @@ pub async fn login(
     }
     .into_model()?;
     let token = st.auth.issue_token(&user)?;
-    Ok(Json(AuthResponse { token, user }))
+    Ok(AuthResponse { token, user }.with_cookie(&st))
+}
+
+// POST /api/auth/logout ------------------------------------------------------
+//
+// Stateless JWT: there is no server-side session to invalidate — logout
+// only clears the session cookie. Clients using the Bearer header simply
+// drop the token.
+
+pub async fn logout(State(st): State<St>) -> impl IntoResponse {
+    (
+        [(SET_COOKIE, st.auth.clear_token_cookie())],
+        StatusCode::NO_CONTENT,
+    )
 }
 
 pub async fn me(State(st): State<St>, headers: HeaderMap) -> Result<impl IntoResponse, ApiError> {
