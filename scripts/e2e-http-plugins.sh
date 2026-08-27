@@ -27,7 +27,7 @@ for arg in "$@"; do
 done
 
 PORT=8765
-BASE=http://127.0.0.1:8080
+BASE=http://127.0.0.1:8870
 TOKEN=""  # set by the bootstrap step below (set -u)
 DB=data/e2e-http.db
 SERVER_LOG=/tmp/e2e-http-server.log
@@ -75,6 +75,7 @@ start_server() {
     rm -f "$DB"
     BOOKSHELF_DB="$DB" \
     BOOKSHELF_PLUGINS_DIR="$PWD/plugins-built" \
+    BOOKSHELF_ADDR="127.0.0.1:8870" \
     nohup target/debug/bookshelf-server > "$SERVER_LOG" 2>&1 &
     echo $! > /tmp/e2e-http-server.pid
     for i in $(seq 1 30); do
