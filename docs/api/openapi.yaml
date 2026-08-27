@@ -99,10 +99,15 @@ paths:
   /api/auth/me:
     get:
       tags: [auth]
-      summary: Current user
+      summary: Current user (Authorization header or session cookie)
       operationId: me
       security:
         - bearerAuth: []
+      description: |
+        The authenticated user. Accepts the JWT via `Authorization:
+        Bearer …` or via the `bookshelf_token` session cookie (set on
+        register/login) — the cookie keeps the login alive across page
+        refreshes.
       responses:
         "200":
           description: The authenticated user
@@ -112,6 +117,17 @@ paths:
                 $ref: "#/components/schemas/User"
         "401":
           $ref: "#/components/responses/Unauthorized"
+
+  /api/auth/logout:
+    post:
+      tags: [auth]
+      summary: "Clear the session cookie (stateless JWT: nothing else to invalidate)"
+      operationId: logout
+      security:
+        - bearerAuth: []
+      responses:
+        "204":
+          description: Session cookie cleared
 
   /api/plugins:
     get:

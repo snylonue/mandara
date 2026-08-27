@@ -62,10 +62,33 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Current user */
+        /**
+         * Current user (Authorization header or session cookie)
+         * @description The authenticated user. Accepts the JWT via `Authorization:
+         *     Bearer …` or via the `bookshelf_token` session cookie (set on
+         *     register/login) — the cookie keeps the login alive across page
+         *     refreshes.
+         */
         get: operations["me"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Clear the session cookie (stateless JWT: nothing else to invalidate) */
+        post: operations["logout"];
         delete?: never;
         options?: never;
         head?: never;
@@ -341,10 +364,13 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Update metadata from the book's plugin source(s) (creator or
-         *     admin). Re-pulls title/authors/description/cover-url and refreshes
-         *     the plugin file's chapter titles; materialized chapter content is
-         *     never overwritten.
+         * Update metadata from the book's recorded metadata source (creator
+         *     or admin). Re-pulls title/authors/description/cover-url from that
+         *     source only and refreshes each plugin file's chapter titles from
+         *     its own content source; materialized chapter content is never
+         *     overwritten. A book whose metadata came from plugin A but holds
+         *     files from plugin B is refreshed without B ever overwriting A's
+         *     metadata.
          */
         post: operations["refreshBook"];
         delete?: never;
@@ -1257,6 +1283,24 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
+        };
+    };
+    logout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Session cookie cleared */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     listPlugins: {
