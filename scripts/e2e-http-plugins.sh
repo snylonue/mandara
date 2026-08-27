@@ -330,6 +330,22 @@ api POST "/api/books/$XPBOOK/refresh" | grep -q "旧书店的猫" || fail "refre
 api GET "/api/books/$XPBOOK" | grep -q "旧书店的猫" || fail "refresh overwrote the recorded metadata source"
 pass "cross-plugin: refresh pulls metadata only from the recorded source, never overwrites it"
 
+# --- metadata from a plugin + an uploaded file as the content -----------
+# The plugin supplies the metadata, the uploaded file the content. The
+# metadata-only wiki entry must NOT leave a spurious empty virtual file
+# behind — only the uploaded local file is attached (one metadata entry,
+# one file).
+FM=$(api_form /api/books "file=@/tmp/e2e-upload.txt" \
+    "meta_plugin_source=wiki" "meta_plugin_book_id=w-4" "visibility=public")
+FMBOOK=$(echo "$FM" | jq_field "d['books'][0]['book']['id']")
+[ "$(echo "$FM" | jq_field "len(d['books'][0]['files'])")" = "1" ] \
+    || fail "plugin-metadata + uploaded-file must produce exactly ONE file (the upload)"
+api GET "/api/books/$FMBOOK" | grep -q "云端咖啡馆" \
+    || fail "plugin-metadata + uploaded-file: title should come from wiki w-4"
+FM_SRC=$(api GET "/api/books/$FMBOOK" | jq_field "d['files'][0]['source']")
+[ "$FM_SRC" = "local" ] || fail "plugin-metadata + uploaded-file: the one file should be the local upload (got $FM_SRC)"
+pass "metadata-from-plugin + uploaded-file: one file (the upload), no spurious plugin file"
+
 rm -f /tmp/e2e-upload.txt
 
 echo ""

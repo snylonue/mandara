@@ -426,35 +426,41 @@ impl Library {
     /// identified as this plugin book, or a user picking the book from
     /// the source browser) and becomes the owner of a newly created
     /// virtual file.
-    async fn ensure_plugin_book(
+    /// Resolve/create the metadata entry for a plugin book (idempotent)
+    /// and keep it fresh from the source — WITHOUT creating any content
+    /// file. This is the metadata half of [`Self::ensure_plugin_book`],
+    /// decoupled from the content half so a book can take its metadata
+    /// from a plugin while its content comes from elsewhere (an uploaded
+    /// file or another plugin) without a spurious empty virtual file.
+    ///
+    /// Reuses an existing entry recorded for this plugin book
+    /// (`books.meta_source`/`meta_external_id`, the canonical record of
+    /// metadata provenance), claiming it as `owner` when it has no
+    /// creator yet. `owner` is `None` for ownerless startup syncs.
+    async fn resolve_plugin_metadata(
         &self,
-        source_id: &str,
+        source: &str,
         owner: Option<&str>,
         book: &SourceBook,
-        titles: &[String],
-    ) -> Result<(String, String), ApiError> {
+    ) -> Result<String, ApiError> {
         let authors = serde_json::to_string(&book.authors).unwrap_or_else(|_| "[]".into());
         let ext_json = source_ext_column(book.ext.as_ref())?;
 
-        // Reuse the metadata entry when this plugin file was synced
-        // before, otherwise create both the book metadata and its virtual
-        // file.
-        let existing: Option<String> = schema::book_files::table
+        let existing: Option<String> = schema::books::table
             .filter(
-                schema::book_files::source
-                    .eq(source_id)
-                    .and(schema::book_files::external_id.eq(&book.id)),
+                schema::books::meta_source
+                    .eq(source)
+                    .and(schema::books::meta_external_id.eq(&book.id)),
             )
-            .select(schema::book_files::book_id)
+            .select(schema::books::id)
+            .order(schema::books::created_at.asc())
             .first::<String>(&mut self.diesel_db.get().await?)
             .await
             .optional()?;
-
         let book_id = match existing {
             Some(book_id) => book_id,
             None => {
                 let book_id = uuid::Uuid::new_v4().simple().to_string();
-                let mut conn = self.diesel_db.get().await?;
                 diesel::insert_into(schema::books::table)
                     .values((
                         schema::books::id.eq(&book_id),
@@ -464,26 +470,11 @@ impl Library {
                         schema::books::cover_url.eq(&book.cover_url),
                         schema::books::ext_meta.eq(&ext_json),
                         // The metadata source is this plugin itself.
-                        schema::books::meta_source.eq(source_id),
+                        schema::books::meta_source.eq(source),
                         schema::books::meta_external_id.eq(&book.id),
                         schema::books::created_by.eq(owner),
                     ))
-                    .execute(&mut conn)
-                    .await?;
-                diesel::insert_into(schema::book_files::table)
-                    .values((
-                        schema::book_files::id.eq(uuid::Uuid::new_v4().simple().to_string()),
-                        schema::book_files::book_id.eq(&book_id),
-                        schema::book_files::source.eq(source_id),
-                        schema::book_files::external_id.eq(&book.id),
-                        schema::book_files::content_source.eq(&book.content_source),
-                        schema::book_files::content_external_id.eq(&book.content_id),
-                        schema::book_files::format.eq(FileFormat::Plugin.as_ref()),
-                        schema::book_files::visibility.eq("public"),
-                        schema::book_files::owner_id.eq(owner),
-                        schema::book_files::chapter_count.eq(titles.len() as i64),
-                    ))
-                    .execute(&mut conn)
+                    .execute(&mut self.diesel_db.get().await?)
                     .await?;
                 book_id
             }
@@ -512,6 +503,56 @@ impl Library {
                 .execute(&mut self.diesel_db.get().await?)
                 .await?;
         }
+        Ok(book_id)
+    }
+
+    /// Create/update the metadata entry and virtual file of a plugin
+    /// book (metadata via [`Self::resolve_plugin_metadata`], then the
+    /// content file — the plugin *is* the content source here).
+    /// Chapters/sessions don't exist yet; `titles` only fixes the
+    /// `chapter_count` (placeholder rows are ensured separately).
+    async fn ensure_plugin_book(
+        &self,
+        source_id: &str,
+        owner: Option<&str>,
+        book: &SourceBook,
+        titles: &[String],
+    ) -> Result<(String, String), ApiError> {
+        let book_id = self.resolve_plugin_metadata(source_id, owner, book).await?;
+
+        // Create the virtual content-file row when it doesn't exist yet.
+        let existing: Option<String> = schema::book_files::table
+            .filter(
+                schema::book_files::source
+                    .eq(source_id)
+                    .and(schema::book_files::external_id.eq(&book.id)),
+            )
+            .select(schema::book_files::id)
+            .first::<String>(&mut self.diesel_db.get().await?)
+            .await
+            .optional()?;
+        let file_id = match existing {
+            Some(file_id) => file_id,
+            None => {
+                let file_id = uuid::Uuid::new_v4().simple().to_string();
+                diesel::insert_into(schema::book_files::table)
+                    .values((
+                        schema::book_files::id.eq(&file_id),
+                        schema::book_files::book_id.eq(&book_id),
+                        schema::book_files::source.eq(source_id),
+                        schema::book_files::external_id.eq(&book.id),
+                        schema::book_files::content_source.eq(&book.content_source),
+                        schema::book_files::content_external_id.eq(&book.content_id),
+                        schema::book_files::format.eq(FileFormat::Plugin.as_ref()),
+                        schema::book_files::visibility.eq("public"),
+                        schema::book_files::owner_id.eq(owner),
+                        schema::book_files::chapter_count.eq(titles.len() as i64),
+                    ))
+                    .execute(&mut self.diesel_db.get().await?)
+                    .await?;
+                file_id
+            }
+        };
         // Content indirection comes from the entry; the metadata instance
         // owns the `books` row, the content instance the chapters.
         diesel::update(
@@ -528,17 +569,29 @@ impl Library {
         ))
         .execute(&mut self.diesel_db.get().await?)
         .await?;
-
-        let file_id: String = schema::book_files::table
-            .filter(
-                schema::book_files::source
-                    .eq(source_id)
-                    .and(schema::book_files::external_id.eq(&book.id)),
-            )
-            .select(schema::book_files::id)
-            .first(&mut self.diesel_db.get().await?)
-            .await?;
         Ok((book_id, file_id))
+    }
+
+    /// Apply user-supplied metadata overrides on top of a produced entry
+    /// (title/authors/description/cover/ext). No-op when empty.
+    async fn apply_overrides(
+        &self,
+        book_id: &str,
+        overrides: &MetadataOverrides,
+    ) -> Result<(), ApiError> {
+        if overrides.is_empty() {
+            return Ok(());
+        }
+        self.update_book(
+            book_id,
+            overrides.title.as_deref(),
+            overrides.description.as_deref(),
+            overrides.authors.as_ref(),
+            overrides.cover_url.as_deref(),
+            overrides.ext.as_ref(),
+        )
+        .await?;
+        Ok(())
     }
 
     /// Store declared chapter rows (title + body, eager for non-empty
@@ -793,51 +846,12 @@ impl Library {
                 },
             ) => {
                 let entry = self.plugin_book_entry(source, book_id_in_source).await?;
-                // Idempotent: if the book already has content, reuse its
-                // metadata entry instead of creating a duplicate.
-                let existing: Option<String> = schema::book_files::table
-                    .filter(
-                        schema::book_files::source
-                            .eq(source)
-                            .and(schema::book_files::external_id.eq(&entry.id)),
-                    )
-                    .select(schema::book_files::book_id)
-                    .first(&mut self.diesel_db.get().await?)
-                    .await
-                    .optional()?;
-                let book_id = match existing {
-                    Some(book_id) => book_id,
-                    None => {
-                        let ext = entry
-                            .ext
-                            .as_ref()
-                            .map(|v| BookExt::from_value(v.clone()))
-                            .transpose()
-                            .map_err(ApiError::bad_request)?;
-                        self.create_metadata_entry(
-                            &entry.title,
-                            &entry.authors,
-                            entry.description.as_deref(),
-                            entry.cover_url.as_deref(),
-                            ext.as_ref(),
-                            Some(source),
-                            Some(book_id_in_source),
-                            &user.id,
-                        )
-                        .await?
-                    }
-                };
-                if !overrides.is_empty() {
-                    self.update_book(
-                        &book_id,
-                        overrides.title.as_deref(),
-                        overrides.description.as_deref(),
-                        overrides.authors.as_ref(),
-                        overrides.cover_url.as_deref(),
-                        overrides.ext.as_ref(),
-                    )
+                // Idempotent metadata-only entry (no content file), reused
+                // when the plugin book already lives in the library.
+                let book_id = self
+                    .resolve_plugin_metadata(source, Some(&user.id), &entry)
                     .await?;
-                }
+                self.apply_overrides(&book_id, overrides).await?;
                 (book_id, None)
             }
 
@@ -958,17 +972,7 @@ impl Library {
                     }
                 };
                 // Manual overrides refine the metadata on both paths.
-                if !overrides.is_empty() {
-                    self.update_book(
-                        &book_id,
-                        overrides.title.as_deref(),
-                        overrides.description.as_deref(),
-                        overrides.authors.as_ref(),
-                        overrides.cover_url.as_deref(),
-                        overrides.ext.as_ref(),
-                    )
-                    .await?;
-                }
+                self.apply_overrides(&book_id, overrides).await?;
                 self.attach_plugin_file(content_source, Some(&user.id), &content_entry, &book_id)
                     .await?;
                 let file = self
@@ -977,7 +981,11 @@ impl Library {
                 (book_id, Some(file))
             }
 
-            // ---- metadata from a named plugin source (file / none) ------
+            // ---- metadata from a named plugin source + an uploaded file -
+            // The plugin supplies the metadata, the uploaded file the
+            // content. Only the metadata entry is resolved (no virtual
+            // file — the file is the content), so a metadata-only source
+            // never leaves a spurious empty plugin file behind.
             (
                 content,
                 AcquireMetadata::Plugin {
@@ -987,41 +995,21 @@ impl Library {
                 },
             ) => {
                 let entry = self.plugin_book_entry(source, book_id_in_source).await?;
-                let (content_inst, content_id) = self.plugins.content_target(source, &entry);
-                let titles = self
-                    .plugins
-                    .chapter_titles(content_inst, content_id)
+                let book_id = self
+                    .resolve_plugin_metadata(source, Some(&user.id), &entry)
                     .await?;
-                let (book_id, _) = self
-                    .ensure_plugin_book(source, Some(&user.id), &entry, &titles)
-                    .await?;
-                // User-provided fields correct the plugin metadata.
-                if !overrides.is_empty() {
-                    self.update_book(
-                        &book_id,
-                        overrides.title.as_deref(),
-                        overrides.description.as_deref(),
-                        overrides.authors.as_ref(),
-                        overrides.cover_url.as_deref(),
-                        overrides.ext.as_ref(),
+                self.apply_overrides(&book_id, overrides).await?;
+                let AcquireContent::File { bytes, filename } = content else {
+                    unreachable!("plugin content handled above; metadata-only earlier")
+                };
+                let mut parsed = bookshelf_formats::parse(bytes, filename)?;
+                ingest_parsed_book(&self.diesel_db, &self.files_dir, &mut parsed).await?;
+                let file = self
+                    .store_local_file(
+                        &parsed, bytes, &book_id, &user.id, filename, visibility, label,
                     )
                     .await?;
-                }
-                match content {
-                    AcquireContent::File { bytes, filename } => {
-                        let mut parsed = bookshelf_formats::parse(bytes, filename)?;
-                        ingest_parsed_book(&self.diesel_db, &self.files_dir, &mut parsed).await?;
-                        let file = self
-                            .store_local_file(
-                                &parsed, bytes, &book_id, &user.id, filename, visibility, label,
-                            )
-                            .await?;
-                        (book_id, Some(file))
-                    }
-                    AcquireContent::Plugin { .. } | AcquireContent::None => {
-                        unreachable!("plugin content handled above; metadata-only earlier")
-                    }
-                }
+                (book_id, Some(file))
             }
 
             // ---- new metadata from an uploaded file ---------------------
@@ -1080,21 +1068,27 @@ impl Library {
                 AcquireMetadata::New { overrides },
             ) => {
                 let entry = self.plugin_book_entry(source, book_id_in_source).await?;
-                if !self.plugin_book_has_content(source, &entry).await? {
+                // Does the source provide content? File mode (`book-file`
+                // capability) always; otherwise there must be chapter
+                // titles (fetched once, reused below — avoids a duplicate
+                // network call).
+                let has_content = if self.plugins.declares(source, "book-file").await? {
+                    true
+                } else {
+                    let (content_inst, content_id) = self.plugins.content_target(source, &entry);
+                    !self
+                        .plugins
+                        .chapter_titles(content_inst, content_id)
+                        .await?
+                        .is_empty()
+                };
+                if !has_content {
+                    // Metadata-only source: a bare metadata entry, no
+                    // virtual 0-chapter file.
                     let book_id = self
-                        .ensure_plugin_metadata_entry(user, source, &entry)
+                        .resolve_plugin_metadata(source, Some(&user.id), &entry)
                         .await?;
-                    if !overrides.is_empty() {
-                        self.update_book(
-                            &book_id,
-                            overrides.title.as_deref(),
-                            overrides.description.as_deref(),
-                            overrides.authors.as_ref(),
-                            overrides.cover_url.as_deref(),
-                            overrides.ext.as_ref(),
-                        )
-                        .await?;
-                    }
+                    self.apply_overrides(&book_id, overrides).await?;
                     (book_id, None)
                 } else {
                     let (content_inst, content_id) = self.plugins.content_target(source, &entry);
@@ -1105,17 +1099,7 @@ impl Library {
                     let (book_id, _) = self
                         .ensure_plugin_book(source, Some(&user.id), &entry, &titles)
                         .await?;
-                    if !overrides.is_empty() {
-                        self.update_book(
-                            &book_id,
-                            overrides.title.as_deref(),
-                            overrides.description.as_deref(),
-                            overrides.authors.as_ref(),
-                            overrides.cover_url.as_deref(),
-                            overrides.ext.as_ref(),
-                        )
-                        .await?;
-                    }
+                    self.apply_overrides(&book_id, overrides).await?;
                     let file = self
                         .materialize_plugin_content(source, &entry, &book_id)
                         .await?;
@@ -1183,50 +1167,6 @@ impl Library {
             .chapter_titles(content_inst, content_id)
             .await?;
         Ok(!titles.is_empty())
-    }
-
-    /// One plugin book = one library entry: reuse the existing metadata
-    /// entry when this plugin book was already acquired (by file or as a
-    /// metadata-only entry), otherwise create a bare metadata entry from
-    /// the plugin's `book-entry` (no virtual file). Returns the book id.
-    async fn ensure_plugin_metadata_entry(
-        &self,
-        user: &User,
-        source: &str,
-        entry: &SourceBook,
-    ) -> Result<String, ApiError> {
-        // Idempotent: reuse the entry when this plugin book already lives
-        // in the library (materialized or metadata-only).
-        let existing: Option<String> = schema::book_files::table
-            .filter(
-                schema::book_files::source
-                    .eq(source)
-                    .and(schema::book_files::external_id.eq(&entry.id)),
-            )
-            .select(schema::book_files::book_id)
-            .first(&mut self.diesel_db.get().await?)
-            .await
-            .optional()?;
-        if let Some(book_id) = existing {
-            return Ok(book_id);
-        }
-        let ext = entry
-            .ext
-            .as_ref()
-            .map(|v| BookExt::from_value(v.clone()))
-            .transpose()
-            .map_err(ApiError::bad_request)?;
-        self.create_metadata_entry(
-            &entry.title,
-            &entry.authors,
-            entry.description.as_deref(),
-            entry.cover_url.as_deref(),
-            ext.as_ref(),
-            Some(source),
-            Some(&entry.id),
-            &user.id,
-        )
-        .await
     }
 
     /// Multi-volume plugin acquisition (series split). Returns `Some`
