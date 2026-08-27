@@ -84,7 +84,7 @@
   "book": {
     "filesTitle": "文件版本（{{count}}）",
     "noFiles": "该书没有文件",
-    "attachTitle": "添加文件到本书",
+    "attachTitle": "添加内容到本书",
     "attachPlaceholder": "备注（如：epub 精校版）",
     "attachVisibility": "可见性",
     "attach": "上传文件 (epub/txt)",
@@ -143,7 +143,14 @@
     "seriesSaved": "系列信息已更新",
     "editInfo": "编辑信息",
     "editInfoTitle": "编辑扩展信息",
-    "extSaved": "扩展信息已更新"
+    "extSaved": "扩展信息已更新",
+    "attachOpen": "添加内容",
+    "attachUploadHint": "选择一个本地 epub/txt 文件作为本书的另一个版本；或切换到「从插件源」拉取插件书籍内容。",
+    "attachPluginPicked": "已选用《{{title}}》（{{plugin}}），将作为本书的一个新版本加入。",
+    "attachConfirm": "添加此内容",
+    "attachedPlugin": "已添加《{{title}}》到本书。",
+    "attachNoFile": "未能添加内容（没有生成文件）。",
+    "seriesTitlePlaceholder": "系列名称"
   },
   "reader": {
     "prev": "上一章",
@@ -230,7 +237,9 @@
     "moveUp": "上移",
     "moveDown": "下移",
     "remove": "移出",
-    "noUnassigned": "没有可加入系列的书籍（书籍不在任何系列中，且由你管理）。"
+    "noUnassigned": "没有可加入系列的书籍（书籍不在任何系列中，且由你管理）。",
+    "create": "新建系列",
+    "created": "已创建系列《{{title}}》"
   },
   "ext": {
     "subtitle": "副标题",

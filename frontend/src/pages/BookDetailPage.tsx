@@ -17,10 +17,12 @@ import { ExtMetaForm, ExtMetaTable, extMergePatch, type ExtRecord } from "../com
 import { useToast } from "../components/toast";
 import {
   SourceBrowserDialog,
+  SourceSearchPane,
   usePluginInstances,
   type SourcePick,
 } from "../components/SourceSearch";
 import type {
+  AcquireResult,
   BookDetail,
   BookMeta,
   FileMeta,
@@ -266,6 +268,7 @@ export function BookDetailPage() {
   const { t } = useTranslation();
   const { user } = useAuth();
   const toast = useToast();
+  const instances = usePluginInstances();
   const [detail, setDetail] = useState<BookDetail | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [share, setShare] = useState<ShareInfo | null>(null);
@@ -280,6 +283,11 @@ export function BookDetailPage() {
   const [extDraft, setExtDraft] = useState<ExtRecord>({});
   const [extSaving, setExtSaving] = useState(false);
   const attachRef = { current: null as HTMLInputElement | null };
+  // Unified "add a file to this book" dialog: upload tab + plugin tab.
+  const [attachOpen, setAttachOpen] = useState(false);
+  const [attachTab, setAttachTab] = useState<"upload" | "plugin">("upload");
+  const [attachPluginPick, setAttachPluginPick] = useState<SourcePick | null>(null);
+  const [attachBusy, setAttachBusy] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -313,6 +321,37 @@ export function BookDetailPage() {
       setAttaching(false);
       if (attachRef.current) attachRef.current.value = "";
     }
+  }
+
+  /** Attach a plugin book's content to this metadata entry. The unified
+   *  acquisition endpoint handles `book_id` (attach) + plugin content. */
+  async function attachPlugin(pick: SourcePick) {
+    setAttachBusy(true);
+    try {
+      const form = new FormData();
+      form.append("book_id", id);
+      form.append("plugin_source", pick.instance.id);
+      form.append("plugin_book_id", pick.item.id);
+      form.append("visibility", attachVisibility);
+      if (attachLabel.trim()) form.append("label", attachLabel.trim());
+      const result = await api<AcquireResult>("/books", { method: "POST", body: form });
+      const file = result.books[0]?.files[0];
+      if (!file) throw new Error(t("book.attachNoFile"));
+      setAttachLabel("");
+      setAttachPluginPick(null);
+      toast.push("success", t("book.attachedPlugin", { title: pick.item.title }));
+      await load();
+    } catch (err) {
+      toast.push("error", err instanceof Error ? err.message : t("book.attachFailed"));
+    } finally {
+      setAttachBusy(false);
+    }
+  }
+
+  function closeAttachDialog() {
+    setAttachOpen(false);
+    setAttachPluginPick(null);
+    setAttachTab("upload");
   }
 
   /** Create a share for a specific file (book link) or its session. */
@@ -614,8 +653,8 @@ export function BookDetailPage() {
               <option value="private">{t("book.privateTag")}</option>
               <option value="public">{t("book.publicTag")}</option>
             </select>
-            <button className="primary" disabled={attaching} onClick={() => attachRef.current?.click()}>
-              {attaching ? t("library.uploading") : t("book.attach")}
+            <button className="primary" onClick={() => setAttachOpen(true)}>
+              {t("book.attachOpen")}
             </button>
             <input
               ref={(el) => {
@@ -629,6 +668,95 @@ export function BookDetailPage() {
           </div>
         </div>
       </section>
+
+      {/* Unified attach dialog: upload a file or pull content from a
+          plugin source (metadata stays on this book). */}
+      <Modal
+        open={attachOpen}
+        onClose={closeAttachDialog}
+        title={t("book.attachTitle")}
+        wide
+      >
+        <div className="row">
+          <label className="radio">
+            <input
+              type="radio"
+              checked={attachTab === "upload"}
+              onChange={() => setAttachTab("upload")}
+            />
+            {t("library.tabUpload")}
+          </label>
+          <label className="radio">
+            <input
+              type="radio"
+              checked={attachTab === "plugin"}
+              onChange={() => setAttachTab("plugin")}
+            />
+            {t("library.tabPlugin")}
+          </label>
+        </div>
+
+        {attachTab === "upload" && (
+          <div className="field">
+            <p className="hint">{t("book.attachUploadHint")}</p>
+            <button
+              className="file-picker"
+              disabled={attaching}
+              onClick={() => attachRef.current?.click()}
+            >
+              {attaching ? t("library.uploading") : t("book.attach")}
+            </button>
+            <input
+              ref={(el) => {
+                attachRef.current = el;
+              }}
+              type="file"
+              accept=".epub,.txt,.text"
+              hidden
+              onChange={(e) => {
+                void attach(e);
+                setAttachOpen(false);
+              }}
+            />
+          </div>
+        )}
+
+        {attachTab === "plugin" && (
+          <div className="field">
+            <SourceSearchPane
+              instances={instances}
+              filter={(i) =>
+                i.enabled &&
+                (i.capabilities.includes("content") ||
+                  i.capabilities.includes("book-file"))
+              }
+              pickLabel={() => t("book.useAsContentSource")}
+              onPick={(pick) => {
+                setAttachPluginPick(pick);
+              }}
+            />
+            {attachPluginPick && (
+              <p className="hint">
+                {t("book.attachPluginPicked", {
+                  title: attachPluginPick.item.title,
+                  plugin: attachPluginPick.instance.name,
+                })}
+              </p>
+            )}
+          </div>
+        )}
+
+        <div className="modal-actions">
+          <button onClick={closeAttachDialog}>{t("library.cancel")}</button>
+          <button
+            className="primary"
+            disabled={!attachPluginPick || attachBusy}
+            onClick={() => attachPluginPick && void attachPlugin(attachPluginPick)}
+          >
+            {attachBusy ? t("library.uploading") : t("book.attachConfirm")}
+          </button>
+        </div>
+      </Modal>
 
       {/* Series membership control (creator/admin of the book). */}
       <Modal
