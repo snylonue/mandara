@@ -4,9 +4,7 @@ import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { useAuth } from "../auth";
 import { BookCover } from "../components/BookCover";
-import { AddBookDialog } from "../components/AddBookDialog";
-import { ExtMetaForm, type ExtRecord } from "../components/ExtMetaForm";
-import { Modal } from "../components/Modal";
+import { AddDialog, type AddMode } from "../components/AddDialog";
 import { useToast } from "../components/toast";
 import { usePluginInstances } from "../components/SourceSearch";
 import type { BookListEntry, BookMeta, SeriesBrief } from "../types";
@@ -84,11 +82,9 @@ export function LibraryPage() {
   const toast = useToast();
   const [entries, setEntries] = useState<BookListEntry[] | null>(null);
   const [q, setQ] = useState("");
-  // The single add-book dialog (获取书籍 → 添加元数据) covering uploads
-  // and plugin sources alike.
+  // The unified add dialog (添加书籍 / 新建系列 → 一个对话框).
   const [addOpen, setAddOpen] = useState(false);
-  // Create-series dialog.
-  const [createSeriesOpen, setCreateSeriesOpen] = useState(false);
+  const [addMode, setAddMode] = useState<AddMode>("book");
 
   const load = useCallback(async (query: string) => {
     try {
@@ -131,10 +127,21 @@ export function LibraryPage() {
             {t("library.adminHint")}
           </span>
         )}
-        <button className="primary" onClick={() => setAddOpen(true)}>
+        <button
+          className="primary"
+          onClick={() => {
+            setAddMode("book");
+            setAddOpen(true);
+          }}
+        >
           {t("library.addBook")}
         </button>
-        <button onClick={() => setCreateSeriesOpen(true)}>
+        <button
+          onClick={() => {
+            setAddMode("series");
+            setAddOpen(true);
+          }}
+        >
           {t("series.create")}
         </button>
       </div>
@@ -174,116 +181,19 @@ export function LibraryPage() {
         </div>
       )}
 
-      <AddBookDialog
+      <AddDialog
         open={addOpen}
         onClose={() => setAddOpen(false)}
         instances={instances}
+        initialMode={addMode}
         onAdded={() => {
           setQ("");
           void load("");
         }}
-      />
-
-      <CreateSeriesDialog
-        open={createSeriesOpen}
-        onClose={() => setCreateSeriesOpen(false)}
-        onCreated={(s) => {
-          setCreateSeriesOpen(false);
-          toast.push("success", t("series.created", { title: s.title }));
+        onSeriesCreated={(s) => {
           navigate(`/series/${s.id}`);
         }}
       />
     </div>
   );
-}
-
-/// Create a series: title required, optional authors/description/extended
-/// metadata. The creator manages the series (add/move/remove books).
-function CreateSeriesDialog({
-  open,
-  onClose,
-  onCreated,
-}: {
-  open: boolean;
-  onClose: () => void;
-  onCreated: (s: SeriesBrief) => void;
-}) {
-  const { t } = useTranslation();
-  const [title, setTitle] = useState("");
-  const [authors, setAuthors] = useState("");
-  const [description, setDescription] = useState("");
-  const [ext, setExt] = useState<ExtRecord>({});
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (open) {
-      setTitle("");
-      setAuthors("");
-      setDescription("");
-      setExt({});
-      setError(null);
-    }
-  }, [open]);
-
-  async function submit() {
-    if (!title.trim()) {
-      setError(t("library.manualNeedsTitle"));
-      return;
-    }
-    setSaving(true);
-    setError(null);
-    try {
-      const body: Record<string, unknown> = { title: title.trim() };
-      if (authors.trim()) body.authors = splitAuthors(authors);
-      if (description.trim()) body.description = description.trim();
-      if (Object.keys(ext).length > 0) body.ext = ext;
-      const s = await api<SeriesBrief>("/series", {
-        method: "POST",
-        body: JSON.stringify(body),
-      });
-      onCreated(s);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t("common.failed_verb"));
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <Modal open={open} onClose={onClose} title={t("series.create")}>
-      <div className="field">
-        <input
-          placeholder={t("book.seriesTitlePlaceholder")}
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-        />
-        <input
-          placeholder={t("library.authorsPlaceholder")}
-          value={authors}
-          onChange={(e) => setAuthors(e.target.value)}
-        />
-        <textarea
-          placeholder={t("library.descriptionPlaceholder")}
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-        />
-        <ExtMetaForm kind="series" value={ext} onChange={setExt} />
-      </div>
-      {error && <div className="error">{error}</div>}
-      <div className="modal-actions">
-        <button onClick={onClose}>{t("library.cancel")}</button>
-        <button className="primary" disabled={saving} onClick={() => void submit()}>
-          {saving ? t("library.uploading") : t("series.create")}
-        </button>
-      </div>
-    </Modal>
-  );
-}
-
-function splitAuthors(raw: string): string[] {
-  return raw
-    .split(/[,，]/)
-    .map((s) => s.trim())
-    .filter(Boolean);
 }

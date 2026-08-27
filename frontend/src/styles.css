@@ -1790,6 +1790,33 @@ button.active {
   cursor: pointer;
 }
 
+/* Per-content-item rows in the add dialog: name/source + per-item file
+   settings (visibility + label). */
+.file-item-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  padding: 0.5rem 0.6rem 0;
+  flex-wrap: wrap;
+}
+
+.file-item-head .strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.item-settings {
+  padding: 0.3rem 0.6rem 0.6rem;
+}
+
+.item-settings select,
+.item-settings input {
+  min-width: 0;
+  flex: 1;
+}
+
 /* ---- extended metadata (docs/metadata-ext-design.md) -------------------- */
 
 .ext-table {
