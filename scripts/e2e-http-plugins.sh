@@ -255,6 +255,30 @@ api GET /api/series | grep -q "$SERIES_ID" || fail "created series not listed in
 api GET "/api/series/$SERIES_ID" | grep -q "第一卷 相遇" || fail "series detail misses the volume-title label"
 api GET "/api/files/$F2" | grep -q "第二卷 觉醒" || fail "volume 2 file label should carry its volume title"
 pass "series list/detail + volume labels"
+
+# --- multi-volume is the METADATA source's responsibility ---------------
+# wiki w-9 is a multi-volume METADATA entry (declares 2 卷 over reader
+# r-8's 3 chapters); the content source reader r-8 declares NO volumes.
+# The split must be driven by the metadata entry's volumes — looking at the
+# content source's (empty) volume list would wrongly collapse w-9 into one
+# book.
+SPLITW=$(api_form /api/books "plugin_source=reader" "plugin_book_id=r-8" \
+    "meta_plugin_source=wiki" "meta_plugin_book_id=w-9" "visibility=public")
+SERIESW=$(echo "$SPLITW" | jq_field "d['series']['id']")
+[ -n "$SERIESW" ] || fail "metadata-driven multi-volume: no series created"
+NW=$(echo "$SPLITW" | jq_field "len(d['books'])")
+[ "$NW" = "2" ] || fail "metadata-driven multi-volume: expected 2 books (metadata source declares 2 卷), got $NW"
+W1C=$(echo "$SPLITW" | jq_field "d['books'][0]['files'][0]['chapter_count']")
+W2C=$(echo "$SPLITW" | jq_field "d['books'][1]['files'][0]['chapter_count']")
+[ "$W1C" = "1" ] && [ "$W2C" = "2" ] || fail "metadata-driven split counts $W1C/$W2C (expected 1/2 from wiki volumes)"
+W2F=$(echo "$SPLITW" | jq_field "d['books'][1]['files'][0]['id']")
+W2OFF=$(echo "$SPLITW" | jq_field "d['books'][1]['files'][0]['volume_offset']")
+[ "$W2OFF" = "1" ] || fail "metadata-driven vol2 flat offset=$W2OFF (expected 1)"
+# content still comes from reader r-8 (vol2 ch0 = source's flat ch1)
+api GET "/api/files/$W2F/chapters/0" | grep -q "第二章 无名的守印人" \
+    || fail "metadata-driven split: vol2 ch0 should be reader r-8's 第二章 无名的守印人"
+pass "multi-volume split driven by the metadata source (wiki w-9), content from reader r-8"
+
 # manual series management (uploads): create, assign with a volume number,
 # reorder via PUT members, unassign, delete
 MS=$(api POST /api/series '{"title":"测试系列","authors":["某作者"]}')

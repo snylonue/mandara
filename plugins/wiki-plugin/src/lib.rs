@@ -109,6 +109,20 @@ struct JsonEntry {
     content_source: Option<String>,
     #[serde(default)]
     content_id: Option<String>,
+    /// Multi-volume structure (WIT volume-info), when the metadata source
+    /// declares it — the host splits acquisition into one book per 卷.
+    /// Multi-volume is the METADATA source's responsibility, so a metadata
+    /// source relays its own 卷 structure here independent of the content
+    /// source's book.
+    #[serde(default)]
+    volumes: Option<Vec<JsonVolume>>,
+}
+
+#[derive(serde::Deserialize)]
+struct JsonVolume {
+    title: String,
+    #[serde(rename = "chapter-count")]
+    chapter_count: u32,
 }
 
 impl From<JsonEntry> for BookEntry {
@@ -122,7 +136,14 @@ impl From<JsonEntry> for BookEntry {
             extra: None,
             content_source: e.content_source,
             content_id: e.content_id,
-            volumes: None,
+            volumes: e.volumes.map(|vs| {
+                vs.into_iter()
+                    .map(|v| VolumeInfo {
+                        title: v.title,
+                        chapter_count: v.chapter_count,
+                    })
+                    .collect()
+            }),
         }
     }
 }

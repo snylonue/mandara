@@ -46,6 +46,13 @@ WIKI_BOOKS = [
     ("w-6", "时间旅人的信", ["迟舟"], "寄信人来自明天。", "r-6"),
     ("w-7", "深海广播", ["韩潮"], "马里亚纳海沟下的电台信号。", "r-7"),
     ("w-8", "第七封印物语", ["陆离"], "第七道封印之后，世界安静得不像话。", "r-8"),
+    # w-9: a multi-volume METADATA source. The 卷 structure is declared by
+    # the metadata source (wiki), NOT by the content source: it points at
+    # the single-volume reader r-8 for content, but declares two 卷 itself.
+    # The host must split by the metadata entry's volumes, not the content
+    # entry's (r-8 declares none) — otherwise w-9 would collapse into one
+    # book. (Multi-volume split is the metadata source's responsibility.)
+    ("w-9", "星海拾遗·外传", ["洛离"], "两卷合一的外传（卷结构由元数据源声明）。", "r-8"),
 ]
 
 READER_BOOKS = [
@@ -70,6 +77,17 @@ READER_VOLUMES = {
     ],
 }
 
+# Declared volume structure of multi-volume METADATA entries (WIT
+# volume-info). The metadata source declares its 卷; the content source
+# only supplies the flat chapter stream for each volume's slice. Here
+# w-9 declares two 卷 over reader r-8's three chapters.
+WIKI_VOLUMES = {
+    "w-9": [
+        {"title": "第一卷 相遇", "chapter-count": 1},
+        {"title": "第二卷 觉醒", "chapter-count": 2},
+    ],
+}
+
 
 def chapter_text(book_id: str, title: str) -> str:
     return (
@@ -82,7 +100,7 @@ def chapter_text(book_id: str, title: str) -> str:
 
 def wiki_entry(book, site: str):
     wid, title, authors, desc, reader_id = book
-    return {
+    entry = {
         "id": wid,
         "title": title,
         "authors": authors,
@@ -91,6 +109,13 @@ def wiki_entry(book, site: str):
         "content_source": "reader",
         "content_id": reader_id,
     }
+    # The metadata source declares its own 卷 structure (multi-volume is
+    # the metadata source's responsibility, independent of the content
+    # source's book structure).
+    volumes = WIKI_VOLUMES.get(wid)
+    if volumes is not None:
+        entry["volumes"] = volumes
+    return entry
 
 
 def reader_entry(book):

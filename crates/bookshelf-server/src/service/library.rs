@@ -1182,24 +1182,30 @@ impl Library {
     async fn try_split_acquire(
         &self,
         user: &User,
-        source: &str,
-        book_id_in_source: &str,
+        content_source: &str,
+        content_book_id: &str,
         metadata: &AcquireMetadata<'_>,
         visibility: Visibility,
         label: &str,
     ) -> Result<Option<AcquireOutcome>, ApiError> {
         let _ = label; // the volume's label is its volume title, not a user string
-        let entry = self.plugin_book_entry(source, book_id_in_source).await?;
-        if entry.volumes.len() <= 1 {
-            return Ok(None);
-        }
-        // The metadata base: the named plugin's entry when the metadata
-        // comes from a (possibly different) source, otherwise the
-        // content entry itself (auto mode). The pair records where the
-        // metadata came from on every created book row.
+        // The content entry is the flat chapter stream that gets sliced;
+        // the metadata base decides the 卷 structure. Multi-volume is the
+        // METADATA source's responsibility — the split is driven by the
+        // base entry's volumes, never the content entry's (a content
+        // source may declare none, e.g. a single-volume book serving one
+        // 卷 of a multi-volume metadata entry cross-plugin).
+        let content_entry = self
+            .plugin_book_entry(content_source, content_book_id)
+            .await?;
         let (base, overrides, meta_keys) = match metadata {
             AcquireMetadata::New { overrides } => {
-                (entry.clone(), overrides, (source, entry.id.as_str()))
+                // Self-describing form: metadata source == content source.
+                (
+                    content_entry.clone(),
+                    overrides,
+                    (content_source, content_entry.id.as_str()),
+                )
             }
             AcquireMetadata::Plugin {
                 source: meta_source,
@@ -1212,7 +1218,11 @@ impl Library {
             ),
             AcquireMetadata::Attach { .. } => unreachable!("guarded by the caller"),
         };
-        let (content_inst, content_id) = self.plugins.content_target(source, &entry);
+        if base.volumes.len() <= 1 {
+            return Ok(None);
+        }
+        let (content_inst, content_id) =
+            self.plugins.content_target(content_source, &content_entry);
         let titles = self
             .plugins
             .chapter_titles(content_inst, content_id)
@@ -1224,7 +1234,7 @@ impl Library {
         // attached later. Chapter-bearing sources use the real slice math.
         let maybe_slices = if titles.is_empty() {
             // One metadata-only book per declared volume.
-            let vols = entry
+            let vols = base
                 .volumes
                 .iter()
                 .enumerate()
@@ -1232,7 +1242,7 @@ impl Library {
                 .collect::<Vec<_>>();
             (vols.len() > 1).then_some(vols)
         } else {
-            volume_slices(&entry.volumes, titles.len() as u32)
+            volume_slices(&base.volumes, titles.len() as u32)
         };
         let Some(slices) = maybe_slices else {
             // Declared volumes collapsed (all empty, or fewer than two):
@@ -1245,8 +1255,8 @@ impl Library {
         let existing: Option<String> = schema::book_files::table
             .filter(
                 schema::book_files::source
-                    .eq(source)
-                    .and(schema::book_files::external_id.eq(&entry.id)),
+                    .eq(content_source)
+                    .and(schema::book_files::external_id.eq(&content_entry.id)),
             )
             .select(schema::book_files::book_id)
             .first(&mut self.diesel_db.get().await?)
@@ -1256,7 +1266,7 @@ impl Library {
             return Err(ApiError::Conflict(format!(
                 "plugin book `{}` is already in the library (as book `{existing_id}`); \
                  delete the existing entry first to re-acquire it split into volumes",
-                entry.id
+                content_entry.id
             )));
         }
 
@@ -1348,10 +1358,10 @@ impl Library {
                     .values((
                         schema::book_files::id.eq(&file_id),
                         schema::book_files::book_id.eq(&book_id),
-                        schema::book_files::source.eq(source),
-                        schema::book_files::external_id.eq(&entry.id),
-                        schema::book_files::content_source.eq(&entry.content_source),
-                        schema::book_files::content_external_id.eq(&entry.content_id),
+                        schema::book_files::source.eq(content_source),
+                        schema::book_files::external_id.eq(&content_entry.id),
+                        schema::book_files::content_source.eq(&content_entry.content_source),
+                        schema::book_files::content_external_id.eq(&content_entry.content_id),
                         schema::book_files::format.eq(FileFormat::Plugin.as_ref()),
                         schema::book_files::label.eq(&file_label),
                         schema::book_files::visibility.eq(visibility.as_ref()),
@@ -1380,10 +1390,10 @@ impl Library {
                 Some(FileMeta {
                     id: file_id,
                     book_id: book_id.clone(),
-                    source: source.to_string(),
-                    external_id: entry.id.clone(),
-                    content_source: entry.content_source.clone(),
-                    content_external_id: entry.content_id.clone(),
+                    source: content_source.to_string(),
+                    external_id: content_entry.id.clone(),
+                    content_source: content_entry.content_source.clone(),
+                    content_external_id: content_entry.content_id.clone(),
                     format: FileFormat::Plugin,
                     label: file_label,
                     visibility,
@@ -1427,8 +1437,8 @@ impl Library {
             created_at: chrono::Utc::now(),
         };
         info!(
-            source = %source,
-            book = %entry.id,
+            source = %content_source,
+            book = %content_entry.id,
             volumes = books.len(),
             series = %series.id,
             "acquired multi-volume plugin book as a series"
