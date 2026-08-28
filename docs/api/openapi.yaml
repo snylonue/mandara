@@ -443,6 +443,14 @@ paths:
         produced metadata (never applied when attaching). When the
         plugin source declares >1 volumes, the acquisition auto-splits
         into one series + one book per 卷 (the response carries them all).
+        The split is driven by the CONTENT source's own volume
+        declaration; the content source must declare its volume structure
+        (400 otherwise — an undeclared content source cannot be sliced
+        per volume) and may declare FEWER volumes than the metadata
+        source (metadata-only series entries, e.g. bangumi 系列, may list
+        not-yet-published volumes; those become metadata-only books with
+        no content). A content source declaring MORE volumes than the
+        metadata series is refused (400).
       operationId: uploadBook
       security:
         - bearerAuth: []

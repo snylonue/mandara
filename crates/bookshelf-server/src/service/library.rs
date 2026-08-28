@@ -30,6 +30,10 @@ use bookshelf_core::model::{
 };
 use bookshelf_core::source::{SourceBook, SourceBookFile, SourceChapter, SourceVolume};
 use bookshelf_core::{BookExt, SeriesExt};
+
+/// One volume slice of a multi-volume split: `(volume title, start,
+/// count)` into the content source's flat chapter list.
+type VolumeSlice = (String, u32, u32);
 use bookshelf_formats::ParsedBook;
 
 // `NULLIF(a, b)` — not built into Diesel's DSL; declared once so upsert
@@ -1024,11 +1028,19 @@ impl Library {
                          source instead"
                     )));
                 }
-                if content_entry.volumes.len() > 1 {
-                    return Err(ApiError::bad_request(
-                        "this plugin book spans several volumes but its volume slices are empty; \
-                         acquire it as a single-volume book instead",
-                    ));
+                // The multi-volume validations live in `split_plan`
+                // (which runs first); this single-book path is only
+                // reached when the metadata is effectively single-volume.
+                // A content source that itself declares multiple volumes
+                // here is incompatible — the metadata has no series to
+                // attach them to.
+                let content_vols = content_entry.volumes.len();
+                if content_vols > 1 {
+                    return Err(ApiError::bad_request(format!(
+                        "content source `{content_source}` declares {content_vols} volumes for \
+                         `{content_book_id}` but the metadata is single-volume; cannot attach \
+                         multi-volume content to one book"
+                    )));
                 }
                 Ok(PlannedFill::Plugin(self.plugin_fill(0)))
             }
@@ -1190,11 +1202,9 @@ impl Library {
         metadata: &AcquireMetadata<'_>,
     ) -> Result<Option<MetadataPlan>, ApiError> {
         // The content entry is the flat chapter stream that gets sliced;
-        // the metadata base (meta_entry) decides the 卷 structure.
-        // Multi-volume is the METADATA source's responsibility — the split
-        // is driven by the base entry's volumes, never the content entry's
-        // (a content source may declare none, e.g. a single-volume book
-        // serving one 卷 of a multi-volume metadata entry cross-plugin).
+        // the volume structure that drives the split comes from the
+        // CONTENT entry's own declaration, validated against the
+        // metadata entry's declaration (equal volume counts).
         let content_entry = self
             .plugin_book_entry(content_source, content_book_id)
             .await?;
@@ -1218,33 +1228,25 @@ impl Library {
             ),
             AcquireMetadata::Attach { .. } => unreachable!("guarded by the caller"),
         };
-        if base.volumes.len() <= 1 {
-            return Ok(None);
-        }
+        // The metadata source must declare the multi-volume structure
+        // for a split to happen at all; otherwise this is not a series
+        // the metadata source knows about. The volume validation and
+        // slicing live in `plan_volume_slices` (pure + unit-tested).
         let (content_inst, content_id) =
             self.plugins.content_target(content_source, &content_entry);
         let titles = self
             .plugins
             .chapter_titles(content_inst, content_id)
             .await?;
-        // Metadata-only sources (e.g. bangumi series subjects) declare
-        // their volumes but have no chapter content (`content` capability
-        // absent → empty titles). Treat each declared volume as a
-        // metadata-only book (no file) under the series — content can be
-        // attached later. Chapter-bearing sources use the real slice math.
-        let maybe_slices = if titles.is_empty() {
-            // One metadata-only book per declared volume.
-            let vols = base
-                .volumes
-                .iter()
-                .enumerate()
-                .map(|(i, v)| (v.title.clone(), i as u32, 0u32))
-                .collect::<Vec<_>>();
-            (vols.len() > 1).then_some(vols)
-        } else {
-            volume_slices(&base.volumes, titles.len() as u32)
-        };
-        let Some(slices) = maybe_slices else {
+        let slices = plan_volume_slices(
+            &base.volumes,
+            &content_entry.volumes,
+            titles.len() as u32,
+            meta_keys.1,
+            content_source,
+            content_book_id,
+        )?;
+        let Some(slices) = slices else {
             // Declared volumes collapsed (all empty, or fewer than two):
             // fall back to today's single-book acquisition.
             return Ok(None);
@@ -2988,6 +2990,89 @@ fn volume_slices(volumes: &[SourceVolume], total: u32) -> Option<Vec<(String, u3
     Some(out)
 }
 
+/// The volume-split plan for a multi-volume acquisition:
+///
+/// - a multi-volume metadata source requires the content source to
+///   declare volumes at all; an undeclared content source is refused;
+/// - the content source may declare FEWER volumes than the metadata
+///   source (the metadata series may list not-yet-published volumes,
+///   e.g. bangumi 系列条目); each missing volume becomes an empty
+///   (metadata-only) slice that the caller materializes as a book
+///   without content. More content volumes than metadata are refused;
+/// - per-volume chapter counts may differ (the content source's own
+///   counts drive the slices, so mismatches cannot misalign content);
+/// - the slices are cut along the CONTENT source's declared volumes,
+///   never the metadata source's.
+///
+/// `meta_vols` is the metadata source's declaration, `content_vols` the
+/// content source's, `flat_len` the length of the content source's flat
+/// `chapter_titles` list. Returns `Err` (400) on declaration violations,
+/// `Ok(None)` when the acquisition is effectively single-volume, and
+/// `Ok(Some(slices))` with one slice per METADATA volume (empty slices
+/// for volumes the content source does not cover).
+fn plan_volume_slices(
+    meta_vols: &[SourceVolume],
+    content_vols: &[SourceVolume],
+    flat_len: u32,
+    meta_book_id: &str,
+    content_source: &str,
+    content_book_id: &str,
+) -> Result<Option<Vec<VolumeSlice>>, ApiError> {
+    // The metadata source must declare the multi-volume structure for a
+    // split to happen at all.
+    if meta_vols.len() <= 1 {
+        return Ok(None);
+    }
+    // A multi-volume metadata source requires an undeclared content
+    // source to be refused: without a per-volume declaration the flat
+    // chapter list cannot be sliced.
+    if content_vols.len() <= 1 {
+        return Err(ApiError::bad_request(format!(
+            "metadata source declares {} volumes for `{meta_book_id}` but content source \
+             `{content_source}` does not declare the per-volume structure (book \
+             `{content_book_id}`); pick a content source that declares the same volumes",
+            meta_vols.len()
+        )));
+    }
+    // The content source may cover only the published volumes: its
+    // volume count must not EXCEED the metadata source's (bangumi 系列
+    // 条目 lists volumes that are not yet published).
+    if content_vols.len() > meta_vols.len() {
+        return Err(ApiError::bad_request(format!(
+            "metadata source declares {} volumes for `{meta_book_id}` but content source \
+             `{content_source}` declares {} volumes for `{content_book_id}`; the content \
+             covers more volumes than the metadata series",
+            meta_vols.len(),
+            content_vols.len()
+        )));
+    }
+    // Cut along the content source's own volumes. When the content
+    // source offers no chapters at all (flat_len == 0 — a metadata-only
+    // source like bangumi 系列条目), each declared volume still becomes
+    // a metadata-only book (no file), content attachable later.
+    let slices = if flat_len == 0 {
+        content_vols
+            .iter()
+            .map(|v| (v.title.clone(), 0u32, 0u32))
+            .collect::<Vec<_>>()
+    } else {
+        let Some(slices) = volume_slices(content_vols, flat_len) else {
+            // Declared volumes collapsed (all empty, or fewer than two):
+            // fall back to today's single-book acquisition.
+            return Ok(None);
+        };
+        slices
+    };
+    // Pad with the metadata volumes the content source does not cover
+    // (not yet published): an empty slice whose caller materializes a
+    // book without content. Titles come from the metadata source.
+    let mut out = slices;
+    for extra in &meta_vols[out.len()..] {
+        out.push((extra.title.clone(), 0, 0));
+    }
+    Ok(Some(out))
+}
+
 /// Disk path of a file's retained original bytes
 /// (`{files_dir}/{file_id}.{ext}`).
 fn original_path(files_dir: &Path, file_id: &str, ext: &str) -> PathBuf {
@@ -3322,6 +3407,169 @@ mod tests {
             title: title.into(),
             chapter_count: n,
         }
+    }
+
+    fn plan(
+        meta: &[SourceVolume],
+        content: &[SourceVolume],
+        flat: u32,
+    ) -> Result<Option<Vec<VolumeSlice>>, ApiError> {
+        plan_volume_slices(
+            meta,
+            content,
+            flat,
+            "meta-book",
+            "content-src",
+            "content-book",
+        )
+    }
+
+    #[test]
+    fn plan_single_volume_metadata_never_splits() {
+        // single-volume metadata → no split, regardless of content
+        assert!(
+            plan(&[], &[vol("一", 3), vol("二", 3)], 6)
+                .unwrap()
+                .is_none()
+        );
+        assert!(plan(&[vol("一", 6)], &[], 6).unwrap().is_none());
+        assert!(plan(&[vol("一", 6)], &[vol("一", 6)], 6).unwrap().is_none());
+    }
+
+    #[test]
+    fn plan_undeclared_content_is_refused() {
+        // multi-volume metadata + undeclared content → 400
+        let err = plan(&[vol("一", 2), vol("二", 3)], &[], 5).unwrap_err();
+        assert!(matches!(err, ApiError::BadRequest(_)));
+        // single volume declared by content is still undeclared
+        let err = plan(&[vol("一", 2), vol("二", 3)], &[vol("一", 5)], 5).unwrap_err();
+        assert!(matches!(err, ApiError::BadRequest(_)));
+    }
+
+    #[test]
+    fn plan_content_more_volumes_than_metadata_is_refused() {
+        // metadata 2 volumes, content 3 → 400 (content covers MORE
+        // volumes than the metadata series)
+        let err = plan(
+            &[vol("一", 2), vol("二", 3)],
+            &[vol("一", 2), vol("二", 1), vol("三", 2)],
+            5,
+        )
+        .unwrap_err();
+        assert!(matches!(err, ApiError::BadRequest(_)));
+    }
+
+    #[test]
+    fn plan_content_fewer_volumes_than_metadata_pads_empty() {
+        // bangumi 系列条目 may list not-yet-published volumes: the
+        // content source covers fewer — the extra metadata volumes
+        // become empty (metadata-only) slices.
+        let slices = plan(
+            &[vol("一", 2), vol("二", 3), vol("三", 1)], // metadata 3 vols
+            &[vol("一", 2), vol("二", 3)],               // content 2 vols
+            5,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            slices,
+            vec![
+                ("一".to_string(), 0, 2),
+                ("二".to_string(), 2, 3),
+                ("三".to_string(), 0, 0), // unpublished: no content
+            ]
+        );
+        // title of the padded volume comes from the metadata source
+        let slices = plan(
+            &[vol("第一卷", 2), vol("第二卷", 3), vol("第三卷", 1)],
+            &[vol("第一卷", 2), vol("第二卷", 3)],
+            5,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(slices[2], ("第三卷".to_string(), 0, 0));
+    }
+
+    #[test]
+    fn plan_matching_volume_counts_but_different_chapter_counts_ok() {
+        // Only volume counts are compared, not per-volume chapter
+        // counts — content drives the slices.
+        let slices = plan(
+            &[vol("一", 5), vol("二", 5)], // metadata says 5+5
+            &[vol("一", 2), vol("二", 3)], // content says 2+3
+            5,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            slices,
+            vec![("一".to_string(), 0, 2), ("二".to_string(), 2, 3)]
+        );
+    }
+
+    #[test]
+    fn plan_slices_follow_content_volumes() {
+        // slices come from the content source's own counts
+        let slices = plan(
+            &[vol("meta1", 2), vol("meta2", 3)],
+            &[vol("c1", 3), vol("c2", 2)],
+            5,
+        )
+        .unwrap()
+        .unwrap();
+        // titles come from the content source too
+        assert_eq!(
+            slices,
+            vec![("c1".to_string(), 0, 3), ("c2".to_string(), 3, 2)]
+        );
+    }
+
+    #[test]
+    fn plan_metadata_only_content_still_splits_empty_volumes() {
+        // flat_len == 0 (content source offers no chapters, e.g. a
+        // bangumi 系列 subject): each declared volume becomes a
+        // metadata-only book (empty slice), content attachable later.
+        let slices = plan(
+            &[vol("一", 2), vol("二", 3), vol("三", 1)], // metadata 3 vols
+            &[vol("一", 2), vol("二", 3)],               // content 2 vols, no chapters
+            0,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            slices,
+            vec![
+                ("一".to_string(), 0, 0),
+                ("二".to_string(), 0, 0),
+                ("三".to_string(), 0, 0), // unpublished: padded
+            ]
+        );
+    }
+
+    #[test]
+    fn plan_collapsed_volumes_fall_back_to_single() {
+        // content declares 2 volumes but they collapse (all empty) →
+        // single-volume acquisition
+        assert!(
+            plan(
+                &[vol("一", 2), vol("二", 3)],
+                &[vol("一", 0), vol("二", 0)],
+                5
+            )
+            .unwrap()
+            .is_none()
+        );
+        // content declares 2 but flat list is shorter than 2 chapters
+        // (one volume swallows everything) → no split
+        assert!(
+            plan(
+                &[vol("一", 2), vol("二", 3)],
+                &[vol("一", 9), vol("二", 9)],
+                5
+            )
+            .unwrap()
+            .is_none()
+        );
     }
 
     #[test]
