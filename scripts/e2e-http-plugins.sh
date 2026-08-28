@@ -279,6 +279,29 @@ api GET "/api/files/$W2F/chapters/0" | grep -q "第二章 无名的守印人" \
     || fail "metadata-driven split: vol2 ch0 should be reader r-8's 第二章 无名的守印人"
 pass "multi-volume split driven by the metadata source (wiki w-9), content from reader r-8"
 
+# --- add-as-series from a METADATA-ONLY multi-volume source -------------
+# w-10 is a metadata-only multi-volume subject (like bangumi 870): it
+# declares 2 卷 but its content target r-0 carries NO chapters, so the
+# split plans a metadata-only book per 卷 (no file). Acquiring it as a
+# series must not panic (regression: stage-2 attach_content hit
+# `unreachable!("stage 1 planned a plugin for a plugin")` because the
+# planned fill was `None`).
+SPLITMO=$(api_form /api/books "plugin_source=wiki" "plugin_book_id=w-10" \
+    "meta_plugin_source=wiki" "meta_plugin_book_id=w-10" "visibility=public")
+SERIESMO=$(echo "$SPLITMO" | jq_field "d['series']['id']")
+[ -n "$SERIESMO" ] || fail "metadata-only multi-volume: no series created"
+NMO=$(echo "$SPLITMO" | jq_field "len(d['books'])")
+[ "$NMO" = "2" ] || fail "metadata-only multi-volume: expected 2 volume books, got $NMO"
+for i in 0 1; do
+    NF=$(echo "$SPLITMO" | jq_field "len(d['books'][$i]['files'])")
+    [ "$NF" = "0" ] || fail "metadata-only volume $i should have 0 files (got $NF)"
+done
+# each volume book is a metadata-only entry under the series, content
+# attachable later
+api GET "/api/series/$SERIESMO" | grep -q "无正文合集" \
+    || fail "metadata-only series title lost"
+pass "add-as-series from metadata-only multi-volume source (no panic, 2 metadata-only books)"
+
 # manual series management (uploads): create, assign with a volume number,
 # reorder via PUT members, unassign, delete
 MS=$(api POST /api/series '{"title":"测试系列","authors":["某作者"]}')
@@ -321,6 +344,20 @@ if api_form /api/books "metadata_only=true" > /dev/null 2>&1; then
     fail "metadata_only without title or plugin source should 400"
 fi
 pass "metadata-only guards: attach / empty metadata -> 400"
+
+# --- (Plugin, New) with a metadata-only source: no panic --------------
+# `plugin_source=wiki plugin_book_id=w-11` (no file, no meta_plugin_source)
+# → metadata mode is auto (New), content is Plugin. w-11 is a single-volume
+# metadata-only entry whose content target r-0 has no chapters, so the
+# source provides no content → the entry is planned with no file and
+# attach_content's Plugin arm must not panic (same None-fill path as the
+# series split above).
+NPEW=$(api_form /api/books "plugin_source=wiki" "plugin_book_id=w-11" "visibility=public")
+NPEWF=$(echo "$NPEW" | jq_field "len(d['books'][0]['files'])")
+[ "$NPEWF" = "0" ] || fail "(Plugin,New) metadata-only source should have no files (got $NPEWF)"
+api GET "/api/books/$(echo "$NPEW" | jq_field "d['books'][0]['book']['id']")" | grep -q "无正文单行本" \
+    || fail "(Plugin,New) metadata-only entry title lost"
+pass "(Plugin,New): metadata-only plugin content -> no-file entry, no panic"
 
 # --- cross-plugin acquisition (A 插件供元数据 + B 插件供内容) -----------
 # 元数据取自 wiki w-5《旧书店的猫》，内容取自 reader r-6《时间旅人的信》：

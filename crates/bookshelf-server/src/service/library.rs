@@ -1076,6 +1076,13 @@ impl Library {
                 source: content_source,
                 book_id_in_source: content_book_id,
             } => {
+                // A metadata-only volume of a metadata-driven split (e.g. a
+                // metadata-only source like bangumi declaring >1 卷) plans
+                // no content file — the fill is `None`, so nothing is
+                // attached here. Only `PlannedFill::Plugin` carries a file.
+                if matches!(planned.fill, PlannedFill::None) {
+                    return Ok(None);
+                }
                 let PlannedFill::Plugin(pf) = &planned.fill else {
                     unreachable!("stage 1 planned a plugin for a plugin")
                 };

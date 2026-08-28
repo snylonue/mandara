@@ -53,9 +53,22 @@ WIKI_BOOKS = [
     # entry's (r-8 declares none) — otherwise w-9 would collapse into one
     # book. (Multi-volume split is the metadata source's responsibility.)
     ("w-9", "星海拾遗·外传", ["洛离"], "两卷合一的外传（卷结构由元数据源声明）。", "r-8"),
+    # w-10: a metadata-only multi-volume subject (like a bangumi series
+    # subject): it declares 2 卷 but its content target r-0 carries NO
+    # chapters, so acquisition splits it into a series of metadata-only
+    # books (no files), never a panic.
+    ("w-10", "无正文合集", ["零"], "多卷元数据主题（无内容，仅作系列拆分）。", "r-0"),
+    # w-11: a metadata-only single-volume entry (no declared volumes) whose
+    # content target r-0 carries no chapters — the `(Plugin, New)` path that
+    # plans a bare metadata entry with no file.
+    ("w-11", "无正文单行本", ["零"], "单卷元数据主题（无内容）。", "r-0"),
 ]
 
 READER_BOOKS = [
+    # r-0: a book with NO chapters — the content target of metadata-only
+    # multi-volume subjects (like bangumi series subjects) that carry no
+    # content, only a declared 卷 structure.
+    ("r-0", "无正文合集", ["零"], "没有章节正文的多卷元数据主题。", []),
     ("r-1", "星海拾遗", ["洛离"], "宇宙边缘电台的周播栏目档案。", ["第一章 回声信标", "第二章 潮汐图书馆", "第三章 末班星舟"]),
     ("r-2", "雾都侦探手记", ["白川"], "终年有雾的城市里，一间小事务所的接案记录。", ["第一章 雾中来信", "第二章 九号站台", "第三章 钟楼谜题"]),
     ("r-3", "剑与茶室", ["山岚"], "隐于山道的茶室，白天泡茶，晚上磨剑。", ["第一章 刀鞘与茶匙", "第二章 双刀店主"]),
@@ -85,6 +98,12 @@ WIKI_VOLUMES = {
     "w-9": [
         {"title": "第一卷 相遇", "chapter-count": 1},
         {"title": "第二卷 觉醒", "chapter-count": 2},
+    ],
+    # w-10: metadata-only subject — declares 2 卷 but its content target
+    # (r-0) has no chapters, so each volume is metadata-only (count 0).
+    "w-10": [
+        {"title": "第一卷 无正文", "chapter-count": 0},
+        {"title": "第二卷 无正文", "chapter-count": 0},
     ],
 }
 
