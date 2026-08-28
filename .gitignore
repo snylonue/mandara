@@ -15,3 +15,6 @@
 .env
 *.swp
 /.direnv
+
+# agent workflow
+/review
