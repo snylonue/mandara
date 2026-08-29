@@ -93,6 +93,10 @@ pub fn router(state: St) -> Router {
             put(plugins::set_instance_enabled),
         )
         .route(
+            "/api/plugins/instances/{id}/sync",
+            post(plugins::sync_instance),
+        )
+        .route(
             "/api/plugins/{id}/config-schema",
             get(plugins::plugin_config_schema),
         )

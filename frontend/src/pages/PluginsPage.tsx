@@ -257,9 +257,11 @@ export function PluginsPage() {
     }
   }
 
-  async function syncInstance(_instance: PluginInstance) {
+  async function syncInstance(instance: PluginInstance) {
     try {
-      const r = await api<{ synced: number }>("/plugins/sync", { method: "POST" });
+      const r = await api<{ synced: number }>(`/plugins/instances/${instance.id}/sync`, {
+        method: "POST",
+      });
       toast.push("success", t("plugin.synced", { n: String(r.synced) }));
       await load();
     } catch (e) {

@@ -37,6 +37,21 @@ pub async fn sync_plugins(
     Ok(Json(serde_json::json!({ "synced": synced })))
 }
 
+// POST /api/plugins/instances/{id}/sync (admin) ----------------------------------
+//
+// Re-catalogue ONE instance (the admin page's per-instance 重同步).
+
+pub async fn sync_instance(
+    State(st): State<St>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let user = current_user(&st, &headers).await?;
+    crate::auth::AuthService::require_admin(&user)?;
+    let synced = st.library.sync_instance(&id).await?;
+    Ok(Json(serde_json::json!({ "synced": synced })))
+}
+
 // GET /api/plugins/wasm-files (admin) --------------------------------------------
 //
 // Basenames of the compiled components the server loaded at startup, for

@@ -291,6 +291,33 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /api/plugins/instances/{id}/sync:
+    post:
+      tags: [plugins]
+      summary: Re-catalogue one plugin instance (admin only)
+      description: |
+        Re-sync the declared catalog of a single instance into the library
+        (the per-instance 重同步 button in the admin page; the full sync
+        is POST /api/plugins/sync).
+      operationId: syncInstance
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PluginId"
+      responses:
+        "200":
+          description: Number of books (re-)synced for the instance
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [synced]
+                properties:
+                  synced:
+                    type: integer
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /api/plugins/{id}/config-schema:
     get:
       tags: [plugins]

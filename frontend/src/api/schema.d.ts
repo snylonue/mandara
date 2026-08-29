@@ -209,6 +209,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/plugins/instances/{id}/sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Re-catalogue one plugin instance (admin only)
+         * @description Re-sync the declared catalog of a single instance into the library
+         *     (the per-instance 重同步 button in the admin page; the full sync
+         *     is POST /api/plugins/sync).
+         */
+        post: operations["syncInstance"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/plugins/{id}/config-schema": {
         parameters: {
             query?: never;
@@ -299,6 +321,14 @@ export interface paths {
          *     produced metadata (never applied when attaching). When the
          *     plugin source declares >1 volumes, the acquisition auto-splits
          *     into one series + one book per 卷 (the response carries them all).
+         *     The split is driven by the CONTENT source's own volume
+         *     declaration; the content source must declare its volume structure
+         *     (400 otherwise — an undeclared content source cannot be sliced
+         *     per volume) and may declare FEWER volumes than the metadata
+         *     source (metadata-only series entries, e.g. bangumi 系列, may list
+         *     not-yet-published volumes; those become metadata-only books with
+         *     no content). A content source declaring MORE volumes than the
+         *     metadata series is refused (400).
          */
         post: operations["uploadBook"];
         delete?: never;
@@ -1459,6 +1489,32 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PluginInstance"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+        };
+    };
+    syncInstance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Plugin instance id (source id) */
+                id: components["parameters"]["PluginId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Number of books (re-)synced for the instance */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        synced: number;
+                    };
                 };
             };
             404: components["responses"]["NotFound"];
