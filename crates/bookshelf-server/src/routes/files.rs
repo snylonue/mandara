@@ -89,18 +89,40 @@ pub async fn download_file(
         _ => "text/plain; charset=utf-8",
     };
     // Filename: the book title (sanitized), falling back to the file id.
+    // Non-ASCII titles cannot round-trip through the ASCII `filename=`
+    // parameter, so it is percent-encoded in `filename*` (RFC 5987) and
+    // the ASCII fallback keeps only the extension-safe part.
     let book = st
         .library
         .get_book(&file.book_id)
         .await?
         .ok_or_else(|| ApiError::not_found("book"))?;
-    let safe_title: String = book
-        .title
+    let title = book.title.trim().trim_matches('_');
+    let safe_title: String = title
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
         .collect();
-    let filename = format!("{}.{}", safe_title.trim_matches('_'), ext);
-    let disposition = format!("attachment; filename=\"{filename}\"");
+    let ascii_name = if safe_title.is_empty() {
+        format!("{}.{}", &file.id[..8.min(file.id.len())], ext)
+    } else {
+        format!("{}.{}", safe_title, ext)
+    };
+    // RFC 5987: `filename*=UTF-8''<percent-encoded>` carries the real
+    // (possibly non-ASCII) name; browsers use it when present.
+    let mut encoded = String::new();
+    for c in title.chars() {
+        if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ' ') {
+            encoded.push(c);
+        } else {
+            let mut b = [0u8; 4];
+            for &x in c.encode_utf8(&mut b).as_bytes() {
+                encoded.push_str(&format!("%{x:02X}"));
+            }
+        }
+    }
+    let star_name = format!("{}.{}", encoded, ext);
+    let disposition =
+        format!("attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{star_name}");
     Ok((
         [
             (header::CONTENT_TYPE, mime.to_string()),
