@@ -36,6 +36,12 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let cfg = config::Config::parse();
+    if cfg.jwt_secret == "dev-only-change-me" {
+        tracing::warn!(
+            "BOOKSHELF_JWT_SECRET is the built-in dev default; anyone who knows it can forge login tokens. \
+             Set a long random value before exposing the server"
+        );
+    }
     tracing::info!(version = env!("CARGO_PKG_VERSION"), addr = %cfg.addr, "starting bookshelf-server");
 
     let data_dir = cfg.data_dir();

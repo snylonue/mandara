@@ -382,15 +382,11 @@ pub async fn attach_file(
     multipart: Multipart,
 ) -> Result<impl IntoResponse, ApiError> {
     let user = current_user(&st, &headers).await?;
-    // The book itself must exist; visibility of the new file defaults to the
-    // most visible existing file of the book (or private for a fresh book).
-    let default_visibility = st
-        .library
-        .files_of_book(&book_id, &user)
-        .await?
-        .first()
-        .map(|f| f.visibility)
-        .unwrap_or(Visibility::Private);
+    // The book itself must exist. Visibility of the new file follows the
+    // global upload rule: private unless the caller explicitly picks
+    // public (the old "most visible existing file" default could silently
+    // publish a private library when attaching to a public book).
+    st.library.files_of_book(&book_id, &user).await?;
 
     let (file, visibility, label, fields) = read_upload(multipart).await?;
     // Only file content here — the target metadata is the URL's book.
@@ -404,11 +400,7 @@ pub async fn attach_file(
                 filename: &some_file.1,
             },
             AcquireMetadata::Attach { book_id: &book_id },
-            if visibility == Visibility::Private {
-                default_visibility
-            } else {
-                visibility
-            },
+            visibility,
             &label,
         )
         .await?;
