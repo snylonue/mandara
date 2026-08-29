@@ -18,10 +18,8 @@
 //!   foreign-content tags are stripped; only reachable link targets are kept.
 
 use std::collections::HashMap;
-use std::fs;
-use std::io::{Read, Seek};
+use std::io::{Read, Seek, Write};
 use std::path::{Component, Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::ParsedImage;
 use bookshelf_core::error::{Error, Result};
@@ -114,19 +112,10 @@ fn allowed_attrs(tag: &str) -> &'static [&'static str] {
 
 /// Parse epub bytes into a normalized book.
 pub fn parse(bytes: &[u8]) -> Result<ParsedBook> {
-    // `EpubDoc` works on paths; write the upload to a temp file.
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let tmp = std::env::temp_dir().join(format!(
-        "bookshelf-{pid}-{stamp}.epub",
-        pid = std::process::id()
-    ));
-    fs::write(&tmp, bytes)?;
-    let result = parse_path(&tmp);
-    let _ = fs::remove_file(&tmp);
-    result
+    let mut tmp = tempfile::NamedTempFile::new()?;
+    tmp.write_all(bytes)?;
+    tmp.flush()?;
+    parse_path(tmp.path())
 }
 
 fn parse_path(path: &Path) -> Result<ParsedBook> {

@@ -303,6 +303,7 @@ dependencies = [
  "encoding_rs",
  "epub",
  "scraper",
+ "tempfile",
  "uuid",
  "zip",
 ]
