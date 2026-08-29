@@ -1758,23 +1758,56 @@ impl Library {
         // assembled in Rust (type-checked builder) instead of the old
         // parameterized switches. Series first (in volume order), then
         // standalone books, newest first.
+        //
+        // Visibility + source are EXISTS subqueries (same shape as
+        // `list_series`), never LEFT JOIN cross-table predicates: a book
+        // is listed iff it owns a visible file (optionally from
+        // `source`), or it is a metadata-only entry the caller created.
+        // The source filter decides which books are listed, and the file
+        // batch below still returns every visible file of a listed book.
         let mut book_q = schema::books::table
-            .left_join(schema::book_files::table)
             .filter(schema::books::title.like(&pattern))
             .select(BookRow::as_select())
-            .distinct()
-            .into_boxed();
+            .into_boxed::<diesel::sqlite::Sqlite>();
         if let Some(source) = source {
-            book_q = book_q.filter(schema::book_files::source.eq(source));
-        }
-        if !is_admin {
+            // A book with at least one file from the source the caller
+            // can see (admins: any file from the source). Metadata-only
+            // entries have no source and are excluded, as before.
+            let file_q = schema::book_files::table.filter(
+                schema::book_files::book_id
+                    .eq(schema::books::id)
+                    .and(schema::book_files::source.eq(source)),
+            );
+            if !is_admin {
+                book_q = book_q.filter(diesel::dsl::exists(
+                    file_q.filter(
+                        schema::book_files::visibility
+                            .eq("public")
+                            .or(schema::book_files::owner_id.eq(&user.id)),
+                    ),
+                ));
+            } else {
+                book_q = book_q.filter(diesel::dsl::exists(file_q));
+            }
+        } else if !is_admin {
+            // At least one visible file, or a metadata-only entry (no
+            // files at all) the caller created — never a book whose
+            // files are all invisible to the caller.
             book_q = book_q.filter(
-                schema::book_files::visibility
-                    .eq("public")
-                    .or(schema::book_files::owner_id.eq(&user.id))
-                    .or(schema::book_files::id
-                        .is_null()
-                        .and(schema::books::created_by.eq(&user.id))),
+                diesel::dsl::exists(
+                    schema::book_files::table.filter(
+                        schema::book_files::book_id.eq(schema::books::id).and(
+                            schema::book_files::visibility
+                                .eq("public")
+                                .or(schema::book_files::owner_id.eq(&user.id)),
+                        ),
+                    ),
+                )
+                .or(diesel::dsl::not(diesel::dsl::exists(
+                    schema::book_files::table
+                        .filter(schema::book_files::book_id.eq(schema::books::id)),
+                ))
+                .and(schema::books::created_by.eq(&user.id))),
             );
         }
         let rows: Vec<BookRow> = book_q
