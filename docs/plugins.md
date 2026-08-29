@@ -191,11 +191,17 @@ Plugins declare how their chapter body is interpreted via the WIT
   `bookshelf_formats::htmlize::text_to_html`). This is the default and
   covers sources that return prose.
 - **`"html"`** — the body is the plugin's **own final HTML fragment**
-  (escaped text and known safe tags). The host stores it verbatim; it
-  only annotates image references (`/api/images/{id}` with stored
-  dimensions). The plugin is responsible for escaping text and for
-  emitting only safe tags (paragraphs, headings, `<figure><img>`; no
-  scripts/event handlers).
+  (escaped text and known safe tags). The host runs it through the same
+  whitelist sanitizer epub uploads use (`DROP_TAGS`/`ALLOWED_TAGS`/
+  `allowed_attrs` in `bookshelf_formats::htmlize::sanitize_html_fragment`):
+  scripts, styles, forms, foreign content and event handlers are stripped,
+  unknown tags are unwrapped, and `href`s are kept only for in-page
+  anchors / http(s) / mailto targets — a broken or malicious plugin cannot
+  inject markup into the reader. After sanitization the host annotates
+  image references (`/api/images/{id}` with stored dimensions). The plugin
+  is still expected to escape its text and stick to the safe tag set
+  (`<p>`, headings, `<figure><img>`, …); the sanitizer is a defense in
+  depth, not a substitute for well-formed output.
 
 The wenku8 plugin is the only `"html"` producer today: its chapter
 bodies come from a fixed site layout (插图 plate chapters, inline
