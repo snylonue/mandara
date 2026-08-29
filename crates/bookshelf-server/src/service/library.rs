@@ -1294,6 +1294,10 @@ impl Library {
         };
         if let Some(o) = &overrides.ext {
             book_ext.apply_override(o);
+            // Override values are user-supplied; re-sanitize (trim,
+            // ISBN normalization) so they land normalized like every
+            // other create path.
+            book_ext.sanitize().map_err(ApiError::bad_request)?;
         }
         let book_ext_json = book_ext.to_column();
 
@@ -2651,12 +2655,6 @@ impl Library {
             {
                 warn!(file = %id, path = %path.display(), error = %e, "failed to remove original");
             }
-        }
-        let deleted = diesel::delete(schema::book_files::table.find(id))
-            .execute(&mut self.diesel_db.get().await?)
-            .await?;
-        if deleted == 0 {
-            return Err(ApiError::not_found("file"));
         }
         Ok(())
     }
