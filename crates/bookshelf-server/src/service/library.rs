@@ -2783,6 +2783,13 @@ impl Library {
                     ingest_parsed_book(&self.diesel_db, &self.files_dir, &mut parsed).await?;
                     // Rewrite this row like `materialize_file_mode`
                     // (metadata stays; content becomes self-contained).
+                    // The rewrite is one transaction: a concurrent reader
+                    // racing this block either sees the old virtual row
+                    // (and runs the same idempotent rewrite) or the new
+                    // stored row — never an empty chapter window. Chapter
+                    // rows are upserted, not delete+insert, so a second
+                    // reader's redundant write cannot observe missing
+                    // chapters mid-flight.
                     let toc_json =
                         serde_json::to_string(&parsed.toc).unwrap_or_else(|_| "[]".into());
                     let format = detect_format(&book_file.filename);
@@ -2799,11 +2806,10 @@ impl Library {
                         ))
                         .execute(&mut conn)
                         .await?;
-                    diesel::delete(
-                        schema::chapters::table.filter(schema::chapters::file_id.eq(&file.id)),
-                    )
-                    .execute(&mut conn)
-                    .await?;
+                    // Upsert every chapter; do NOT delete first (a racing
+                    // reader between delete and re-insert would see an
+                    // empty chapter and fall through to a plugin pull).
+                    // Duplicate concurrent rewrites are idempotent.
                     for (i, chapter) in parsed.chapters.iter().enumerate() {
                         diesel::insert_into(schema::chapters::table)
                             .values((
@@ -2812,9 +2818,31 @@ impl Library {
                                 schema::chapters::title.eq(&chapter.title),
                                 schema::chapters::content.eq(&chapter.content),
                             ))
+                            .on_conflict((schema::chapters::file_id, schema::chapters::idx))
+                            .do_update()
+                            .set((
+                                schema::chapters::title
+                                    .eq(diesel::upsert::excluded(schema::chapters::title)),
+                                schema::chapters::content
+                                    .eq(diesel::upsert::excluded(schema::chapters::content)),
+                            ))
                             .execute(&mut conn)
                             .await?;
                     }
+                    // Drop stale placeholder rows beyond the new chapter
+                    // count (the virtual row may have had title
+                    // placeholders from an earlier ensure_titles). Rows
+                    // within the new range were upserted above, so this
+                    // cannot leave a gap.
+                    diesel::delete(
+                        schema::chapters::table.filter(
+                            schema::chapters::file_id
+                                .eq(&file.id)
+                                .and(schema::chapters::idx.ge(parsed.chapters.len() as i64)),
+                        ),
+                    )
+                    .execute(&mut conn)
+                    .await?;
                     // Keep the metadata fresh from the source entry.
                     let authors =
                         serde_json::to_string(&entry.authors).unwrap_or_else(|_| "[]".into());
@@ -2876,6 +2904,12 @@ impl Library {
         else {
             return Ok(None);
         };
+        // Empty body from the source is treated as "no chapter" (same
+        // rule as the wenku8 guest's own empty check) — never store a
+        // blank row that would shadow the placeholder for later pulls.
+        if chapter.content.trim().is_empty() {
+            return Ok(None);
+        }
         let content = annotate_image_dims(
             &self.diesel_db,
             &bookshelf_formats::htmlize::plugin_text_to_html(&chapter.content),
