@@ -1,10 +1,9 @@
 # Plugin HTTP & Book-File API — Design
 
-Status: **implemented, with the fetch policy removed** (owner decision,
-2026-08-25: "wasm 插件的请求不用检查了，提供联网能力就行" — the allow
-list, scheme gate and SSRF resolver below are **gone**; the host
-provides plain network access with timeout/size caps only). The rest of
-this document (book-file acquisition, config-driven base URLs) stands.
+Status: **implemented** (owner decision, 2026-08-25:
+"wasm 插件的请求不用检查了，提供联网能力就行" — the host provides
+plain network access with timeout/size caps only). The rest of this
+ document (book-file acquisition, config-driven base URLs) stands.
 Extends the v2 plugin interface (`crates/bookshelf-plugin/wit/bookshelf.wit`,
 `bookshelf:plugin@0.2.0`). Does **not** replace the config channel, the
 capabilities model, or the lazy catalog policy of `docs/plugin-v2-design.md`.
@@ -41,8 +40,8 @@ Goals:
 - Configuration stays the single input channel: URL templates, API keys,
   page sizes are per-instance `config-schema` values, so one wasm file
   serves many sites.
-- Every request is subject to host policy: allow-listed hosts, SSRF
-  protection, timeouts, size caps, redirect limits, secret-free logging.
+- Every request is subject to host policy: timeouts, size caps,
+  redirect limits, secret-free logging.
 - Book files flow through the existing parser instead of a second,
   plugin-specific storage path.
 
@@ -141,10 +140,8 @@ Capabilities gain one entry: `"book-file"`.
 
 | Concern | Policy |
 |---|---|
-| Allow list | `BOOKSHELF_PLUGIN_FETCH_ALLOWED_HOSTS` — comma-separated hosts (optionally `host:port`). Empty = **all `fetch` calls denied**. E.g. `zh.wikipedia.org`, `localhost:8081` for a local test source. |
-| Scheme | http + https (self-hosted sources are often plain http); `BOOKSHELF_PLUGIN_FETCH_HTTP=false` turns http off. |
-| SSRF | Before every request (and after each redirect hop): the hostname is resolved and the final IP must **not** be loopback/private/link-local/ULA (unless the resolved host itself is allow-listed), guarding DNS-rebinding and localhost probing. |
-| Redirects | Followed up to 5 hops; each hop re-validated against allow list + IP policy; `Authorization`/`Cookie`-like headers are dropped when a hop leaves the original host. |
+| Scheme | http + https (self-hosted sources are often plain http). |
+| Redirects | Followed up to 5 hops; exceeding the cap is a `redirect-limit` error (not the last response). |
 | Timeout | Hard cap `BOOKSHELF_PLUGIN_FETCH_TIMEOUT_MS` (default 30 000). |
 | Size | `BOOKSHELF_PLUGIN_FETCH_MAX_BYTES` (default 64 MiB, aligned with `max_upload_mb`). Oversized responses abort with `size-limit` — no partial data. |
 | Secrets | Host logs never include full URLs (only `scheme://host/path`, query/fragment stripped). Plugins should put credentials in config, not URLs. |
@@ -212,24 +209,21 @@ as `none`/empty results (the host logs the underlying error).
 
 ## 5. Security review (summary)
 
-1. The plugin can only reach allow-listed hosts — a compromise of one
-   plugin does not turn into general outbound access.
-2. SSRF is blocked at resolve time, including after redirects, so
-   `http://127.0.0.1:8080/admin` or rebinding tricks fail.
-3. No ambient credentials: the host never forwards host cookies/proxies
-   to plugin requests (explicit `BOOKSHELF_HTTPS_PROXY` support is
-   deferred — see open questions).
-4. Response size caps keep one plugin from exhausting memory; the epoch
+1. A compromised plugin gets general outbound access — the host's only
+   caps are timeout, size and redirect count.
+2. No ambient credentials: the host never forwards host cookies to
+   plugin requests (only the headers the plugin sets are sent).
+3. Response size caps keep one plugin from exhausting memory; the epoch
    deadline keeps one call from dominating a worker; `spawn_blocking`
    keeps the async runtime healthy.
-5. Logs are query-stripped; API keys live in plugin config (already
+4. Logs are query-stripped; API keys live in plugin config (already
    admin-only in `GET /api/plugins/{id}/config-schema`).
 
 ## 6. Implementation outline
 
 | Phase | Scope | Acceptance |
 |---|---|---|
-| P1 | WIT 0.3.0 (`http` interface + `book-file`), host `fetch` import (`ureq` or `reqwest::blocking` inside `spawn_blocking`; allow-list, SSRF check, timeout/size caps, redirect policy, stripped logging), config knobs; a tiny local test source (e.g. `python3 -m http.server`-style fixture or a mock endpoint in `bookshelf-server`) | unit tests: allow-list denial, SSRF block (localhost/loopback), timeout, size-limit, redirect-limit, header-strip-on-cross-host; chapter-mode e2e against the mock source |
+| P1 | WIT 0.3.0 (`http` interface + `book-file`), host `fetch` import (`ureq` or `reqwest::blocking` inside `spawn_blocking`; timeout/size caps, redirect policy, stripped logging), config knobs; a tiny local test source (e.g. `python3 -m http.server`-style fixture or a mock endpoint in `bookshelf-server`) | unit tests: timeout, size-limit, redirect-limit, header-strip-on-cross-host; chapter-mode e2e against the mock source |
 | P2 | Rewrite `wiki-plugin` against a real public API (e.g. Chinese Wikipedia REST/Action API) and `reader-plugin` chapter-mode against it (or a documented mock); config-driven base-url | e2e: search → materialize → lazy chapters all served from the network source; refresh pulls metadata only |
 | P3 | `get-book-file` export + host file-mode materialization through `bookshelf-formats::parse` + capability plumbing; `reader-plugin` gains file mode returning a generated epub | e2e: file-mode book materializes with real TOC + sanitized chapters like an upload |
 | P4 | Guard hardening (per-instance QPS token bucket if needed), `docs/plugins.md` rewrite, AGENTS.md progress log | `just` checks green; both patterns documented |
@@ -246,9 +240,7 @@ pipeline (`wasm-tools component new`, no adapter) stays untouched.
   whose default agent honors the standard `ALL_PROXY`/`HTTPS_PROXY`/
   `HTTP_PROXY`/`NO_PROXY` environment variables. No bookshelf-specific
   flag; deployments behind a proxy just export the usual vars.
-- Q3 **HTTP scheme default**: allow http by default (self-hosted sources)
-  or require `BOOKSHELF_PLUGIN_FETCH_HTTP=true`? Leaning: default **on**
-  with a warning, since the allow-list is the real gate.
+- Q3 **HTTP scheme default**: allow http by default (self-hosted sources).
 - Q4 **Chapter HTML**: should `chapter` gain a `format` field so plugins
   can return HTML and the host sanitizes it through the existing EPUB
   pipeline? (Nice for page-scraping sources; text extraction stays the

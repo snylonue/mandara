@@ -22,8 +22,8 @@
 // full design. Key differences vs v2:
 //   - new `http` import: a controlled outbound HTTP channel, the ONLY way
 //     a plugin can reach the outside world (no wasi); every request runs
-//     under host policy (allow-list, SSRF checks, timeout/size caps,
-//     redirect limit, secret-free logging);
+//     under host policy (timeout/size caps, redirect limit, secret-free
+//     logging);
 //   - `get-book-file`: whole book files (epub/txt downloads) flow through
 //     the host's existing upload parser, so file-mode books get chapters,
 //     hierarchical TOC and sanitized HTML like uploads (capability
@@ -220,10 +220,7 @@ interface config {
 
 /// Outbound HTTP (see docs/plugin-http-api-design.md §3.1).
 ///
-/// This is the only network access a plugin gets. The host enforces an
-/// allow-list of hosts (empty = every `fetch` call is denied), blocks
-/// private/loopback addresses at resolve time (unless the host itself is
-/// allow-listed) — including after every redirect hop — and caps timeout,
+/// This is the only network access a plugin gets. The host caps timeout,
 /// response size and redirect count. The plugin decides what an
 /// application-level status (404, ...) means: `fetch` only fails on
 /// transport-level problems.

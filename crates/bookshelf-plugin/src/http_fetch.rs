@@ -1,7 +1,9 @@
 //! Outbound HTTP for plugins.
 //!
 //! One import (`http.fetch`) backed by a synchronous ureq 3 client — the
-//! host provides plain network access, no destination policy:
+//! host provides plain network access (every host is reachable, no
+//! destination policy; outbound requests honor the standard proxy
+//! environment variables):
 //!
 //! - **Timeout**: overall deadline = `min(requested,
 //!   BOOKSHELF_PLUGIN_FETCH_TIMEOUT_MS)` (default 30 s).
@@ -28,8 +30,7 @@ use ureq::http::{HeaderName, HeaderValue};
 /// Maximum number of redirect hops per `fetch` call.
 pub const MAX_REDIRECTS: u32 = 5;
 
-/// Operational caps for plugin `fetch` calls (not destination policy —
-/// every host is reachable).
+/// Operational caps for plugin `fetch` calls (timeout/size only).
 #[derive(Debug, Clone)]
 pub struct FetchPolicy {
     /// Hard overall timeout per `fetch` call (ms). The plugin's requested
@@ -99,7 +100,7 @@ pub enum FetchError {
     /// Permanent: URL parse/protocol problem.
     InvalidUrl(String),
     /// Permanent: host policy rejected the URL. Never produced today —
-    /// the host applies no destination policy — kept for WIT compat.
+    /// kept for WIT compat.
     Denied(String),
     /// Permanent: too many redirect hops.
     RedirectLimit(u32),

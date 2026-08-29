@@ -270,7 +270,7 @@ embeds them; the frontend regenerates `src/api/schema.d.ts`.
   keep passing.
 - wenku8 guest: `volumes` shape from a fixture TOC (vcss titles incl.
   empty titles → `第N卷` fallback; placement Skip changes counts).
-- E2E (dev instance + live wenku8 with the allow-list env): acquire
+- E2E (dev instance + live wenku8): acquire
   3617 → series + N books (each `第N卷` volume, plate chapters at
   volume-local positions), chapters lazy-fetch per volume with correct
   offsets, sessions per volume, refresh, 409 on re-acquire, and the

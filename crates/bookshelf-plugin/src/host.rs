@@ -101,7 +101,7 @@ struct HostState {
     name: String,
     /// Validated configuration values, in `config-schema` field order.
     config: Vec<ConfigValue>,
-    /// Outbound HTTP policy (allow list, caps) — shared by all plugins.
+    /// Outbound HTTP policy (timeout/size caps) — shared by all plugins.
     policy: Arc<FetchPolicy>,
     /// Image store backing the `store-image` import.
     images: Arc<dyn ImageStore>,
@@ -153,10 +153,9 @@ impl bookshelf::plugin::config::Host for HostState {
 
 impl bookshelf::plugin::http::Host for HostState {
     /// The only way a plugin touches the outside world. The full policy
-    /// (allow list, SSRF checks incl. redirect hops, timeout/size caps,
-    /// stripped logging) lives in `http_fetch::fetch`; the server calls
-    /// plugins on blocking threads, so a slow source never stalls a tokio
-    /// worker.
+    /// (timeout/size caps, redirect limit, stripped logging) lives in
+    /// `http_fetch::fetch`; the server calls plugins on blocking threads,
+    /// so a slow source never stalls a tokio worker.
     fn fetch(
         &mut self,
         request: bookshelf::plugin::http::Request,
@@ -214,8 +213,8 @@ pub struct WasmPlugin {
     engine: Engine,
     component: Component,
     linker: Linker<HostState>,
-    /// Outbound HTTP policy of the `http.fetch` import (allow list,
-    /// timeout/size caps). Shared by every instance of this file.
+    /// Outbound HTTP policy of the `http.fetch` import (timeout/size
+    /// caps). Shared by every instance of this file.
     policy: Arc<FetchPolicy>,
     /// Image store backing the `store-image` import.
     images: Arc<dyn ImageStore>,
