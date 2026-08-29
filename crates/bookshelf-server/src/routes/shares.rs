@@ -131,9 +131,13 @@ pub async fn create_share(
     }
 
     let token = uuid::Uuid::new_v4().simple().to_string();
-    let expires_at = req
-        .expires_days
-        .map(|days| rfc3339_millis(Utc::now() + Duration::days(days as i64)));
+    // Cap the requested expiry so `Duration::days(u32::MAX)` cannot
+    // overflow chrono (which would panic in the request handler). 10
+    // years is far beyond any practical share lifetime.
+    const MAX_EXPIRY_DAYS: u32 = 3650;
+    let expires_days = req.expires_days.unwrap_or(0).min(MAX_EXPIRY_DAYS);
+    let expires_at = (expires_days > 0)
+        .then(|| rfc3339_millis(Utc::now() + Duration::days(expires_days as i64)));
 
     let mut conn = st.diesel_db.get().await?;
     diesel::insert_into(shares::table)
@@ -236,21 +240,24 @@ pub async fn get_share(
             .first(&mut conn)
             .await
             .optional()?;
-        if let Some((label, owner, chapter_idx, offset, fraction, updated_at)) = srow {
-            let position = Position {
-                chapter_idx: chapter_idx.max(0) as u32,
-                offset: offset.max(0) as u32,
-                fraction: fraction.clamp(0.0, 1.0),
-            };
-            session = Some(ShareSessionView {
-                id: sid.clone(),
-                label,
-                owner_username: owner.unwrap_or_default(),
-                percent: position.percent(),
-                position,
-                updated_at: parse_ts(&updated_at),
-            });
-        }
+        // A session share whose session was deleted is a broken link:
+        // report it as gone rather than a phantom `session: null`.
+        let Some((label, owner, chapter_idx, offset, fraction, updated_at)) = srow else {
+            return Err(ApiError::not_found("share"));
+        };
+        let position = Position {
+            chapter_idx: chapter_idx.max(0) as u32,
+            offset: offset.max(0) as u32,
+            fraction: fraction.clamp(0.0, 1.0),
+        };
+        session = Some(ShareSessionView {
+            id: sid.clone(),
+            label,
+            owner_username: owner.unwrap_or_default(),
+            percent: position.percent(),
+            position,
+            updated_at: parse_ts(&updated_at),
+        });
     }
 
     Ok(Json(ShareView {
