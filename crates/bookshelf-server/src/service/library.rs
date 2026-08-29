@@ -1880,12 +1880,46 @@ impl Library {
     ) -> Result<BookMeta, ApiError> {
         let authors_json =
             authors.map(|a| serde_json::to_string(a).unwrap_or_else(|_| "[]".into()));
+        let mut conn = self.diesel_db.get().await?;
+        // Existence check first: a missing book is a 404, never a DB
+        // error (the old path surfaced `diesel::result::Error::NotFound`
+        // as a 500 from the ext read).
+        let stored_ext: Option<String> = schema::books::table
+            .find(id)
+            .select(schema::books::ext_meta)
+            .first(&mut conn)
+            .await
+            .optional()?;
+        stored_ext
+            .as_deref()
+            .ok_or_else(|| ApiError::not_found("book"))?;
         // Extended metadata merges per-key on top of the stored object
         // (create-time overrides never clear what the source produced).
-        if let Some(ext) = ext {
-            self.merge_book_ext(id, &serde_json::to_value(ext).unwrap_or_default())
-                .await?;
-        }
+        // The merge result and the field update land in ONE UPDATE, so a
+        // failure cannot leave a half-updated book (ext changed but the
+        // title/description not, or vice versa).
+        let ext_json = match ext {
+            None => None,
+            Some(ext) => {
+                let stored = stored_ext.as_deref().unwrap_or("{}");
+                let mut map =
+                    serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(stored)
+                        .unwrap_or_default();
+                let patch = serde_json::to_value(ext).unwrap_or_default();
+                if let Some(obj) = patch.as_object() {
+                    for (k, v) in obj {
+                        if v.is_null() {
+                            map.remove(k);
+                        } else {
+                            map.insert(k.clone(), v.clone());
+                        }
+                    }
+                }
+                let merged = BookExt::from_value(serde_json::Value::Object(map))
+                    .map_err(ApiError::bad_request)?;
+                Some(merged.to_column())
+            }
+        };
         diesel::update(schema::books::table.find(id))
             .set((
                 schema::books::title.eq(coalesce_opt_nn(title, schema::books::title)),
@@ -1898,9 +1932,11 @@ impl Library {
                     cover_url.map(str::to_string),
                     schema::books::cover_url,
                 )),
+                schema::books::ext_meta.eq(coalesce_opt_nn(ext_json, schema::books::ext_meta)),
             ))
-            .execute(&mut self.diesel_db.get().await?)
+            .execute(&mut conn)
             .await?;
+        drop(conn);
         self.get_book(id)
             .await?
             .ok_or_else(|| ApiError::not_found("book"))
@@ -1917,11 +1953,13 @@ impl Library {
         let Some(obj) = patch.as_object() else {
             return Err(ApiError::bad_request("`ext` must be a JSON object"));
         };
-        let stored: String = schema::books::table
+        let stored: Option<String> = schema::books::table
             .find(id)
             .select(schema::books::ext_meta)
             .first(&mut self.diesel_db.get().await?)
-            .await?;
+            .await
+            .optional()?;
+        let stored = stored.ok_or_else(|| ApiError::not_found("book"))?;
         let mut map = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&stored)
             .unwrap_or_default();
         for (k, v) in obj {
@@ -2599,8 +2637,16 @@ impl Library {
     }
 
     pub async fn delete_file(&self, id: &str) -> Result<(), ApiError> {
-        // Remove the retained original first (best effort — a leftover
-        // disk file without a row is harmless garbage).
+        // Delete the row first: if that fails (e.g. 404), the retained
+        // original is untouched. Only after the row is gone is the disk
+        // file removed — a leftover disk file without a row is harmless
+        // garbage, whereas a row without its bytes breaks the file.
+        let deleted = diesel::delete(schema::book_files::table.find(id))
+            .execute(&mut self.diesel_db.get().await?)
+            .await?;
+        if deleted == 0 {
+            return Err(ApiError::not_found("file"));
+        }
         if let Some(file) = self.get_file(id).await? {
             let orig = file.original.map(|o| self.original_path(id, &o.ext));
             if let Some(path) = orig
