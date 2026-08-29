@@ -25,90 +25,17 @@ use crate::ParsedImage;
 use bookshelf_core::error::{Error, Result};
 use bookshelf_core::ext::BookExt;
 use bookshelf_core::model::TocNode;
-use ego_tree::NodeRef;
 use epub::doc::{EpubDoc, NavPoint};
 use scraper::node::Node;
 use scraper::{ElementRef, Html, Selector};
 
+use crate::htmlize::{keep_link, sanitize_html_fragment};
 use crate::{CoverImage, ParsedBook, ParsedChapter};
 
 /// XHTML / HTML content types accepted as spine documents.
 const XHTML_MIMES: [&str; 2] = ["application/xhtml+xml", "text/html"];
 /// Manifest media type of an EPUB 2 NCX TOC document.
 const NCX_MIME: &str = "application/x-dtbncx+xml";
-
-/// Tags that are dropped **with their whole subtree**.
-const DROP_TAGS: [&str; 25] = [
-    "script", "style", "link", "meta", "base", "noscript", "title", "head", "iframe", "object",
-    "embed", "form", "input", "button", "select", "textarea", "audio", "video", "source", "track",
-    "svg", "canvas", "template", "math", "map",
-];
-
-/// Tags kept in chapter content, per the safe subset of HTML usable in the
-/// reading UI. Ruby and friends are kept because CJK epubs rely on them.
-const ALLOWED_TAGS: [&str; 47] = [
-    "p",
-    "div",
-    "span",
-    "br",
-    "hr",
-    "h1",
-    "h2",
-    "h3",
-    "h4",
-    "h5",
-    "h6",
-    "em",
-    "strong",
-    "i",
-    "b",
-    "u",
-    "s",
-    "small",
-    "sub",
-    "sup",
-    "mark",
-    "blockquote",
-    "pre",
-    "code",
-    "ul",
-    "ol",
-    "li",
-    "dl",
-    "dt",
-    "dd",
-    "table",
-    "thead",
-    "tbody",
-    "tfoot",
-    "tr",
-    "th",
-    "td",
-    "img",
-    "a",
-    "figure",
-    "figcaption",
-    "ruby",
-    "rb",
-    "rt",
-    "rp",
-    "q",
-    "cite",
-];
-
-/// Elements serialized without a closing tag.
-const VOID_TAGS: [&str; 3] = ["br", "hr", "img"];
-
-/// Allowed attributes per tag; the empty slice means "none".
-fn allowed_attrs(tag: &str) -> &'static [&'static str] {
-    match tag {
-        "a" => &["href", "title", "id"],
-        "img" => &["src", "alt", "title", "id"],
-        "th" | "td" => &["colspan", "rowspan", "align", "id"],
-        "table" => &["align", "id"],
-        _ => &["id"],
-    }
-}
 
 /// Parse epub bytes into a normalized book.
 pub fn parse(bytes: &[u8]) -> Result<ParsedBook> {
@@ -633,6 +560,11 @@ fn remap_branches(
 ///   `src` to an ingest placeholder (`image:{n}`, n = index in `images`);
 /// - drops cross-document links (chapter-local anchors and http(s)/mailto
 ///   links survive).
+///
+/// The whitelist walker/serializer itself lives in [`crate::htmlize`]
+/// ([`sanitize_html_fragment`]); the epub-specific parts are the image
+/// extraction and the base-dir link resolution, provided by the rewriter
+/// callback.
 fn clean_xhtml<R: Read + Seek>(
     doc: &mut EpubDoc<R>,
     html: &str,
@@ -640,86 +572,15 @@ fn clean_xhtml<R: Read + Seek>(
     images: &mut Vec<ParsedImage>,
     seen: &mut HashMap<String, usize>,
 ) -> String {
-    let parsed = Html::parse_document(html);
-    let body = parsed
-        .select(&Selector::parse("body").expect("static selector"))
-        .next()
-        .unwrap_or(parsed.root_element());
     let base = doc_path.parent().unwrap_or(Path::new(""));
-
-    let mut out = String::with_capacity(html.len());
-    for child in body.children() {
-        sanitize_node(&mut out, &child, doc, base, images, seen);
-    }
-    out
-}
-
-fn sanitize_node<R: Read + Seek>(
-    out: &mut String,
-    node: &NodeRef<'_, scraper::node::Node>,
-    doc: &mut EpubDoc<R>,
-    base: &Path,
-    images: &mut Vec<ParsedImage>,
-    seen: &mut HashMap<String, usize>,
-) {
-    match node.value() {
-        Node::Text(t) => escape_html(out, &t.text),
-        Node::Element(el) => {
-            let tag = el.name().to_ascii_lowercase();
-            if DROP_TAGS.contains(&tag.as_str()) {
-                return; // subtree dropped entirely
-            }
-            let allowed = ALLOWED_TAGS.contains(&tag.as_str());
-            if allowed {
-                out.push('<');
-                out.push_str(&tag);
-                for (name, value) in el.attrs() {
-                    let name = name.to_ascii_lowercase();
-                    if !allowed_attrs(&tag).contains(&name.as_str()) {
-                        continue;
-                    }
-                    let Some(value) = rewrite_attr(doc, base, &tag, &name, value, images, seen)
-                    else {
-                        continue;
-                    };
-                    out.push(' ');
-                    out.push_str(&name);
-                    out.push_str("=\"");
-                    escape_html(out, &value);
-                    out.push('"');
-                }
-                out.push('>');
-            }
-            for child in node.children() {
-                sanitize_node(out, &child, doc, base, images, seen);
-            }
-            if allowed && !VOID_TAGS.contains(&tag.as_str()) {
-                out.push_str("</");
-                out.push_str(&tag);
-                out.push('>');
-            }
-        }
-        // Comments, doctype, processing instructions are not content.
-        _ => {}
-    }
-}
-
-/// Rewrite an attribute value per tag semantics. Returns `None` when the
-/// attribute must be dropped.
-fn rewrite_attr<R: Read + Seek>(
-    doc: &mut EpubDoc<R>,
-    base: &Path,
-    tag: &str,
-    name: &str,
-    value: &str,
-    images: &mut Vec<ParsedImage>,
-    seen: &mut HashMap<String, usize>,
-) -> Option<String> {
-    match (tag, name) {
+    // The epub-specific attribute rules: extract container images (rewriting
+    // their src to an ingest placeholder) and drop cross-document links.
+    let mut rewriter = |tag: &str, name: &str, value: &str| match (tag, name) {
         ("img", "src") => extract_image(doc, base, value, images, seen),
         ("a", "href") if !keep_link(value) => None,
         _ => Some(value.to_string()),
-    }
+    };
+    sanitize_html_fragment(html, &mut rewriter)
 }
 
 /// Resolve a (possibly relative) epub image reference against the current
@@ -764,29 +625,6 @@ fn extract_image<R: Read + Seek>(
     images.push(ParsedImage { bytes, mime });
     seen.insert(key, n);
     Some(format!("image:{n}"))
-}
-
-/// Which `href` values survive sanitization: in-page anchors and
-/// http(s)/mailto links (opened by the reader in a new tab).
-fn keep_link(href: &str) -> bool {
-    let h = href.trim();
-    h.starts_with('#')
-        || h.starts_with("http://")
-        || h.starts_with("https://")
-        || h.starts_with("mailto:")
-}
-
-/// Escape a text/attribute value for safe inclusion in HTML.
-fn escape_html(out: &mut String, s: &str) {
-    for c in s.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            _ => out.push(c),
-        }
-    }
 }
 
 /// Does the sanitized fragment carry meaningful content? Image-only pages
