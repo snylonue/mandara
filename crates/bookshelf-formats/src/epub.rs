@@ -18,7 +18,7 @@
 //!   foreign-content tags are stripped; only reachable link targets are kept.
 
 use std::collections::HashMap;
-use std::io::{Read, Seek, Write};
+use std::io::{Read, Seek};
 use std::path::{Component, Path, PathBuf};
 
 use crate::ParsedImage;
@@ -112,24 +112,10 @@ fn allowed_attrs(tag: &str) -> &'static [&'static str] {
 
 /// Parse epub bytes into a normalized book.
 pub fn parse(bytes: &[u8]) -> Result<ParsedBook> {
-    let mut tmp = tempfile::NamedTempFile::new()?;
-    tmp.write_all(bytes)?;
-    tmp.flush()?;
-    parse_path(tmp.path())
-}
+    let mut doc = epub::doc::EpubDoc::from_reader(std::io::Cursor::new(bytes))
+        .map_err(|e| Error::InvalidArgument(format!("{e}")))?;
 
-fn parse_path(path: &Path) -> Result<ParsedBook> {
-    let mut doc =
-        epub::doc::EpubDoc::new(path).map_err(|e| Error::InvalidArgument(format!("{e}")))?;
-
-    let title = doc
-        .get_title()
-        .or_else(|| {
-            path.file_stem()
-                .and_then(|s| s.to_str())
-                .map(|s| s.to_string())
-        })
-        .unwrap_or_else(|| "Untitled".into());
+    let title = doc.get_title().unwrap_or_else(|| "Untitled".into());
 
     let authors = doc
         .mdata("creator")
@@ -260,7 +246,7 @@ fn parse_path(path: &Path) -> Result<ParsedBook> {
 /// `dc:identifier` that validates, `urn:isbn:` prefix allowed), publisher,
 /// date, language, and translator-credited creators (`opf:role="trl"` /
 /// EPUB3 `role` refinement).
-fn extract_opf_ext(doc: &epub::doc::EpubDoc<std::io::BufReader<std::fs::File>>) -> BookExt {
+fn extract_opf_ext<R: Read + Seek>(doc: &epub::doc::EpubDoc<R>) -> BookExt {
     let mut ext = BookExt::default();
     let md = &doc.metadata;
     let by_property = |name: &str| {
