@@ -644,7 +644,7 @@ impl Library {
         for (idx, chapter) in chapters.iter().enumerate() {
             let content = annotate_image_dims(
                 &self.diesel_db,
-                &bookshelf_formats::htmlize::plugin_text_to_html(&chapter.content),
+                &bookshelf_formats::htmlize::plugin_to_html(&chapter.format, &chapter.content),
             )
             .await;
             // Empty bodies never overwrite materialized content: keep the
@@ -2906,7 +2906,7 @@ impl Library {
         }
         let content = annotate_image_dims(
             &self.diesel_db,
-            &bookshelf_formats::htmlize::plugin_text_to_html(&chapter.content),
+            &bookshelf_formats::htmlize::plugin_to_html(&chapter.format, &chapter.content),
         )
         .await;
         diesel::insert_into(schema::chapters::table)

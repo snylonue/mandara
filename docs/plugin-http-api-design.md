@@ -241,10 +241,13 @@ pipeline (`wasm-tools component new`, no adapter) stays untouched.
   `HTTP_PROXY`/`NO_PROXY` environment variables. No bookshelf-specific
   flag; deployments behind a proxy just export the usual vars.
 - Q3 **HTTP scheme default**: allow http by default (self-hosted sources).
-- Q4 **Chapter HTML**: should `chapter` gain a `format` field so plugins
-  can return HTML and the host sanitizes it through the existing EPUB
-  pipeline? (Nice for page-scraping sources; text extraction stays the
-  default.) Leaning: yes in P2, default `text`.
+- Q4 **Chapter HTML**: **resolved** — `chapter.format` landed (WIT v7):
+  plugins return `"text"` (host escapes + paragraph-wraps, the default)
+  or `"html"` (the plugin's own final HTML, stored verbatim with image
+  references annotated). wenku8 is the first `"html"` producer; its
+  illustration conventions are guest-side. A host-side HTML sanitizer
+  (the shared epub whitelist) remains a candidate if untrusted plugins
+  ever emit `"html"`.
 - Q5 **Caching of remote metadata** in the plugin (e.g. search results
   already seen)? Statelessness forbids guest-side state; the host DB is
   the cache. No action, but worth stating explicitly in `docs/plugins.md`.

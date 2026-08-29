@@ -180,27 +180,35 @@ exceeds the budget is interrupted at the next wasm backedge — keep
 catalog/chapter generation fast, or split it across calls. Plugin
 calls run on blocking threads, so a slow source never stalls a worker.
 
-### Text chapter conventions (host-normalized)
+### Chapter content: `text` vs `html`
 
-Plugins return chapter bodies as plain text; the host converts every
-chapter to canonical sanitized HTML at the ingest boundary
-(`bookshelf_formats::htmlize`, see `docs/storage-unification-design.md`).
-Escaping and blank-line paragraph splitting are automatic. On top of
-that, two line conventions are expanded into `<figure><img></figure>`:
+Plugins declare how their chapter body is interpreted via the WIT
+`chapter.format` (default `"text"`):
 
-- a plate-list line `N. <image-ref>` (how a 插图/plates chapter lists
-  its images, one per line);
-- an inline mark `[插图NN] <image-ref>` embedded in prose — the form
-  the wenku8 plugin produces when it resolves a print-book `（插图NNN）`
-  mark to its plate image.
+- **`"text"`** — the body is plain text. The host escapes it, splits on
+  blank lines into paragraphs, wraps each in `<p>` and turns single
+  newlines into `<br/>` (the same conversion txt uploads use,
+  `bookshelf_formats::htmlize::text_to_html`). This is the default and
+  covers sources that return prose.
+- **`"html"`** — the body is the plugin's **own final HTML fragment**
+  (escaped text and known safe tags). The host stores it verbatim; it
+  only annotates image references (`/api/images/{id}` with stored
+  dimensions). The plugin is responsible for escaping text and for
+  emitting only safe tags (paragraphs, headings, `<figure><img>`; no
+  scripts/event handlers).
 
-An `<image-ref>` is an `http(s)://` URL or the canonical stored-image
-path `/api/images/{id}` (what the `store-image` import returns).
+The wenku8 plugin is the only `"html"` producer today: its chapter
+bodies come from a fixed site layout (插图 plate chapters, inline
+`（插图NNN）` marks), so it keeps that expansion guest-side instead of
+the host knowing one source's conventions. A second page-scraping
+source with its own markup either emits `"html"` itself or returns
+plain text and lets the host escape it.
 
-The redundant head line `[插图] 共 N 张` is dropped. Bracket text that
-does not match a convention (no URL, non-http URL) stays plain text —
-when in doubt, emit the resolved `[插图NN] URL` form and the host does
-the rest.
+An image reference is an `http(s)://` URL or the canonical stored-image
+path `/api/images/{id}` (what the `store-image` import returns). When
+in doubt, emit a resolved reference and the host resolves/stores it;
+HTML-emitting plugins should use the `/api/images/{id}` form when they
+have stored the bytes (the host's `store-image` returns it).
 
 **Images.** The server is a content-addressed image store: producers store
 bytes and reference them by id. Plugin chapter HTML should contain only

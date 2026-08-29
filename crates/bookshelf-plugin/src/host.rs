@@ -396,6 +396,7 @@ impl WasmPlugin {
                 }
                 Ok(Some(SourceChapter {
                     title: c.title,
+                    format: c.format,
                     content: c.content,
                 }))
             }

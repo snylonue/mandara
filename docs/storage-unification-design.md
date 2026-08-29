@@ -78,16 +78,14 @@ is retired (see §6). Ingest converters, all host-side in
   `<p>`; dialogue-heavy light-novel text maps cleanly. Chapter titles
   stay in `chapters.title` (no `<h1>` inlining, matching current epub
   behavior).
-- **plugin text** — the txt converter, plus expansion of the *text
-  chapter conventions*, which this design promotes to a documented host
-  contract (docs/plugins.md):
-  - a `[插图] 共 N 张` head line is dropped (redundant metadata);
-  - a line `N. <url>` (plate list) becomes `<figure><img src="…"></figure>`;
-  - an inline `[插图NN] <url>` mark becomes the same `<figure>` at that
-    position in the paragraph flow.
+- **plugin text** — the txt converter; the plugin decides whether its
+  body is plain text (`chapter.format = "text"`, default) or its own
+  final HTML (`"html"`). The host only normalizes `"text"`; `"html"`
+  bodies are stored verbatim (image references annotated). The wenku8
+  illustration conventions are no longer a host contract — wenku8
+  expands them guest-side and emits `"html"` (see
+  `plugins/wenku8-plugin/src/lib.rs`).
   URLs are validated (`https?` only) and escaped like any other text.
-  The frontend regex (`TEXT_IMAGE_RE`) is deleted — the transformation
-  happened once, at materialization, not on every render.
 
 The reader renders every chapter through the existing `.epub-content`
 path. Converted-from-text chapters get a marker class (e.g.

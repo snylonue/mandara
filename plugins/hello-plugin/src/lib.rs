@@ -192,10 +192,12 @@ impl Guest for HelloPlugin {
                         content: format!(
                             "你成功加载了一个 wasm 插件！\n\n当前站点名称由配置注入：{site}。{tail}\n\n这本书由 Rust 编写、以 WebAssembly 组件的形式运行在服务器上。\n\n插件在沙箱中运行，只能调用宿主提供的 log 与 configure 接口。"
                         ),
+                        format: "text".into(),
                     },
                     Chapter {
                         title: "第二章 世界很大".into(),
                         content: "你可以用同样的方式写出自己的书籍来源插件：实现 capabilities、declare（或 search-books/get-book）、chapter-titles 和 get-chapter 即可。\n\n参考 docs/plugins.md。".into(),
+                        format: "text".into(),
                     },
                 ],
             },
@@ -204,6 +206,7 @@ impl Guest for HelloPlugin {
                 chapters: vec![Chapter {
                     title: "幕后".into(),
                     content: "这个插件的目录是声明式的数据，行为由配置驱动：\n\n- site-name 改变书名与正文；\n- mode 切换正文变体；\n- verbose 让插件记录宿主日志；\n- tags 附加到描述中。\n\n每次调用宿主都注入配置，插件内部没有任何跨调用状态。".into(),
+                    format: "text".into(),
                 }],
             },
         ])
@@ -252,22 +255,27 @@ impl Guest for HelloPlugin {
             ("hello-1", 0, false) => Some(Chapter {
                 title: "第一章 你好，书架".into(),
                 content: "你成功加载了一个 wasm 插件！\n\n这本书由 Rust 编写、以 WebAssembly 组件的形式运行在服务器上。\n\n插件在沙箱中运行，只能调用宿主提供的 log 接口。".into(),
+                format: "text".into(),
             }),
             ("hello-1", 0, true) => Some(Chapter {
                 title: "第一章 你好，书架（变体）".into(),
                 content: "配置里选择了 alt 版本：这一章的正文与 default 版本不同。\n\n你成功加载了一个 wasm 插件，并且配置注入生效了！".into(),
+                format: "text".into(),
             }),
             ("hello-1", 1, false) => Some(Chapter {
                 title: "第二章 世界很大".into(),
                 content: "你可以用同样的方式写出自己的书籍来源插件：实现 capabilities、declare（或 search-books/get-book）、chapter-titles 和 get-chapter 即可。\n\n参考 docs/plugins.md。".into(),
+                format: "text".into(),
             }),
             ("hello-1", 1, true) => Some(Chapter {
                 title: "第二章 世界很大（变体）".into(),
                 content: "（alt 变体）不同配置实例可以指向同一个 wasm 文件：实例 id 是源 id，配置归属实例。".into(),
+                format: "text".into(),
             }),
             ("hello-2", 0, _) => Some(Chapter {
                 title: "幕后".into(),
                 content: "这个插件的目录是声明式的数据，行为由配置驱动。\n\n每次调用宿主都注入配置，插件内部没有任何跨调用状态。".into(),
+                format: "text".into(),
             }),
             _ => None,
         }

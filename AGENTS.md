@@ -166,6 +166,13 @@ scripts/build-plugin-hello.sh      # build example plugin → plugins-built/
 - [x] API contract: `docs/api/openapi.yaml` covers the whole HTTP API;
       frontend generates typed schemas from it (`npm run api-types` →
       `src/api/schema.d.ts`) instead of hand-mirroring backend types.
+- [x] Plugin chapter format: WIT v7 adds `chapter.format` (`"text"` = host
+      escapes + paragraph-wraps, the default; `"html"` = the plugin's own
+      final HTML, stored verbatim with image references annotated). wenku8
+      is the first `"html"` producer — its 插图 plate lists and `（插图NNN）`
+      marks expand guest-side into `<figure><img>`; the host's
+      `htmlize::plugin_to_html` dispatches on the format and knows no
+      source-specific markup. hello/reader/wiki keep `"text"`.
 - [x] Frontend i18n: i18next + react-i18next wired in; all UI strings
       extracted to `src/i18n/locales/zh-CN.json`; only zh-CN shipped.
 - [x] End-to-end smoke test (curl): register → plugin book visible →

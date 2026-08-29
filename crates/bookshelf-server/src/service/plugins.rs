@@ -529,6 +529,7 @@ impl PluginService {
                                 .into_iter()
                                 .map(|c| SourceChapter {
                                     title: c.title,
+                                    format: c.format,
                                     content: c.content,
                                 })
                                 .collect(),
@@ -575,6 +576,7 @@ impl PluginService {
                                 .into_iter()
                                 .map(|c| SourceChapter {
                                     title: c.title,
+                                    format: c.format,
                                     content: c.content,
                                 })
                                 .collect(),

@@ -317,6 +317,7 @@ impl Guest for ReaderPlugin {
                 Ok(chapter) => Some(Chapter {
                     title: chapter.title,
                     content: chapter.content,
+                    format: "text".into(),
                 }),
                 Err(e) => {
                     log_error("get-chapter", &url, &format!("json: {e}"));

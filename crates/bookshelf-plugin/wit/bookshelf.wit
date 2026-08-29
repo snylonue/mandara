@@ -1,6 +1,12 @@
-// bookshelf plugin interface v6 (dev phase: no backward compatibility).
+// bookshelf plugin interface v7 (dev phase: no backward compatibility).
 //
-// v6 adds `book-entry.extra`: an optional JSON object with extended
+// v7 adds `chapter.format`: how the chapter body is interpreted
+// (`"text"` = plain text normalized by the host, `"html"` = the plugin's
+// own final HTML, passed through after image-reference annotation).
+// Plugins that need site-specific markup (e.g. wenku8's 插图 plates)
+// emit `"html"` and keep their expansion logic in the guest.
+//
+// v6 added `book-entry.extra`: an optional JSON object with extended
 // metadata (ISBN, publisher, dates, translators/illustrators, pages,
 // price, binding, language; series splits also read status/
 // total-volumes/tags from the same object). The host validates and
@@ -93,6 +99,14 @@ interface types {
         /// Empty string = title-only placeholder (body fetched lazily via
         /// `get-chapter`); non-empty = can be materialized eagerly.
         content: string,
+        /// How `content` is interpreted: `"text"` (default) = plain text,
+        /// the host escapes and paragraph-wraps it; `"html"` = the plugin
+        /// already emits sanitized HTML fragments (escaped text, known
+        /// tags) and the host only annotates images. HTML-emitting plugins
+        /// are responsible for escaping text and emitting only safe tags
+        /// (see docs/plugins.md); the host never re-parses `"html"`
+        /// content.
+        format: string,
     }
 
     /// One book of a `declare` catalog: metadata plus (optionally eager)

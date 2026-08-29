@@ -638,16 +638,19 @@ fn stored_urls(urls: &[String]) -> Vec<String> {
         .collect()
 }
 
-/// 插图 chapters: list the stored plate images, one `N. <image-ref>`
-/// line per plate (the host's ingest expands those lines into
-/// `<figure><img/></figure>`).
+/// 插图 chapters: list the stored plate images as HTML `<figure>`s. The
+/// host stores `format: "html"` bodies verbatim (only image references
+/// are annotated), so the plugin emits the final markup itself.
 fn format_image_list(urls: &[String]) -> String {
     if urls.is_empty() {
         return String::new();
     }
-    let mut out = format!("[插图] 共 {} 张\n", urls.len());
-    for (n, u) in urls.iter().enumerate() {
-        out.push_str(&format!("{}. {}\n", n + 1, u));
+    let mut out = String::new();
+    for u in urls.iter() {
+        out.push_str(&format!(
+            "<figure><img src=\"{}\"/></figure>\n",
+            escape_html(u)
+        ));
     }
     out.trim_end().to_string()
 }
@@ -721,42 +724,87 @@ fn parse_illustration_mark(text: &str, at: usize) -> Option<(u32, usize)> {
     Some((digits.parse().ok()?, pos))
 }
 
-/// Replace `（插图NNN）` marks in a prose chapter with the matching plate
-/// URL of the volume's 插图 chapter, in `[插图NNN] <url>` form. Numbered
-/// marks resolve by plate number (001 → first plate); marks whose number
-/// exceeds the plate count fall back to appearance order within the
-/// chapter; unresolved marks stay as-is.
-fn replace_illustration_marks(text: &str, urls: &[String]) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    let mut seen = 0u32;
-    while let Some(at) = next_open_bracket(rest) {
-        match parse_illustration_mark(rest, at) {
-            Some((n, end)) => {
-                seen += 1;
-                let idx = if (n as usize) <= urls.len() {
-                    n as usize - 1
-                } else {
-                    seen as usize - 1
-                };
-                if let Some(url) = urls.get(idx) {
-                    out.push_str(&rest[..at]);
-                    out.push_str(&format!("[插图{n:03}] {url}"));
-                } else {
-                    out.push_str(&rest[..end]);
+/// Escape text for safe inclusion in HTML (text content and attribute
+/// values; the URLs we emit cannot contain quotes by construction).
+fn escape_html(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+/// One `<figure><img>` from a stored/remote image reference.
+fn figure_html(url: &str) -> String {
+    format!("<figure><img src=\"{}\"/></figure>", escape_html(url))
+}
+
+/// Wrap a paragraph of plain text (newlines become `<br/>`) in `<p>`.
+fn para_html(para: &str) -> String {
+    format!(
+        "<p>{}</p>\n",
+        escape_html(para.trim()).replace('\n', "<br/>")
+    )
+}
+
+/// Convert a prose chapter's plain text (with `（插图NNN）` plate marks)
+/// to final HTML: blank-line paragraphs wrapped in `<p>`, single newlines
+/// as `<br/>`, and each plate mark replaced by its matching `<figure>`
+/// at the mark's position (numbered by plate order; out-of-range marks
+/// fall back to appearance order; unresolved marks stay as literal text).
+/// The host stores `format: "html"` bodies verbatim, so this is the final
+/// markup the reader sees.
+fn prose_to_html(text: &str, urls: &[String]) -> String {
+    let mut out = String::with_capacity(text.len() + 64);
+    for para in text.split("\n\n") {
+        // Accumulate escaped text lines; a figure flushes them as one <p>.
+        let mut buf = String::new();
+        let flush = |buf: &mut String, out: &mut String| {
+            if !buf.trim().is_empty() {
+                out.push_str(&para_html(buf));
+                buf.clear();
+            }
+        };
+        for line in para.split('\n') {
+            // Inline marks: emit the text between marks, then the figure.
+            let mut rest = line;
+            let mut seen = 0u32;
+            loop {
+                match next_open_bracket(rest) {
+                    Some(at) if parse_illustration_mark(rest, at).is_some() => {
+                        let (n, end) = parse_illustration_mark(rest, at).unwrap();
+                        seen += 1;
+                        buf.push_str(&rest[..at]);
+                        flush(&mut buf, &mut out);
+                        let idx = if (n as usize) <= urls.len() {
+                            n as usize - 1
+                        } else {
+                            seen as usize - 1
+                        };
+                        if let Some(url) = urls.get(idx) {
+                            out.push_str(&figure_html(url));
+                            out.push('\n');
+                        } else {
+                            buf.push_str(&rest[at..end]);
+                        }
+                        rest = &rest[end..];
+                    }
+                    Some(at) => {
+                        // an opening bracket that does not start a mark:
+                        // copy it (one full char) and keep scanning
+                        let char_len = rest[at..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+                        buf.push_str(&rest[..at + char_len]);
+                        rest = &rest[at + char_len..];
+                    }
+                    None => {
+                        buf.push_str(rest);
+                        break;
+                    }
                 }
-                rest = &rest[end..];
             }
-            None => {
-                // an opening bracket that does not start a mark: copy it
-                // (one full char) and keep scanning
-                let char_len = rest[at..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
-                out.push_str(&rest[..at + char_len]);
-                rest = &rest[at + char_len..];
-            }
+            buf.push('\n');
         }
+        flush(&mut buf, &mut out);
     }
-    out.push_str(rest);
     out
 }
 
@@ -1005,13 +1053,17 @@ impl Guest for Wenku8Plugin {
         let inner = strip_contentdp(&content_div(&html)?);
         let is_ill = entry.illustration || inner.contains("class=\"divimage\"");
         let content = if is_ill {
+            // 插图 chapter: the plate URLs become `<figure><img>`s directly
+            // (stored in the host's image store; failures keep the remote
+            // URL). The host stores `format: "html"` bodies verbatim.
             format_image_list(&stored_urls(&collect_image_urls(&inner)))
         } else {
+            // Prose: plain text → final HTML (blank-line paragraphs,
+            // newlines as `<br/>`, plate marks → `<figure>`). Matches the
+            // host's text→HTML converter for text-format chapters so both
+            // formats render identically.
             let text = tidy(&html_to_text(&inner));
-            // wenku8 inserts `（插图NNN）` marks where the print book has a
-            // plate; resolve them to the volume's plate image (stored in
-            // the host's image store) of that volume.
-            replace_illustration_marks(
+            prose_to_html(
                 &text,
                 &stored_urls(&volume_illustration_urls(
                     &base,
@@ -1029,6 +1081,7 @@ impl Guest for Wenku8Plugin {
         Some(Chapter {
             title: entry.title.clone(),
             content,
+            format: "html".into(),
         })
     }
 
@@ -1115,22 +1168,40 @@ mod tests {
     }
 
     #[test]
-    fn replaces_marks_with_plate_urls() {
+    fn replaces_marks_with_plate_figures() {
         let urls: Vec<String> = (1..=3).map(|i| format!("https://a/{i}.jpg")).collect();
-        let out = replace_illustration_marks("（插图001）\n（插图002）\n（插图003）", &urls);
-        assert!(out.contains("[插图001] https://a/1.jpg"), "{out}");
-        assert!(out.contains("[插图002] https://a/2.jpg"), "{out}");
-        assert!(out.contains("[插图003] https://a/3.jpg"), "{out}");
+        let out = prose_to_html("（插图001）\n（插图002）\n（插图003）", &urls);
+        assert!(
+            out.contains(r#"<figure><img src="https://a/1.jpg"/></figure>"#),
+            "{out}"
+        );
+        assert!(
+            out.contains(r#"<figure><img src="https://a/2.jpg"/></figure>"#),
+            "{out}"
+        );
+        assert!(
+            out.contains(r#"<figure><img src="https://a/3.jpg"/></figure>"#),
+            "{out}"
+        );
     }
 
     #[test]
     fn out_of_range_mark_falls_back_to_appearance_order_then_stays() {
         let urls: Vec<String> = (1..=2).map(|i| format!("https://a/{i}.jpg")).collect();
         // 004 越界（仅 2 张）且是第 1 次出现 → 出现序 → 第 1 张
-        let out = replace_illustration_marks("（插图004）", &urls);
-        assert!(out.contains("[插图004] https://a/1.jpg"), "{out}");
-        // 无图列表 → 全部保留原文
-        let out = replace_illustration_marks("（插图005）", &[]);
-        assert_eq!(out, "（插图005）");
+        let out = prose_to_html("（插图004）", &urls);
+        assert!(
+            out.contains(r#"<figure><img src="https://a/1.jpg"/></figure>"#),
+            "{out}"
+        );
+        // 无图列表 → 全部保留原文（段落包裹后）
+        let out = prose_to_html("（插图005）", &[]);
+        assert_eq!(out, "<p>（插图005）</p>\n");
+    }
+
+    #[test]
+    fn prose_is_paragraph_wrapped_and_escaped() {
+        let out = prose_to_html("第一段。<>&\n\n第二段。", &[]);
+        assert_eq!(out, "<p>第一段。&lt;&gt;&amp;</p>\n<p>第二段。</p>\n");
     }
 }

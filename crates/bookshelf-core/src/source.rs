@@ -43,6 +43,11 @@ pub struct SourceBook {
 #[derive(Debug, Clone)]
 pub struct SourceChapter {
     pub title: String,
+    /// How `content` is interpreted (the WIT `chapter.format`): `"text"`
+    /// (default) = plain text, normalized by the host; `"html"` = the
+    /// plugin's own final HTML, passed through after image-reference
+    /// annotation.
+    pub format: String,
     pub content: String,
 }
 
