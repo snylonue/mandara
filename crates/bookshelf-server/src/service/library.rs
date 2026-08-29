@@ -597,21 +597,17 @@ impl Library {
             }
         };
         // Content indirection comes from the entry; the metadata instance
-        // owns the `books` row, the content instance the chapters.
-        diesel::update(
-            schema::book_files::table.filter(
-                schema::book_files::source
-                    .eq(source_id)
-                    .and(schema::book_files::external_id.eq(&book.id)),
-            ),
-        )
-        .set((
-            schema::book_files::chapter_count.eq(titles.len() as i64),
-            schema::book_files::content_source.eq(&book.content_source),
-            schema::book_files::content_external_id.eq(&book.content_id),
-        ))
-        .execute(&mut self.diesel_db.get().await?)
-        .await?;
+        // owns the `books` row, the content instance the chapters. Scoped
+        // to the specific file (never a filter on (source, external_id),
+        // which would also rewrite volume files sharing the same pair).
+        diesel::update(schema::book_files::table.find(&file_id))
+            .set((
+                schema::book_files::chapter_count.eq(titles.len() as i64),
+                schema::book_files::content_source.eq(&book.content_source),
+                schema::book_files::content_external_id.eq(&book.content_id),
+            ))
+            .execute(&mut self.diesel_db.get().await?)
+            .await?;
         Ok((book_id, file_id))
     }
 
