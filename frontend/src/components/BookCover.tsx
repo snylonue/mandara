@@ -23,7 +23,17 @@ export function BookCover({
     );
   }
   if (coverUrl) {
-    return <img src={coverUrl} alt="" loading="lazy" />;
+    // Remote cover: never leak the Referer to third-party CDNs, and
+    // degrade to the letter tile when it fails to load.
+    return (
+      <img
+        src={coverUrl}
+        alt=""
+        loading="lazy"
+        referrerPolicy="no-referrer"
+        onError={() => setFailed(true)}
+      />
+    );
   }
   return (
     <div className="book-cover-fallback">

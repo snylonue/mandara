@@ -160,13 +160,16 @@ export function SourceSearchPane({
   }
 
   // Re-search when the instance or the query changes. Only searchable
-  // sources are searched; others pick books by id.
+  // sources are searched; others pick books by id. A query change also
+  // clears the stale result page (old pagination does not survive a new
+  // search term).
   useEffect(() => {
     if (!sel || !showSearch) {
       setResult(null);
       setError(null);
       return;
     }
+    setResult(null); // drop the previous page while the new search loads
     void load(sel, q, 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sel, q, showSearch]);

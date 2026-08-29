@@ -461,8 +461,15 @@ export function BookDetailPage() {
     try {
       if (withFiles && detail) {
         // Delete the files one by one (they are independent resources).
+        // A 404 mid-loop (file already gone) is not fatal: keep going
+        // with the remaining files instead of aborting the whole delete.
         for (const f of detail.files) {
-          await api(`/files/${f.id}`, { method: "DELETE" });
+          try {
+            await api(`/files/${f.id}`, { method: "DELETE" });
+          } catch (e) {
+            if (e instanceof ApiError && e.status === 404) continue;
+            throw e;
+          }
         }
         await load();
       }

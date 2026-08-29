@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
@@ -85,19 +85,27 @@ export function LibraryPage() {
   // The unified add dialog (添加书籍 / 新建系列 → 一个对话框).
   const [addOpen, setAddOpen] = useState(false);
   const [addMode, setAddMode] = useState<AddMode>("book");
+  // Monotonic sequence for the search requests: only the latest response
+  // lands (a slow earlier query must not clobber a newer one).
+  const searchSeq = useRef(0);
 
   const load = useCallback(async (query: string) => {
+    const mySeq = ++searchSeq.current;
     try {
       const list = await api<BookListEntry[]>(`/books?q=${encodeURIComponent(query)}`);
-      setEntries(list);
+      if (searchSeq.current === mySeq) setEntries(list);
     } catch (err) {
+      if (searchSeq.current !== mySeq) return;
       setEntries([]);
       toast.push("error", err instanceof Error ? err.message : t("common.failed"));
     }
   }, [toast, t]);
 
+  // Debounced search: typing is not a request per keystroke, and the
+  // latest query always wins (see searchSeq above).
   useEffect(() => {
-    void load(q);
+    const timer = window.setTimeout(() => void load(q), 250);
+    return () => window.clearTimeout(timer);
   }, [load, q]);
 
   // Group the (series-sorted) list into series groups + standalone books,

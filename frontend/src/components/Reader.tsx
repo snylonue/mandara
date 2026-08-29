@@ -108,11 +108,13 @@ export function Reader({
 
   // Debounced scroll tracking → progress callback.
   const debounceRef = useRef<number | undefined>(undefined);
+  const lastFractionRef = useRef(0);
   useEffect(() => {
     function onScroll() {
       const max = document.documentElement.scrollHeight - window.innerHeight;
       const f = max > 0 ? Math.min(1, Math.max(0, window.scrollY / max)) : 0;
       setFraction(f);
+      lastFractionRef.current = f;
       if (!onProgress || readOnly) return;
       window.clearTimeout(debounceRef.current);
       debounceRef.current = window.setTimeout(() => onProgress(f), 600);
@@ -121,6 +123,11 @@ export function Reader({
     return () => {
       window.removeEventListener("scroll", onScroll);
       window.clearTimeout(debounceRef.current);
+      // Flush the pending fraction on unmount (leaving the reader must
+      // not lose the last 600 ms of scroll).
+      if (onProgress && !readOnly && lastFractionRef.current > 0) {
+        onProgress(lastFractionRef.current);
+      }
     };
   }, [onProgress, readOnly]);
 
