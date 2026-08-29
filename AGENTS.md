@@ -132,7 +132,9 @@ scripts/build-plugin-hello.sh      # build example plugin → plugins-built/
       schema-rendered config form), library “源浏览器” (search→materialize),
       upload manual-mode picker via search, book-detail content-source
       display + “更换内容源” rebind dialog; OpenAPI contract + generated
-      types updated.
+      types updated. Per-instance re-sync has its own endpoint
+      (`POST /api/plugins/instances/{id}/sync`) instead of the old
+      full-sync button.
 - [x] Metadata management: one upload endpoint with attach-to-existing /
       auto (plugin `identify-upload` identification with parsed fallback) /
       manual (field overrides, plugin catalog picker) modes; distinct
