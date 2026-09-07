@@ -661,7 +661,7 @@ impl Library {
     ) -> Result<(), ApiError> {
         let mut conn = self.diesel_db.get().await?;
         for (idx, chapter) in chapters.iter().enumerate() {
-            let content = annotate_image_dims(
+            let content = with_stored_dims(
                 &self.diesel_db,
                 &bookshelf_formats::htmlize::plugin_to_html(&chapter.format, &chapter.content),
             )
@@ -2755,7 +2755,7 @@ impl Library {
                 // Best-effort width/height on stored img tags (chapters
                 // materialized before the dimensions existed lack them;
                 // without them every image load re-anchors the view).
-                model.content = annotate_image_dims(&self.diesel_db, &model.content).await;
+                model.content = with_stored_dims(&self.diesel_db, &model.content).await;
                 return Ok(Some(model));
             }
         }
@@ -2928,7 +2928,7 @@ impl Library {
         if chapter.content.trim().is_empty() {
             return Ok(None);
         }
-        let content = annotate_image_dims(
+        let content = with_stored_dims(
             &self.diesel_db,
             &bookshelf_formats::htmlize::plugin_to_html(&chapter.format, &chapter.content),
         )
@@ -3371,8 +3371,10 @@ pub fn annotate_image_dimensions(html: &str, dims_by_id: &HashMap<String, (i64, 
 
 /// Look up stored dimensions for the `/api/images/{id}` references in
 /// `html` and add width/height attributes to the img tags (best-effort:
-/// any lookup failure returns the HTML unchanged).
-async fn annotate_image_dims(db: &DieselDb, html: &str) -> String {
+/// any lookup failure returns the HTML unchanged). This is the DB-backed
+/// wrapper around the pure [`annotate_image_dimensions`] (covered by the
+/// tests directly).
+async fn with_stored_dims(db: &DieselDb, html: &str) -> String {
     const NEEDLE: &str = "src=\"/api/images/";
     if !html.contains(NEEDLE) {
         return html.to_string();
@@ -3519,13 +3521,10 @@ fn parse_authors(json: &str) -> Vec<String> {
 /// identification.
 fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
-    let digest = Sha256::digest(bytes);
-    let mut out = String::with_capacity(digest.len() * 2);
-    for b in digest {
-        use std::fmt::Write as _;
-        let _ = write!(out, "{b:02x}");
-    }
-    out
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 #[cfg(test)]
