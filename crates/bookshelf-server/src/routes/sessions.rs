@@ -24,7 +24,6 @@ use crate::schema::sessions;
 #[derive(Serialize)]
 pub struct SessionsResponse {
     pub file_id: String,
-    pub book_title: String,
     pub sessions: Vec<ReadingSession>,
 }
 
@@ -36,7 +35,9 @@ pub async fn list_sessions(
     Path(file_id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
     let user = current_user(&st, &headers).await?;
-    let file = load_visible_file(&st, &user, &file_id).await?;
+    // `load_visible_file` enforces the caller can view the file; its
+    // return value is otherwise unused here.
+    let _file = load_visible_file(&st, &user, &file_id).await?;
 
     let mut conn = st.diesel_db.get().await?;
     let rows: Vec<SessionRow> = sessions::table
@@ -46,16 +47,8 @@ pub async fn list_sessions(
         .select(SessionRow::as_select())
         .load(&mut conn)
         .await?;
-    drop(conn);
-    let book_title = st
-        .library
-        .get_book(&file.book_id)
-        .await?
-        .map(|b| b.title)
-        .unwrap_or_default();
     Ok(Json(SessionsResponse {
         file_id,
-        book_title,
         sessions: rows.into_iter().map(|r| r.into_model()).collect(),
     }))
 }

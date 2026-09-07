@@ -995,7 +995,6 @@ export interface components {
         };
         SessionsResponse: {
             file_id: string;
-            book_title: string;
             sessions: components["schemas"]["ReadingSession"][];
         };
         CreateSession: {

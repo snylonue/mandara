@@ -2641,20 +2641,25 @@ impl Library {
         // original is untouched. Only after the row is gone is the disk
         // file removed — a leftover disk file without a row is harmless
         // garbage, whereas a row without its bytes breaks the file.
+        // Read the retained-original extension before deleting the row: the
+        // disk cleanup needs it ringside, and the row is gone afterwards.
+        let orig_ext: Option<Option<String>> = schema::book_files::table
+            .find(id)
+            .select(schema::book_files::orig_ext)
+            .first(&mut self.diesel_db.get().await?)
+            .await
+            .optional()?;
         let deleted = diesel::delete(schema::book_files::table.find(id))
             .execute(&mut self.diesel_db.get().await?)
             .await?;
         if deleted == 0 {
             return Err(ApiError::not_found("file"));
         }
-        if let Some(file) = self.get_file(id).await? {
-            let orig = file.original.map(|o| self.original_path(id, &o.ext));
-            if let Some(path) = orig
-                && let Err(e) = tokio::fs::remove_file(&path).await
-                && e.kind() != std::io::ErrorKind::NotFound
-            {
-                warn!(file = %id, path = %path.display(), error = %e, "failed to remove original");
-            }
+        if let Some(Some(ext)) = orig_ext
+            && let Err(e) = tokio::fs::remove_file(self.original_path(id, &ext)).await
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            warn!(file = %id, ext = %ext, error = %e, "failed to remove original");
         }
         Ok(())
     }

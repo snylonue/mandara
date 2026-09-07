@@ -1937,11 +1937,9 @@ components:
 
     SessionsResponse:
       type: object
-      required: [file_id, book_title, sessions]
+      required: [file_id, sessions]
       properties:
         file_id:
-          type: string
-        book_title:
           type: string
         sessions:
           type: array

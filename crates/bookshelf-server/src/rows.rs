@@ -138,7 +138,7 @@ impl FileRow {
             visibility: self
                 .visibility
                 .parse::<Visibility>()
-                .unwrap_or(Visibility::Private),
+                .map_err(|_| anyhow!("bad file visibility in db: {}", self.visibility))?,
             owner_id: self.owner_id,
             chapter_count: self.chapter_count.max(0) as u32,
             created_at: parse_ts(&self.created_at),
