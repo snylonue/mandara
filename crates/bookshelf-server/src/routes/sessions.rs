@@ -7,7 +7,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 
-use bookshelf_core::model::{Position, ReadingSession};
+use bookshelf_core::model::{InChapter, Position, ReadingSession};
 
 use diesel::ExpressionMethods as _;
 use diesel::OptionalExtension as _;
@@ -107,8 +107,10 @@ pub async fn create_session(
 #[derive(Deserialize)]
 pub struct UpdatePosition {
     pub chapter_idx: Option<u32>,
-    pub offset: Option<u32>,
-    pub fraction: Option<f64>,
+    /// New chapter progress: either a scroll fraction (`{fraction}`) or a
+    /// character offset (`{offset}`). Sending both is rejected at
+    /// deserialization; the two channels are mutually exclusive.
+    pub in_chapter: Option<InChapter>,
 }
 
 pub async fn update_session(
@@ -141,8 +143,7 @@ pub async fn update_session(
         .unwrap_or(0);
     let position = Position {
         chapter_idx: req.chapter_idx.unwrap_or(row.chapter_idx.max(0) as u32),
-        offset: req.offset.unwrap_or(row.offset.max(0) as u32),
-        fraction: req.fraction.unwrap_or(row.fraction),
+        in_chapter: req.in_chapter.unwrap_or(InChapter::Fraction(row.fraction)),
     }
     .clamped(chapter_count);
 
@@ -152,8 +153,8 @@ pub async fn update_session(
     diesel::update(sessions::table.find(&session_id))
         .set((
             sessions::chapter_idx.eq(i64::from(position.chapter_idx)),
-            sessions::offset.eq(i64::from(position.offset)),
-            sessions::fraction.eq(position.fraction),
+            sessions::offset.eq(i64::from(position.offset())),
+            sessions::fraction.eq(position.fraction()),
             sessions::updated_at.eq(now),
         ))
         .execute(&mut conn)

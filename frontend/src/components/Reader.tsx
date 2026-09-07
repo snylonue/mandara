@@ -44,7 +44,11 @@ export function Reader({
   );
   const [chapter, setChapter] = useState<Chapter | null>(null);
   const [loading, setLoading] = useState(false);
-  const [fraction, setFraction] = useState(initialPosition?.fraction ?? 0);
+  const [fraction, setFraction] = useState(
+    initialPosition?.in_chapter && "fraction" in initialPosition.in_chapter
+      ? initialPosition.in_chapter.fraction
+      : 0,
+  );
   const loadedRef = useRef<Map<number, Chapter>>(new Map());
   const pendingFragRef = useRef<string | null>(null);
 

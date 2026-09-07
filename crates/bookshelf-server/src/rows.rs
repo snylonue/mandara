@@ -3,8 +3,8 @@
 use anyhow::anyhow;
 
 use bookshelf_core::model::{
-    BookMeta, Chapter, ChapterMeta, FileFormat, FileMeta, OriginalInfo, Position, ReadingSession,
-    Role, SeriesMeta, Share, ShareKind, User, Visibility,
+    BookMeta, Chapter, ChapterMeta, FileFormat, FileMeta, InChapter, OriginalInfo, Position,
+    ReadingSession, Role, SeriesMeta, Share, ShareKind, User, Visibility,
 };
 use bookshelf_core::{BookExt, SeriesExt};
 
@@ -198,6 +198,9 @@ pub struct SessionRow {
     pub file_id: String,
     pub label: String,
     pub chapter_idx: i64,
+    /// Still read from the column for Diesel deserialization; the model
+    /// now derives the in-chapter progress from `fraction` only.
+    #[allow(dead_code)]
     pub offset: i64,
     pub fraction: f64,
     pub updated_at: String,
@@ -212,8 +215,7 @@ impl SessionRow {
             label: self.label,
             position: Position {
                 chapter_idx: self.chapter_idx.max(0) as u32,
-                offset: self.offset.max(0) as u32,
-                fraction: self.fraction.clamp(0.0, 1.0),
+                in_chapter: InChapter::Fraction(self.fraction.clamp(0.0, 1.0)),
             },
             updated_at: parse_ts(&self.updated_at),
         }
@@ -225,7 +227,6 @@ impl SessionRow {
 pub struct ShareRow {
     pub token: String,
     pub kind: String,
-    pub mode: String,
     pub file_id: String,
     pub session_id: Option<String>,
     pub created_by: Option<String>,
@@ -241,7 +242,6 @@ impl ShareRow {
                 .kind
                 .parse::<ShareKind>()
                 .map_err(|_| anyhow!("bad share kind in db: {}", self.kind))?,
-            mode: self.mode,
             file_id: self.file_id,
             session_id: self.session_id,
             created_by: self.created_by,

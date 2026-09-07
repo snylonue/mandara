@@ -48,7 +48,7 @@ pub async fn register(
     if !st.auth.allow_register() {
         return Err(ApiError::Forbidden);
     }
-    let username = validate_username(&req.username)?;
+    let username: Username = req.username.parse().map_err(ApiError::bad_request)?;
     if req.password.chars().count() < 8 {
         return Err(ApiError::bad_request(
             "password must be at least 8 characters",
@@ -69,7 +69,7 @@ pub async fn register(
     let result = diesel::insert_into(users::table)
         .values((
             users::id.eq(&id),
-            users::username.eq(&username),
+            users::username.eq(username.as_ref()),
             users::password_hash.eq(&hash),
             users::role.eq(&role),
         ))
@@ -88,7 +88,7 @@ pub async fn register(
 
     let user = User {
         id,
-        username,
+        username: username.to_string(),
         created_at: chrono::Utc::now(),
         role: if first {
             bookshelf_core::model::Role::Admin
@@ -152,18 +152,38 @@ pub async fn me(State(st): State<St>, headers: HeaderMap) -> Result<impl IntoRes
     Ok(Json(user))
 }
 
-fn validate_username(username: &str) -> Result<String, ApiError> {
-    let len = username.chars().count();
-    if !(3..=32).contains(&len) {
-        return Err(ApiError::bad_request("username must be 3-32 characters"));
+/// A username validated at construction (`3..=32` chars, letters/digits/`_`/`-`
+/// only). The validation result is carried in the type, so a `Username` can
+/// only ever hold a rule-valid value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Username(String);
+
+impl std::str::FromStr for Username {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let len = s.chars().count();
+        if !(3..=32).contains(&len) {
+            return Err("username must be 3-32 characters".into());
+        }
+        if !s
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        {
+            return Err("username may only contain letters, digits, '_' and '-'".into());
+        }
+        Ok(Username(s.to_string()))
     }
-    if !username
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-    {
-        return Err(ApiError::bad_request(
-            "username may only contain letters, digits, '_' and '-'",
-        ));
+}
+
+impl AsRef<str> for Username {
+    fn as_ref(&self) -> &str {
+        &self.0
     }
-    Ok(username.to_string())
+}
+
+impl std::fmt::Display for Username {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
 }

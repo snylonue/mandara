@@ -1760,20 +1760,28 @@ components:
 
     Position:
       type: object
-      required: [chapter_idx, offset, fraction]
+      required: [chapter_idx, in_chapter]
       properties:
         chapter_idx:
           type: integer
           minimum: 0
-        offset:
-          type: integer
-          minimum: 0
-          description: Character offset within the chapter (non-web readers)
-        fraction:
-          type: number
-          minimum: 0
-          maximum: 1
-          description: Scroll fraction within the chapter (web reader)
+        in_chapter:
+          oneOf:
+            - type: object
+              required: [fraction]
+              properties:
+                fraction:
+                  type: number
+                  minimum: 0
+                  maximum: 1
+                  description: Scroll fraction within the chapter (web reader)
+            - type: object
+              required: [offset]
+              properties:
+                offset:
+                  type: integer
+                  minimum: 0
+                  description: Character offset within the chapter (non-web readers)
 
     SeriesBrief:
       type: object
@@ -1960,13 +1968,24 @@ components:
         chapter_idx:
           type: integer
           minimum: 0
-        offset:
-          type: integer
-          minimum: 0
-        fraction:
-          type: number
-          minimum: 0
-          maximum: 1
+        in_chapter:
+          description: New chapter progress. Either a scroll fraction
+            (`{fraction}`) or a character offset (`{offset}`) — the two
+            channels are mutually exclusive.
+          oneOf:
+            - type: object
+              required: [fraction]
+              properties:
+                fraction:
+                  type: number
+                  minimum: 0
+                  maximum: 1
+            - type: object
+              required: [offset]
+              properties:
+                offset:
+                  type: integer
+                  minimum: 0
 
     ShareKind:
       type: string
@@ -1974,7 +1993,6 @@ components:
 
     CreateShare:
       type: object
-      required: [kind]
       properties:
         kind:
           $ref: "#/components/schemas/ShareKind"
@@ -1991,7 +2009,6 @@ components:
         - token
         - url
         - kind
-        - mode
         - file_id
         - session_id
         - expires_at
@@ -2004,9 +2021,6 @@ components:
           type: string
         kind:
           $ref: "#/components/schemas/ShareKind"
-        mode:
-          type: string
-          enum: [read, progress]
         file_id:
           type: string
         session_id:
@@ -2067,13 +2081,10 @@ components:
 
     ShareView:
       type: object
-      required: [kind, mode, book, file, session, created_at, expires_at]
+      required: [kind, book, file, session, created_at, expires_at]
       properties:
         kind:
           $ref: "#/components/schemas/ShareKind"
-        mode:
-          type: string
-          enum: [read, progress]
         book:
           $ref: "#/components/schemas/ShareBookView"
         file:

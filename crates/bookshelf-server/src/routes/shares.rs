@@ -15,7 +15,9 @@ use diesel::expression_methods::NullableExpressionMethods as _;
 use diesel::prelude::SelectableHelper as _;
 use diesel_async::RunQueryDsl as _;
 
-use bookshelf_core::model::{ChapterMeta, Position, Share, ShareKind, TocNode, User, Visibility};
+use bookshelf_core::model::{
+    ChapterMeta, InChapter, Position, Share, ShareKind, TocNode, User, Visibility,
+};
 
 use crate::error::ApiError;
 use crate::routes::{St, can_manage_file, current_user, load_visible_file};
@@ -29,7 +31,6 @@ pub struct ShareResponse {
     pub token: String,
     pub url: String,
     pub kind: ShareKind,
-    pub mode: String,
     pub file_id: String,
     pub session_id: Option<String>,
     pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -42,7 +43,6 @@ impl ShareResponse {
             url: format!("/share/{}", share.token),
             token: share.token,
             kind: share.kind,
-            mode: share.mode,
             file_id: share.file_id,
             session_id: share.session_id,
             expires_at: share.expires_at,
@@ -74,8 +74,9 @@ async fn load_share(st: &St, token: &str) -> Result<ShareRow, ApiError> {
 
 #[derive(Deserialize)]
 pub struct CreateShare {
-    /// `"book"` (default) or `"session"`.
-    pub kind: Option<String>,
+    /// `book` (default) or `session`. Invalid values are rejected at
+    /// deserialization (400) rather than parsed by hand.
+    pub kind: Option<ShareKind>,
     /// Required when kind == "session".
     pub session_id: Option<String>,
     /// Expiry in days from now (optional).
@@ -97,13 +98,9 @@ pub async fn create_share(
         return Err(ApiError::Forbidden);
     }
 
-    let kind: ShareKind = match req.kind.as_deref() {
-        None => ShareKind::Book,
-        Some(s) => s.parse().map_err(ApiError::bad_request)?,
-    };
+    let kind = req.kind.unwrap_or(ShareKind::Book);
 
     let mut session_id = None;
-    let mode = kind.mode();
 
     if kind == ShareKind::Session {
         let sid = req
@@ -144,7 +141,6 @@ pub async fn create_share(
         .values((
             shares::token.eq(&token),
             shares::kind.eq(kind.as_ref()),
-            shares::mode.eq(mode),
             shares::file_id.eq(&file_id),
             shares::session_id.eq(&session_id),
             shares::created_by.eq(&user.id),
@@ -195,7 +191,6 @@ pub struct ShareSessionView {
 #[derive(Serialize)]
 pub struct ShareView {
     pub kind: ShareKind,
-    pub mode: String,
     pub book: ShareBookView,
     pub file: ShareFileView,
     pub session: Option<ShareSessionView>,
@@ -242,13 +237,12 @@ pub async fn get_share(
             .optional()?;
         // A session share whose session was deleted is a broken link:
         // report it as gone rather than a phantom `session: null`.
-        let Some((label, owner, chapter_idx, offset, fraction, updated_at)) = srow else {
+        let Some((label, owner, chapter_idx, _offset, fraction, updated_at)) = srow else {
             return Err(ApiError::not_found("share"));
         };
         let position = Position {
             chapter_idx: chapter_idx.max(0) as u32,
-            offset: offset.max(0) as u32,
-            fraction: fraction.clamp(0.0, 1.0),
+            in_chapter: InChapter::Fraction(fraction.clamp(0.0, 1.0)),
         };
         session = Some(ShareSessionView {
             id: sid.clone(),
@@ -262,7 +256,6 @@ pub async fn get_share(
 
     Ok(Json(ShareView {
         kind: share.kind,
-        mode: share.mode,
         book: ShareBookView {
             id: book.id,
             title: book.title,

@@ -112,7 +112,6 @@ diesel::table! {
     shares (token) {
         token -> Text,
         kind -> Text,
-        mode -> Text,
         file_id -> Text,
         session_id -> Nullable<Text>,
         created_by -> Nullable<Text>,

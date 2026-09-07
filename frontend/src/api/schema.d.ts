@@ -909,10 +909,13 @@ export interface components {
         };
         Position: {
             chapter_idx: number;
-            /** @description Character offset within the chapter (non-web readers) */
-            offset: number;
-            /** @description Scroll fraction within the chapter (web reader) */
-            fraction: number;
+            in_chapter: {
+                /** @description Scroll fraction within the chapter (web reader) */
+                fraction: number;
+            } | {
+                /** @description Character offset within the chapter (non-web readers) */
+                offset: number;
+            };
         };
         /**
          * @description A series: metadata grouping for the volumes of one publication
@@ -1003,13 +1006,17 @@ export interface components {
         };
         UpdatePosition: {
             chapter_idx?: number;
-            offset?: number;
-            fraction?: number;
+            /** @description New chapter progress. Either a scroll fraction (`{fraction}`) or a character offset (`{offset}`) — the two channels are mutually exclusive. */
+            in_chapter?: {
+                fraction: number;
+            } | {
+                offset: number;
+            };
         };
         /** @enum {string} */
         ShareKind: "book" | "session";
         CreateShare: {
-            kind: components["schemas"]["ShareKind"];
+            kind?: components["schemas"]["ShareKind"];
             /** @description Required when kind is "session" */
             session_id?: string;
             expires_days?: number;
@@ -1019,8 +1026,6 @@ export interface components {
             /** @description Frontend path of the share page */
             url: string;
             kind: components["schemas"]["ShareKind"];
-            /** @enum {string} */
-            mode: "read" | "progress";
             file_id: string;
             session_id: string | null;
             expires_at: string | null;
@@ -1052,8 +1057,6 @@ export interface components {
         };
         ShareView: {
             kind: components["schemas"]["ShareKind"];
-            /** @enum {string} */
-            mode: "read" | "progress";
             book: components["schemas"]["ShareBookView"];
             file: components["schemas"]["ShareFileView"];
             /** @description Present when kind is "session" */

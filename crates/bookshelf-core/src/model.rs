@@ -337,22 +337,58 @@ impl std::str::FromStr for ShareKind {
     }
 }
 
+/// How far inside a chapter a reading position is. The web reader tracks
+/// a 0..1 scroll `Fraction`; non-web readers track a character `CharOffset`.
+/// Exactly one of the two is set — a `Position` cannot carry both (the
+/// previous flat `offset` + `fraction` pair let callers send both and the
+/// server silently zero one).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum InChapter {
+    /// Scroll fraction within the chapter, 0..1 (web reader).
+    Fraction(f64),
+    /// Character offset within the chapter (non-web readers).
+    CharOffset(u32),
+}
+
+impl Default for InChapter {
+    fn default() -> Self {
+        InChapter::Fraction(0.0)
+    }
+}
+
 /// A reading position inside a file.
 ///
-/// `chapter_idx` selects the chapter, `offset` is a character offset inside
-/// the chapter (used by non-web readers), and `fraction` is a 0..1 scroll
-/// fraction inside the chapter (used by the web reader).
+/// `chapter_idx` selects the chapter; `in_chapter` is the progress inside
+/// it (scroll fraction or character offset — see [`InChapter`]).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Position {
     pub chapter_idx: u32,
-    pub offset: u32,
-    pub fraction: f64,
+    pub in_chapter: InChapter,
 }
 
 impl Position {
+    /// The web-reader progress fraction within the chapter (0.0 when the
+    /// position is a character offset).
+    pub fn fraction(&self) -> f64 {
+        match self.in_chapter {
+            InChapter::Fraction(f) => f,
+            InChapter::CharOffset(_) => 0.0,
+        }
+    }
+
+    /// The non-web-reader character offset within the chapter (0 when the
+    /// position is a scroll fraction).
+    pub fn offset(&self) -> u32 {
+        match self.in_chapter {
+            InChapter::Fraction(_) => 0,
+            InChapter::CharOffset(o) => o,
+        }
+    }
+
     pub fn percent(&self) -> u8 {
-        (self.fraction.clamp(0.0, 1.0) * 100.0).round() as u8
+        (self.fraction().clamp(0.0, 1.0) * 100.0).round() as u8
     }
 
     /// Clamp the position so it is valid for a file with `chapter_count`
@@ -363,8 +399,10 @@ impl Position {
         } else {
             0
         };
-        self.offset = 0;
-        self.fraction = self.fraction.clamp(0.0, 1.0);
+        self.in_chapter = match self.in_chapter {
+            InChapter::Fraction(f) => InChapter::Fraction(f.clamp(0.0, 1.0)),
+            c => c,
+        };
         self
     }
 }
@@ -397,8 +435,6 @@ pub enum ShareKind {
 pub struct Share {
     pub token: String,
     pub kind: ShareKind,
-    /// `"read"` (read-only) or `"progress"` (session progress view).
-    pub mode: String,
     pub file_id: String,
     pub session_id: Option<String>,
     pub created_by: Option<String>,

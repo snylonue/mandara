@@ -42,9 +42,9 @@ export function ReaderPage() {
 
   const initialPosition = useMemo<Position>(() => {
     if (chapterIdx !== null) {
-      return { chapter_idx: Number(chapterIdx) || 0, offset: 0, fraction: 0 };
+      return { chapter_idx: Number(chapterIdx) || 0, in_chapter: { fraction: 0 } };
     }
-    return active?.position ?? { chapter_idx: 0, offset: 0, fraction: 0 };
+    return active?.position ?? { chapter_idx: 0, in_chapter: { fraction: 0 } };
   }, [active, chapterIdx]);
 
   async function createSession() {
@@ -71,7 +71,7 @@ export function ReaderPage() {
       if (!active || fraction < 0.001) return;
       void api<ReadingSession>(`/sessions/${active.id}`, {
         method: "PUT",
-        body: JSON.stringify({ fraction }),
+        body: JSON.stringify({ in_chapter: { fraction } }),
       });
     },
     [active],

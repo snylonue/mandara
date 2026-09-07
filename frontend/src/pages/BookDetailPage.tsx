@@ -35,7 +35,10 @@ import type {
 } from "../types";
 
 const fmtTime = (s: string) => new Date(s).toLocaleString("zh-CN", { hour12: false });
-const fmtPercent = (s: ReadingSession) => `${Math.round(s.position.fraction * 100)}%`;
+const fmtPercent = (s: ReadingSession) => {
+  const frac = "fraction" in s.position.in_chapter ? s.position.in_chapter.fraction : 0;
+  return `${Math.round(frac * 100)}%`;
+};
 
 /// One file row: actions per file (read, visibility toggle, share, delete)
 /// plus its sessions. Manage actions (visibility/share/delete) only show
