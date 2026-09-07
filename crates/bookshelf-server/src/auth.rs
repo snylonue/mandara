@@ -114,6 +114,11 @@ impl AuthService {
 
     /// Resolve the current user from the Authorization header, falling
     /// back to the session cookie (so a page refresh keeps the login).
+    ///
+    /// Both failure modes — an invalid token and a valid token whose user
+    /// was deleted — map to 401: a deleted account voids the session just
+    /// like an expired one (there is no delete-user endpoint, so this state
+    /// only arises from manual DB edits).
     pub async fn require_user(&self, headers: &HeaderMap, db: &DieselDb) -> Result<User, ApiError> {
         let token = bearer(headers)
             .map(|t| t.to_string())
