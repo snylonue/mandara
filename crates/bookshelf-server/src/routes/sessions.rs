@@ -149,13 +149,13 @@ pub async fn update_session(
 
     // Timestamp generated on the Rust side in the stored format (the DB
     // clock is no longer consulted for updates).
-    let now = crate::time::now();
+    let now = crate::time::DbTs::now();
     diesel::update(sessions::table.find(&session_id))
         .set((
             sessions::chapter_idx.eq(i64::from(position.chapter_idx)),
             sessions::offset.eq(i64::from(position.offset())),
             sessions::fraction.eq(position.fraction()),
-            sessions::updated_at.eq(now),
+            sessions::updated_at.eq(now.as_str()),
         ))
         .execute(&mut conn)
         .await?;

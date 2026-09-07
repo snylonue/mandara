@@ -24,7 +24,7 @@ use crate::routes::{St, can_manage_file, current_user, load_visible_file};
 use crate::rows::ShareRow;
 #[allow(unused_imports)]
 use crate::schema::{sessions, shares, users};
-use crate::time::{parse_ts, rfc3339_millis};
+use crate::time::DbTs;
 
 #[derive(Serialize)]
 pub struct ShareResponse {
@@ -63,7 +63,7 @@ async fn load_share(st: &St, token: &str) -> Result<ShareRow, ApiError> {
         return Err(ApiError::not_found("share"));
     };
     if let Some(expires) = &row.expires_at
-        && parse_ts(expires) < chrono::Utc::now()
+        && DbTs::from_str(expires.clone()).parse() < chrono::Utc::now()
     {
         return Err(ApiError::not_found("share"));
     }
@@ -134,7 +134,7 @@ pub async fn create_share(
     const MAX_EXPIRY_DAYS: u32 = 3650;
     let expires_days = req.expires_days.unwrap_or(0).min(MAX_EXPIRY_DAYS);
     let expires_at = (expires_days > 0)
-        .then(|| rfc3339_millis(Utc::now() + Duration::days(expires_days as i64)));
+        .then(|| DbTs::from_datetime(Utc::now() + Duration::days(expires_days as i64)));
 
     let mut conn = st.diesel_db.get().await?;
     diesel::insert_into(shares::table)
@@ -144,7 +144,7 @@ pub async fn create_share(
             shares::file_id.eq(&file_id),
             shares::session_id.eq(&session_id),
             shares::created_by.eq(&user.id),
-            shares::expires_at.eq(&expires_at),
+            shares::expires_at.eq(expires_at.as_ref().map(DbTs::as_str)),
         ))
         .execute(&mut conn)
         .await?;
@@ -250,7 +250,7 @@ pub async fn get_share(
             owner_username: owner.unwrap_or_default(),
             percent: position.percent(),
             position,
-            updated_at: parse_ts(&updated_at),
+            updated_at: DbTs::from_str(updated_at).parse(),
         });
     }
 

@@ -9,7 +9,7 @@ use bookshelf_core::model::{
 use bookshelf_core::{BookExt, SeriesExt};
 
 use crate::error::ApiError;
-use crate::time::parse_ts;
+use crate::time::DbTs;
 
 #[derive(Debug, diesel::prelude::Queryable, diesel::prelude::Selectable)]
 #[diesel(table_name = crate::schema::users, check_for_backend(diesel::sqlite::Sqlite))]
@@ -29,7 +29,7 @@ impl UserRow {
                 .role
                 .parse::<Role>()
                 .map_err(|_| anyhow!("bad role in db: {}", self.role))?,
-            created_at: parse_ts(&self.created_at),
+            created_at: DbTs::from_str(self.created_at).parse(),
         })
     }
 }
@@ -57,7 +57,7 @@ impl SeriesRow {
             cover_url: self.cover_url,
             ext: SeriesExt::from_column(&self.ext_meta),
             created_by: self.created_by,
-            created_at: parse_ts(&self.created_at),
+            created_at: DbTs::from_str(self.created_at).parse(),
         }
     }
 }
@@ -92,7 +92,7 @@ impl BookRow {
             cover_url: self.cover_url,
             ext: BookExt::from_column(&self.ext_meta),
             created_by: self.created_by,
-            created_at: parse_ts(&self.created_at),
+            created_at: DbTs::from_str(self.created_at).parse(),
             series_id: self.series_id,
             volume_no: self.volume_no.max(0) as u32,
         })
@@ -141,7 +141,7 @@ impl FileRow {
                 .map_err(|_| anyhow!("bad file visibility in db: {}", self.visibility))?,
             owner_id: self.owner_id,
             chapter_count: self.chapter_count.max(0) as u32,
-            created_at: parse_ts(&self.created_at),
+            created_at: DbTs::from_str(self.created_at).parse(),
             volume_no: self.volume_no.max(0) as u32,
             volume_offset: self.volume_offset.max(0) as u32,
             original: match (self.orig_ext, self.orig_sha256, self.orig_size) {
@@ -217,7 +217,7 @@ impl SessionRow {
                 chapter_idx: self.chapter_idx.max(0) as u32,
                 in_chapter: InChapter::Fraction(self.fraction.clamp(0.0, 1.0)),
             },
-            updated_at: parse_ts(&self.updated_at),
+            updated_at: DbTs::from_str(self.updated_at).parse(),
         }
     }
 }
@@ -245,8 +245,8 @@ impl ShareRow {
             file_id: self.file_id,
             session_id: self.session_id,
             created_by: self.created_by,
-            expires_at: self.expires_at.map(|e| parse_ts(&e)),
-            created_at: parse_ts(&self.created_at),
+            expires_at: self.expires_at.map(|e| DbTs::from_str(e).parse()),
+            created_at: DbTs::from_str(self.created_at).parse(),
         })
     }
 }
