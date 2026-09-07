@@ -188,6 +188,13 @@ impl MetadataOverrides {
     }
 }
 
+/// One acquired book + its file, plus the rest of a volume split.
+type AcquiredBooks = (
+    BookMeta,
+    Option<FileMeta>,
+    Vec<(BookMeta, Option<FileMeta>)>,
+);
+
 /// Result of one acquisition: the series created by a volume split (when
 /// the source declared >1 volumes) plus the books that entered the
 /// library, each with the file stored under it (`None` for a
@@ -197,6 +204,21 @@ pub struct AcquireOutcome {
     pub series: Option<SeriesMeta>,
     /// Non-empty; one element unless the acquisition split volumes.
     pub books: Vec<(BookMeta, Option<FileMeta>)>,
+}
+
+impl AcquireOutcome {
+    /// Split the outcome into its first book and the rest. The first book
+    /// always exists — [`Self::books`] is documented non-empty and every
+    /// producer upholds it — so this is the single place that turns the
+    /// contract into a value (a programmer error surfaces as a panic here,
+    /// not as a 500 "internal server error" to clients).
+    pub fn into_parts(self) -> AcquiredBooks {
+        let mut it = self.books.into_iter();
+        let first = it
+            .next()
+            .expect("acquire_book always produces at least one book");
+        (first.0, first.1, it.collect())
+    }
 }
 
 /// One book produced by the metadata stage, ready to have its content
@@ -369,12 +391,9 @@ impl Library {
                 "",
             )
             .await?;
-        let (book, file) =
-            outcome.books.into_iter().next().ok_or_else(|| {
-                ApiError::Internal(anyhow::anyhow!("acquisition produced no books"))
-            })?;
+        let (book, file, _rest) = outcome.into_parts();
         let file = file
-            .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("acquisition produced no file")))?;
+            .ok_or_else(|| ApiError::bad_request("metadata-only acquisition produced no file"))?;
         Ok((book, file))
     }
 
