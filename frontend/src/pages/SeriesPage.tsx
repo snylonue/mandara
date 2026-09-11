@@ -37,7 +37,8 @@ import type {
 
 /// One volume card of the series. Manageable cards additionally show
 /// hover-revealed reorder/remove controls overlaid on the cover; the card
-/// itself links to the book (unless the volume has no readable file).
+/// itself links to the book whenever the caller may open its page (a
+/// readable file, or a metadata-only volume they can attach content to).
 function VolumeCard({
   entry,
   canManage,
@@ -54,13 +55,21 @@ function VolumeCard({
   onRemove: (index: number) => void;
 }) {
   const { t } = useTranslation();
+  const { user } = useAuth();
   const { book, files } = entry;
   const readable = files.length > 0;
+  // A metadata-only volume (e.g. one 卷 of a bangumi series import) has
+  // no file yet: its page is the only place to attach content, so its
+  // owner/admin must still be able to open it. Volumes whose files all
+  // belong to someone else stay unlinked — `GET /api/books/{id}` answers
+  // 404 for them.
+  const openable =
+    readable || book.created_by === user?.id || user?.role === "admin";
   const chapterCount = files.reduce((n, f) => n + f.chapter_count, 0);
   return (
     <ShelfBookCard
       entry={entry}
-      to={readable ? undefined : null}
+      to={openable ? undefined : null}
       muted={!readable}
       finished={isFinished(entry.progress)}
       volumeNo={book.volume_no || orderIndex + 1}
