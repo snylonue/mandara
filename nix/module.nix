@@ -120,8 +120,10 @@ in
       default = pkgs.bookshelf;
       defaultText = lib.literalExpression "pkgs.bookshelf";
       description = ''
-        The bookshelf package to run. It must provide the server binary and
-        (unless {option}`frontendDir` is set) a bundled web frontend.
+        Package to run: the server binary plus (unless {option}`frontendDir`
+        is set) the web frontend it serves. `nixosModules.default` defaults
+        this to the flake's own build; importing this file directly expects
+        `pkgs.bookshelf` from `overlays.default`.
       '';
     };
 
@@ -227,7 +229,7 @@ in
     plugins = mkOption {
       type = types.listOf (types.either types.path types.package);
       default = [ ];
-      example = lib.literalExpression "with pkgs; [ bookshelf-plugins ]";
+      example = lib.literalExpression "[ pkgs.bookshelf-plugins ]";
       description = ''
         wasm plugin components (`*.wasm`) to load at startup. Entries may be
         component files or directories/packages containing components

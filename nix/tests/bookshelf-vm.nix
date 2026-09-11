@@ -1,24 +1,43 @@
 # End-to-end test of the NixOS module: the server boots, serves the bundled
-# frontend, authenticates with the credential-held JWT secret, loads a wasm
-# plugin (wasmtime JIT-compiles it at startup, under the module's sandbox)
-# and parses an uploaded txt book.
+# frontend, authenticates with the credential-held JWT secret, loads the
+# packaged wasm plugins (wasmtime JIT-compiles them at startup, under the
+# module's sandbox) and parses an uploaded txt book.
+#
+# `module` is the flake's nixosModules.default, so this test uses what a user
+# writes in configuration.nix: the package default, the packaged components
+# and the module's environment wiring.
 {
   pkgs,
-  bookshelf,
+  module,
   plugins,
 }:
 pkgs.testers.runNixOSTest {
   name = "bookshelf";
 
-  nodes.machine = {
-    imports = [ ../module.nix ];
-    services.bookshelf = {
-      enable = true;
-      package = bookshelf;
-      plugins = [ "${plugins}/lib/bookshelf/plugins/hello.wasm" ];
-      jwtSecretFile = "/etc/bookshelf-jwt-secret";
+  nodes = {
+    machine = {
+      imports = [ module ];
+      services.bookshelf = {
+        enable = true;
+        plugins = [ plugins ];
+        jwtSecretFile = "/etc/bookshelf-jwt-secret";
+        # session cookies must carry Secure (asserted below)
+        cookieSecure = true;
+      };
+      environment.etc."bookshelf-jwt-secret".text = "test-jwt-secret-not-for-production";
     };
-    environment.etc."bookshelf-jwt-secret".text = "test-jwt-secret-not-for-production";
+
+    # Second instance with the opposite boolean options: the module passes
+    # them as environment variables, which needs its own coverage.
+    locked = {
+      imports = [ module ];
+      services.bookshelf = {
+        enable = true;
+        jwtSecretFile = "/etc/bookshelf-jwt-secret";
+        allowRegister = false;
+      };
+      environment.etc."bookshelf-jwt-secret".text = "test-jwt-secret-not-for-production";
+    };
   };
 
   testScript = ''
@@ -28,6 +47,8 @@ pkgs.testers.runNixOSTest {
     start_all()
     machine.wait_for_unit("bookshelf.service")
     machine.wait_for_open_port(8080)
+    locked.wait_for_unit("bookshelf.service")
+    locked.wait_for_open_port(8080)
 
     with subtest("health endpoint"):
         health = json.loads(machine.succeed("curl -fsS http://127.0.0.1:8080/api/health"))
@@ -42,19 +63,35 @@ pkgs.testers.runNixOSTest {
 
     with subtest("first account becomes admin"):
         credentials = json.dumps({"username": "admin", "password": "admin-password"})
-        auth = json.loads(machine.succeed(
-            "curl -fsS -X POST http://127.0.0.1:8080/api/auth/register "
+        # keep the response headers: the session cookie of a cookieSecure
+        # instance must be Secure + HttpOnly
+        body = machine.succeed(
+            "curl -fsS -D /tmp/register.headers -X POST http://127.0.0.1:8080/api/auth/register "
             f"-H 'Content-Type: application/json' -d '{credentials}'"
-        ))
+        )
+        headers = machine.succeed("cat /tmp/register.headers").lower()
+        assert "set-cookie: bookshelf_token=" in headers, headers
+        assert "secure" in headers and "httponly" in headers, headers
+        auth = json.loads(body)
         assert auth["user"]["role"] == "admin", auth
         token = auth["token"]
 
-    with subtest("wasm plugin component loaded"):
+    with subtest("allowRegister = false is honoured"):
+        health = json.loads(locked.succeed("curl -fsS http://127.0.0.1:8080/api/health"))
+        assert health["allow_register"] is False, health
+        nobody = json.dumps({"username": "nobody", "password": "x"})
+        locked.fail(
+            "curl -fsS -X POST http://127.0.0.1:8080/api/auth/register "
+            f"-H 'Content-Type: application/json' -d '{nobody}'"
+        )
+
+    with subtest("wasm plugin components loaded"):
         wasm_files = json.loads(machine.succeed(
             f"curl -fsS -H 'Authorization: Bearer {token}' "
             "http://127.0.0.1:8080/api/plugins/wasm-files"
         ))
-        assert "hello.wasm" in wasm_files, wasm_files
+        expected = ["bangumi.wasm", "hello.wasm", "reader.wasm", "wenku8.wasm", "wiki.wasm"]
+        assert wasm_files == expected, wasm_files
 
     with subtest("txt upload is parsed and readable"):
         content = "第一章 开端\n第一段正文\n第二章 后续\n第二段正文\n"

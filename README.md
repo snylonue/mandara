@@ -101,7 +101,7 @@ The flake provides the packages, an overlay and a NixOS module:
 | `packages.<system>.bookshelf-frontend` | the Vite build output |
 | `packages.<system>.bookshelf-plugins` | the in-repo wasm components |
 | `overlays.default` | the same as `pkgs.bookshelf*` |
-| `nixosModules.default` | `services.bookshelf` (also applies the overlay) |
+| `nixosModules.default` | `services.bookshelf`, with the package defaulting to this flake's build |
 
 ```nix
 # flake.nix of the host
@@ -122,7 +122,11 @@ services.bookshelf = {
   cookieSecure = true;    # session cookie only over https
   # openssl rand -base64 32 > /run/secrets/bookshelf-jwt-secret
   jwtSecretFile = "/run/secrets/bookshelf-jwt-secret";
-  plugins = [ pkgs.bookshelf-plugins ];  # or drop *.wasm into the state dir
+  # the in-repo wasm plugins; with
+  # `nixpkgs.overlays = [ inputs.bookshelf.overlays.default ]` this is
+  # simply `[ pkgs.bookshelf-plugins ]`
+  plugins = [ inputs.bookshelf.packages.${pkgs.stdenv.hostPlatform.system}.bookshelf-plugins ];
+  # ...or drop *.wasm files into /var/lib/bookshelf/plugins
 };
 
 services.nginx.virtualHosts."books.example.com" = {
@@ -137,10 +141,14 @@ What the module does:
 - runs the server under a dedicated unprivileged system user and a
   sandboxed unit (read-only `/`, empty capability set, seccomp filter with
   the `memfd_create` wasmtime's JIT needs),
+- defaults {option}`package` to the flake's own build, so no overlay is
+  needed — `overlays.default` only exists for reaching the packages as
+  `pkgs.bookshelf*`,
 - keeps every piece of mutable state in `/var/lib/bookshelf` (SQLite
   database, retained originals, image store, and the plugin drop-in
   directory when `plugins` is empty), so a backup is a copy of that one
-  directory,
+  directory (stop the service, or use `sqlite3 … ".backup"`: the database
+  runs in WAL mode),
 - passes the JWT secret through systemd `LoadCredential=`, so the secret
   file only has to be readable by root,
 - ships `systemctl start bookshelf-reparse-originals`: a one-shot task that

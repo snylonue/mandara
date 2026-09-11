@@ -47,14 +47,18 @@
         }
       );
 
-      # Applying the overlay is part of the module: `services.bookshelf.package`
-      # defaults to `pkgs.bookshelf`.
-      bookshelfModule = {
-        imports = [
-          ./nix/module.nix
-          { nixpkgs.overlays = [ overlay ]; }
-        ];
-      };
+      # The module users import. It defaults the package to this flake's own
+      # build, so no overlay is needed (and none is injected into the host);
+      # `overlays.default` is there for configurations that prefer
+      # `pkgs.bookshelf*` (e.g. `plugins = [ pkgs.bookshelf-plugins ]`).
+      bookshelfModule =
+        { config, lib, ... }:
+        {
+          imports = [ ./nix/module.nix ];
+          services.bookshelf.package = lib.mkDefault (
+            inputs.self.packages.${config.nixpkgs.hostPlatform.system}.bookshelf
+          );
+        };
     in
     flake-parts.lib.mkFlake { inherit inputs; } {
       # x86_64-darwin is not listed: nixpkgs 26.11 dropped that platform.
@@ -103,13 +107,28 @@
 
           formatter = pkgs.nixfmt-tree;
 
-          checks = lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
-            bookshelf-vm = import ./nix/tests/bookshelf-vm.nix {
-              inherit pkgs;
-              inherit (packages) bookshelf;
-              plugins = packages.bookshelf-plugins;
+          checks =
+            lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+              bookshelf-vm = import ./nix/tests/bookshelf-vm.nix {
+                inherit pkgs;
+                module = bookshelfModule;
+                plugins = packages.bookshelf-plugins;
+              };
+            }
+            // {
+              # The VM test passes the packages explicitly; make sure the
+              # overlay exposes them too, with the layout the module expects.
+              overlay =
+                let
+                  overlaid = pkgs.extend overlay;
+                in
+                pkgs.runCommand "bookshelf-overlay-check" { } ''
+                  test -f ${overlaid.bookshelf-plugins}/lib/bookshelf/plugins/hello.wasm
+                  test -f ${overlaid.bookshelf-frontend}/share/bookshelf/frontend/dist/index.html
+                  ${lib.getExe overlaid.bookshelf} --version | grep -q '^bookshelf-server '
+                  touch $out
+                '';
             };
-          };
 
           devShells.default = pkgs.mkShell {
             packages = [
