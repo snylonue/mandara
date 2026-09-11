@@ -40,12 +40,21 @@ export default function App() {
   const { t } = useTranslation();
   const [theme, setTheme] = useState<AppTheme>(loadTheme);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [scrolled, setScrolled] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem(THEME_KEY, theme);
   }, [theme]);
+
+  // The sticky top bar casts a shadow only once content scrolls under it.
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 4);
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
 
   // Close the user dropdown on outside clicks.
   useEffect(() => {
@@ -60,7 +69,7 @@ export default function App() {
   return (
     <ToastProvider>
       <div className="app">
-        <header className="nav">
+        <header className={`nav${scrolled ? " scrolled" : ""}`}>
           <div className="nav-left">
             <Link to="/" className="brand">
               <LogoMark className="brand-mark" />

@@ -8,6 +8,7 @@ import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { useAuth } from "../auth";
 import { BookCover } from "../components/BookCover";
+import { ShelfBookCard } from "../components/ShelfCard";
 import { ExtMetaForm, ExtMetaTable, extMergePatch, type ExtRecord } from "../components/ExtMetaForm";
 import {
   IconArrowLeft,
@@ -17,11 +18,26 @@ import {
 } from "../components/icons";
 import { Modal } from "../components/Modal";
 import { useToast } from "../components/toast";
-import type { BookDetail, BookListEntry, SeriesBrief, SeriesDetail } from "../types";
+import {
+  FINISHED_AT,
+  attachProgress,
+  hasStarted,
+  isFinished,
+  progressByFile,
+  sessionPercent,
+  type WithProgress,
+} from "../progress";
+import type {
+  BookDetail,
+  BookListEntry,
+  SeriesBrief,
+  SeriesDetail,
+  SessionList,
+} from "../types";
 
 /// One volume card of the series. Manageable cards additionally show
 /// hover-revealed reorder/remove controls overlaid on the cover; the card
-/// itself always links to the book.
+/// itself links to the book (unless the volume has no readable file).
 function VolumeCard({
   entry,
   canManage,
@@ -30,7 +46,7 @@ function VolumeCard({
   onMove,
   onRemove,
 }: {
-  entry: BookDetail;
+  entry: WithProgress<BookDetail>;
   canManage: boolean;
   orderIndex: number;
   total: number;
@@ -41,51 +57,40 @@ function VolumeCard({
   const { book, files } = entry;
   const readable = files.length > 0;
   const chapterCount = files.reduce((n, f) => n + f.chapter_count, 0);
-  const inner = (
-    <>
-      <div className="book-cover">
-        <BookCover bookId={book.id} title={book.title} coverUrl={book.cover_url} />
-        <div className="book-badges">
-          <span className="tag tag-volume">第{book.volume_no || orderIndex + 1}卷</span>
-        </div>
-      </div>
-      <div className="book-card-body">
-        <div className="book-title" title={book.title}>
-          {book.title}
-        </div>
-        <div className="book-meta">
-          {t("series.chaptersOfVolume", { count: chapterCount })}
-        </div>
-      </div>
-    </>
-  );
   return (
-    <div className={`book-card ${!readable ? "book-card-muted" : ""}`}>
-      {readable ? <Link to={`/book/${book.id}`}>{inner}</Link> : inner}
-      {canManage && (
-        <div className="series-card-actions">
-          <button
-            className="mini-btn"
-            disabled={orderIndex === 0}
-            onClick={() => onMove(orderIndex, orderIndex - 1)}
-            title={t("series.moveUp")}
-          >
-            ↑
-          </button>
-          <button
-            className="mini-btn"
-            disabled={orderIndex === total - 1}
-            onClick={() => onMove(orderIndex, orderIndex + 1)}
-            title={t("series.moveDown")}
-          >
-            ↓
-          </button>
-          <button className="mini-btn danger" onClick={() => onRemove(orderIndex)}>
-            {t("series.remove")}
-          </button>
-        </div>
-      )}
-    </div>
+    <ShelfBookCard
+      entry={entry}
+      to={readable ? undefined : null}
+      muted={!readable}
+      finished={isFinished(entry.progress)}
+      volumeNo={book.volume_no || orderIndex + 1}
+      meta={t("series.chaptersOfVolume", { count: chapterCount })}
+      actions={
+        canManage && (
+          <div className="series-card-actions">
+            <button
+              className="mini-btn"
+              disabled={orderIndex === 0}
+              onClick={() => onMove(orderIndex, orderIndex - 1)}
+              title={t("series.moveUp")}
+            >
+              ↑
+            </button>
+            <button
+              className="mini-btn"
+              disabled={orderIndex === total - 1}
+              onClick={() => onMove(orderIndex, orderIndex + 1)}
+              title={t("series.moveDown")}
+            >
+              ↓
+            </button>
+            <button className="mini-btn danger" onClick={() => onRemove(orderIndex)}>
+              {t("series.remove")}
+            </button>
+          </div>
+        )
+      }
+    />
   );
 }
 
@@ -98,6 +103,7 @@ export function SeriesPage() {
 
   const [detail, setDetail] = useState<SeriesDetail | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [sessions, setSessions] = useState<SessionList>([]);
   // Local working copy of the member order while managing (saved on 保存).
   const [order, setOrder] = useState<string[] | null>(null);
   const [editOpen, setEditOpen] = useState(false);
@@ -120,6 +126,13 @@ export function SeriesPage() {
     void load();
   }, [load]);
 
+  // Reading progress of every volume (one request for the whole page).
+  useEffect(() => {
+    void api<SessionList>("/sessions")
+      .then(setSessions)
+      .catch(() => setSessions([]));
+  }, []);
+
   const canManage = useMemo(() => {
     if (!user || !detail) return false;
     return user.role === "admin" || detail.series.created_by === user.id;
@@ -133,6 +146,35 @@ export function SeriesPage() {
     const byId = new Map(detail?.books.map((b) => [b.book.id, b]) ?? []);
     return memberIds.map((mid) => byId.get(mid)).filter((b): b is BookDetail => !!b);
   }, [detail, memberIds]);
+
+  // Progress by file, then by volume (the busiest session per file wins).
+  const byFile = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const entry of detail?.books ?? []) {
+      for (const file of entry.files) counts.set(file.id, file.chapter_count);
+    }
+    return progressByFile(sessions, (fid) => counts.get(fid) ?? 0);
+  }, [detail, sessions]);
+
+  const volumes = useMemo(() => attachProgress(membersByOrder, byFile), [membersByOrder, byFile]);
+  const readVolumes = volumes.filter((v) => hasStarted(v.progress)).length;
+
+  // 继续阅读: the first readable volume that is not finished yet — the
+  // button disappears once every volume is read.
+  const continueTarget = useMemo(() => {
+    const readable = volumes.filter((v) => v.files.some((f) => f.chapter_count > 0));
+    const pick = readable.find((v) => !isFinished(v.progress));
+    if (!pick) return null;
+    const file = pick.files.find((f) => f.id === pick.progress?.fileId) ?? pick.files[0];
+    if (!file) return null;
+    const session = pick.progress?.session;
+    const resume = session && sessionPercent(session, file.chapter_count) < FINISHED_AT;
+    return {
+      volumeNo: pick.book.volume_no,
+      href: `/read/${file.id}${resume ? `?session=${session!.id}` : ""}`,
+      finished: isFinished(pick.progress),
+    };
+  }, [volumes]);
 
   const orderDirty = order !== null && order.join(",") !== (detail?.books.map((b) => b.book.id) ?? []).join(",");
 
@@ -199,6 +241,16 @@ export function SeriesPage() {
 
       <div className="detail-hero">
         {membersByOrder[0] && (
+          <div className="detail-hero-bg" aria-hidden>
+            <BookCover
+              bookId={membersByOrder[0].book.id}
+              title={membersByOrder[0].book.title}
+              coverUrl={membersByOrder[0].book.cover_url}
+            />
+          </div>
+        )}
+        <div className="detail-hero-inner">
+        {membersByOrder[0] && (
           <div className="detail-cover">
             <BookCover
               bookId={membersByOrder[0].book.id}
@@ -223,6 +275,12 @@ export function SeriesPage() {
                 ),
               })}
             </span>
+            {readVolumes > 0 && (
+              <>
+                <span>·</span>
+                <span>{t("library.seriesRead", { read: readVolumes, total: volumes.length })}</span>
+              </>
+            )}
             {series?.status && (
               <>
                 <span>·</span>
@@ -238,44 +296,52 @@ export function SeriesPage() {
           </div>
           {series?.description && <p className="detail-desc">{series.description}</p>}
           <ExtMetaTable kind="series" value={(series?.ext ?? {}) as ExtRecord} />
-          {canManage && (
-            <div className="detail-actions">
-              <button className="ghost" onClick={() => setEditOpen(true)}>
-                <IconEdit size={14} /> {t("series.edit")}
-              </button>
-              <button className="ghost" onClick={() => void openAddDialog()}>
-                <IconPlus size={14} /> {t("series.addBooks")}
-              </button>
-              {orderDirty && (
-                <>
-                  <button className="primary" onClick={() => void saveOrder()}>
-                    {t("series.saveOrder")}
-                  </button>
-                  <button onClick={() => setOrder(null)}>{t("series.cancelOrder")}</button>
-                  <span className="hint">{t("series.orderHint")}</span>
-                </>
-              )}
-              {!orderDirty && (
-                <button
-                  className="ghost danger-text"
-                  onClick={() => void deleteSeries()}
-                >
-                  <IconTrash size={14} /> {t("series.delete")}
+          <div className="detail-actions">
+            {continueTarget && (
+              <Link className="btn-primary" to={continueTarget.href}>
+                {t("series.continueReading", { volume: continueTarget.volumeNo })}
+              </Link>
+            )}
+            {canManage && (
+              <>
+                <button className="ghost" onClick={() => setEditOpen(true)}>
+                  <IconEdit size={14} /> {t("series.edit")}
                 </button>
-              )}
-            </div>
-          )}
+                <button className="ghost" onClick={() => void openAddDialog()}>
+                  <IconPlus size={14} /> {t("series.addBooks")}
+                </button>
+                {orderDirty && (
+                  <>
+                    <button className="primary" onClick={() => void saveOrder()}>
+                      {t("series.saveOrder")}
+                    </button>
+                    <button onClick={() => setOrder(null)}>{t("series.cancelOrder")}</button>
+                    <span className="hint">{t("series.orderHint")}</span>
+                  </>
+                )}
+                {!orderDirty && (
+                  <button
+                    className="ghost danger-text"
+                    onClick={() => void deleteSeries()}
+                  >
+                    <IconTrash size={14} /> {t("series.delete")}
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+        </div>
         </div>
       </div>
 
       <div className="book-grid">
-        {membersByOrder.map((entry, i) => (
+        {volumes.map((entry, i) => (
           <VolumeCard
             key={entry.book.id}
             entry={entry}
             canManage={canManage}
             orderIndex={i}
-            total={membersByOrder.length}
+            total={volumes.length}
             onMove={(from, to) => {
               const next = [...memberIds];
               const [x] = next.splice(from, 1);

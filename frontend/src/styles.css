@@ -1,37 +1,57 @@
 /*
  * Design tokens.
  *
- * Every color / spacing / font size used below resolves through these
- * variables — no hardcoded light-theme fallbacks anywhere else.
+ * Three surface levels (page < surface < surface-2) and three text levels
+ * (title / secondary / tertiary). Everything below resolves through them —
+ * no hardcoded light-theme fallbacks anywhere else. The legacy names at the
+ * end are aliases onto this scale so older rules keep working; new rules
+ * should use the canonical names.
  */
 :root {
   color-scheme: dark;
 
-  /* base surfaces */
-  --bg: #10141c;
-  --bg2: #171d29;
-  --card: #1c2433;
-  --panel: #141a25;
-  --card-bg: var(--card);
+  /* surfaces */
+  --bg: #0f1115;
+  --surface: #171a21;
+  --surface-2: #1f232c;
 
-  /* semantic palette */
-  --surface: var(--bg);
-  --surface-raised: var(--card);
-  --border: #2a3550;
-  --border-strong: #40507a;
-  --text: #d7dde8;
-  --text-strong: #f3f6fc;
-  --muted: #8b96ab;
-  --text-muted: var(--muted);
-  --accent: #5b8cff;
-  --accent2: #7aa2ff;
-  --accent-hover: #709bff;
-  --glow: rgba(91, 140, 255, 0.1);
-  --nav-bg: rgba(23, 29, 41, 0.82);
+  --border: #2a2f3a;
+  --border-strong: #3a4150;
+
+  /* text */
+  --text-1: #e6e9ef;
+  --text-2: #9ba3b2;
+  --text-3: #6b7280;
+
+  /* accent */
+  --accent: #4d8dff;
+  --accent-hover: #679eff;
+  --accent-dim: rgb(77 141 255 / 0.15);
+
+  /* status */
   --danger: #e06c75;
   --danger-hover: #ea838b;
   --ok: #98c379;
   --warn: #e5c07b;
+
+  /* covers: a ring keeps white covers from melting into the page, the
+     shadow is the hover lift */
+  --cover-ring: rgb(255 255 255 / 0.06);
+  --shadow-card: 0 10px 26px rgb(0 0 0 / 0.45);
+
+  /* legacy aliases */
+  --bg2: var(--surface-2);
+  --card: var(--surface);
+  --panel: var(--surface);
+  --card-bg: var(--surface);
+  --surface-raised: var(--surface);
+  --text: var(--text-1);
+  --text-strong: var(--text-1);
+  --muted: var(--text-2);
+  --text-muted: var(--text-2);
+  --accent2: var(--accent);
+  --glow: rgb(77 141 255 / 0.1);
+  --nav-bg: rgb(15 17 21 / 0.82);
 
   /* spacing scale */
   --space-1: 4px;
@@ -56,21 +76,26 @@
 :root[data-theme="light"] {
   color-scheme: light;
 
-  --bg: #f5f6fa;
-  --bg2: #eceef5;
-  --card: #ffffff;
-  --panel: #eef0f6;
+  --bg: #f4f5f8;
+  --surface: #ffffff;
+  --surface-2: #eceef4;
 
-  --border: #d4dae6;
-  --border-strong: #b7c0d3;
-  --text: #343b47;
-  --text-strong: #161b24;
-  --muted: #6a7482;
+  --border: #d9dee8;
+  --border-strong: #bcc4d2;
+
+  --text-1: #1b202a;
+  --text-2: #5d6675;
+  --text-3: #8b93a1;
+
   --accent: #3f6fe8;
-  --accent2: #3059c8;
-  --accent-hover: #5581ee;
-  --glow: rgba(63, 111, 232, 0.06);
-  --nav-bg: rgba(245, 246, 250, 0.85);
+  --accent-hover: #2f5fd8;
+  --accent-dim: rgb(63 111 232 / 0.12);
+
+  --cover-ring: rgb(0 0 0 / 0.08);
+  --shadow-card: 0 8px 20px rgb(15 23 42 / 0.12);
+
+  --glow: rgb(63 111 232 / 0.06);
+  --nav-bg: rgb(255 255 255 / 0.85);
 }
 
 * {
@@ -110,6 +135,11 @@ body {
   position: sticky;
   top: 0;
   z-index: 10;
+}
+
+/* subtle lift once the page is scrolled */
+.nav.scrolled {
+  box-shadow: var(--shadow-card);
 }
 
 .nav-left {
@@ -153,8 +183,8 @@ body {
 }
 
 .nav-item.active {
-  color: var(--accent2);
-  background: rgba(91, 140, 255, 0.12);
+  color: var(--accent);
+  background: var(--accent-dim);
   font-weight: 600;
 }
 
@@ -224,8 +254,9 @@ body {
 }
 
 /* grid pages (library / series) use the full width */
-.content:has(.book-grid) {
-  max-width: 1280px;
+.content:has(.book-grid),
+.content:has(.shelf-page) {
+  max-width: 1600px;
 }
 
 /* ---- common ---- */
@@ -433,7 +464,7 @@ a {
 
 /* ---- buttons: primary / default / ghost / danger × md / sm ---- */
 button {
-  background: var(--bg2);
+  background: var(--surface-2);
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -521,7 +552,7 @@ summary:focus-visible {
 input,
 select,
 textarea {
-  background: var(--bg);
+  background: var(--surface-2);
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -545,8 +576,8 @@ textarea:focus {
 
 input::placeholder,
 textarea::placeholder {
-  color: var(--muted);
-  opacity: 0.7;
+  color: var(--text-3);
+  opacity: 1;
 }
 
 /* ---- auth ---- */
@@ -606,59 +637,220 @@ a.btn-primary:hover {
   margin-bottom: var(--space-5);
 }
 
+/* search + actions row of the shelf */
+.shelf-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
 .search {
-  flex: 1;
+  flex: 1 1 260px;
+  border-radius: 999px;
+  padding: 9px 18px;
+  background: var(--surface-2);
+}
+
+.shelf-toolbar > button {
   border-radius: 999px;
   padding: 9px 20px;
-  background: var(--card);
-}
-
-.toolbar > button {
-  border-radius: 999px;
-  padding: 9px 22px;
-}
-
-.admin-note {
-  align-self: center;
-  margin: 0;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 4px 14px;
-  font-size: var(--fs-sm);
   white-space: nowrap;
 }
 
+.shelf-toolbar > button.primary {
+  padding: 9px 22px;
+}
+
+/* admin-only "sees everything" note, full text on hover */
+.admin-chip {
+  align-self: center;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  white-space: nowrap;
+  cursor: help;
+}
+
+/* title + sort/group/view controls */
+.shelf-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.shelf-title,
+.shelf-section-title {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  line-height: 32px;
+  color: var(--text-1);
+}
+
+.shelf-title .count,
+.shelf-section-title .count {
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  font-weight: 400;
+}
+
+.shelf-section {
+  margin-bottom: var(--space-5);
+}
+
+.shelf-section-title {
+  margin-bottom: var(--space-3);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: var(--space-2);
+}
+
+.shelf-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.shelf-controls select {
+  background: var(--surface-2);
+  padding: 5px 10px;
+  font-size: var(--fs-sm);
+}
+
+/* segmented control (view switcher) */
+.segmented {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.segmented button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 7px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-3);
+}
+
+.segmented button:hover:not(:disabled) {
+  background: none;
+  border: none;
+  color: var(--text-1);
+}
+
+.segmented button.active {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+/* ---- shelf grid ---- */
+.shelf-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 20px 16px;
+}
+
+.shelf-grid--compact {
+  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+  gap: 14px 12px;
+}
+
+/* series page keeps the roomier cards */
 .book-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
   gap: var(--space-4);
 }
 
-.book-card {
-  position: relative;
-  background: var(--surface-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 0;
-  overflow: hidden;
-  text-decoration: none;
-  color: var(--text);
-  display: flex;
-  flex-direction: column;
-  transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
+/* phones: three covers per row */
+@media (max-width: 640px) {
+  .shelf-grid,
+  .shelf-grid--compact {
+    grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+    gap: 16px 12px;
+  }
+
+  .book-title {
+    font-size: var(--fs-sm);
+  }
 }
 
-.book-card:hover {
-  border-color: var(--accent);
-  transform: translateY(-2px);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+/* a card is only a cover + two lines of text: no box, the cover carries it */
+.book-card {
+  position: relative;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.book-card-link {
+  display: flex;
+  flex-direction: column;
+  color: inherit;
+  text-decoration: none;
+}
+
+/* collapsed series: two layers stacked behind the cover */
+.book-card--series::before,
+.book-card--series::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  aspect-ratio: 2 / 3;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  z-index: 0;
+}
+
+.book-card--series::before {
+  transform: translate(3px, -3px);
+  opacity: 0.6;
+}
+
+.book-card--series::after {
+  transform: translate(6px, -6px);
+  opacity: 0.35;
 }
 
 /* 2:3 cover area */
 .book-cover {
   position: relative;
+  z-index: 1;
   aspect-ratio: 2 / 3;
-  background: var(--bg2);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--cover-ring);
+  /* the placeholder letter is sized in cqw below */
+  container-type: inline-size;
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+.book-card:hover .book-cover,
+.book-card:focus-within .book-cover {
+  transform: translateY(-4px);
+  box-shadow: inset 0 0 0 1px var(--cover-ring), var(--shadow-card);
 }
 
 .book-cover img {
@@ -668,20 +860,37 @@ a.btn-primary:hover {
   display: block;
 }
 
+/* coverless placeholder: same title → same hue, never an empty box */
 .book-cover-fallback {
   width: 100%;
   height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(160deg, var(--bg2), var(--card) 55%, #223052);
+  background: linear-gradient(
+    160deg,
+    hsl(var(--ph-h, 220) 30% 30%),
+    hsl(calc(var(--ph-h, 220) + 35) 32% 17%)
+  );
 }
 
 .book-cover-fallback span {
-  font-size: 44px;
+  font-size: 42cqw;
   font-weight: 700;
-  color: var(--accent2);
-  opacity: 0.85;
+  line-height: 1;
+  color: rgb(255 255 255 / 0.38);
+}
+
+:root[data-theme="light"] .book-cover-fallback {
+  background: linear-gradient(
+    160deg,
+    hsl(var(--ph-h, 220) 45% 74%),
+    hsl(calc(var(--ph-h, 220) + 35) 42% 60%)
+  );
+}
+
+:root[data-theme="light"] .book-cover-fallback span {
+  color: rgb(255 255 255 / 0.7);
 }
 
 /* icon badges overlaid on the cover */
@@ -716,29 +925,140 @@ a.btn-primary:hover {
   color: var(--accent2);
 }
 
+/* volume count / 卷 number pills on a cover */
+.cover-badge {
+  position: absolute;
+  top: var(--space-2);
+  z-index: 2;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: rgb(0 0 0 / 0.6);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  color: #fff;
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+}
+
+.cover-volume {
+  left: var(--space-2);
+}
+
+.cover-count {
+  right: var(--space-2);
+}
+
+/* reading progress bar along the bottom edge of a cover */
+.cover-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: rgb(0 0 0 / 0.4);
+}
+
+.cover-progress i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
 .book-card-body {
-  padding: var(--space-3);
+  padding: var(--space-2) 2px 0;
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: 2px;
+  min-width: 0;
 }
 
 .book-title {
+  font-size: var(--fs-md);
   font-weight: 600;
-  color: var(--text-strong);
+  color: var(--text-1);
+  line-height: 1.4;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  line-height: 1.4;
 }
 
 .book-meta {
-  color: var(--muted);
-  font-size: var(--fs-sm);
+  color: var(--text-2);
+  font-size: var(--fs-xs);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* ---- shelf list view ---- */
+.shelf-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.shelf-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2);
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  text-decoration: none;
+  transition: background-color 0.15s;
+}
+
+.shelf-row:hover {
+  background: var(--surface);
+}
+
+.shelf-row-cover {
+  flex: 0 0 40px;
+  width: 40px;
+  aspect-ratio: 2 / 3;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--cover-ring);
+}
+
+.shelf-row-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.shelf-row-cover .book-cover-fallback span {
+  font-size: 18px;
+}
+
+.shelf-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.shelf-row-tags {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.shelf-row-progress {
+  position: absolute;
+  left: 0;
+  bottom: -1px;
+  height: 2px;
+}
+
+.shelf-row-progress i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
 }
 
 /* skeleton loaders */
@@ -788,9 +1108,9 @@ a.btn-primary:hover {
 }
 
 .tag {
-  background: var(--bg2);
+  background: var(--surface-2);
   border: 1px solid var(--border);
-  color: var(--muted);
+  color: var(--text-2);
   border-radius: 20px;
   font-size: 12px;
   padding: 1px 10px;
@@ -808,9 +1128,39 @@ a.btn-primary:hover {
 }
 
 .detail-hero {
+  position: relative;
   display: flex;
   gap: var(--space-5);
   margin-bottom: var(--space-5);
+}
+
+/* optional blurred cover backdrop behind a hero (series page) */
+.detail-hero-bg {
+  position: absolute;
+  inset: -24px -16px 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  mask-image: linear-gradient(to bottom, #000 0%, transparent 100%);
+}
+
+.detail-hero-bg img,
+.detail-hero-bg .book-cover-fallback {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: blur(40px) saturate(1.2);
+  opacity: 0.35;
+  transform: scale(1.1);
+}
+
+.detail-hero-inner {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  gap: var(--space-5);
+  width: 100%;
+  min-width: 0;
 }
 
 .detail-cover {
@@ -860,9 +1210,9 @@ a.btn-primary:hover {
   align-items: center;
   align-self: flex-start;
   gap: 6px;
-  background: rgba(91, 140, 255, 0.12);
-  border: 1px solid rgba(91, 140, 255, 0.35);
-  color: var(--accent2);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-2);
   border-radius: 999px;
   font-size: var(--fs-sm);
   padding: 3px 12px;
@@ -1082,6 +1432,10 @@ a.chip:hover {
 
 @media (max-width: 640px) {
   .detail-hero {
+    flex-direction: column;
+  }
+
+  .detail-hero-inner {
     flex-direction: column;
   }
 
@@ -1696,49 +2050,17 @@ button.active {
   border-radius: 6px;
 }
 
-/* ---- series --------------------------------------------------------- */
+/* ---- series page ---------------------------------------------------- */
 
-.series-group {
-  margin-bottom: 1.5rem;
-}
-
-.series-group-head {
-  display: flex;
-  align-items: baseline;
-  gap: 0.6rem;
-  margin-bottom: 0.35rem;
-  text-decoration: none;
-  color: var(--text);
-}
-
-.series-group-head h2 {
-  margin: 0;
-  font-size: 1.1rem;
-}
-
-.series-group-head .hint {
-  font-size: 0.85rem;
-}
-
+ /* 卷 number / volume-count pills (list rows, detail meta) */
 .tag-volume {
-  background: var(--accent-soft, rgba(99, 132, 255, 0.15));
-  color: var(--accent);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-2);
   border-radius: 999px;
   padding: 0.1rem 0.5rem;
   font-size: 0.75rem;
-}
-
-.book-badges {
-  display: flex;
-  gap: 0.25rem;
-  align-items: center;
-  flex-wrap: wrap;
-}
-
-.book-badges .tag-volume {
-  background: rgba(0, 0, 0, 0.45);
-  color: #fff;
-  margin: 0;
+  white-space: nowrap;
 }
 
 .series-card-actions {
@@ -1758,6 +2080,12 @@ button.active {
   opacity: 1;
 }
 
+/* read volume: dimmed cover, the progress bar stays at full strength */
+.book-card--finished .book-cover {
+  opacity: 0.55;
+}
+
+/* volume with no readable file */
 .book-card-muted {
   opacity: 0.6;
 }

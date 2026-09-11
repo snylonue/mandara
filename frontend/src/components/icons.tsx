@@ -189,6 +189,49 @@ export function IconLayers({ size, className }: IconProps) {
   );
 }
 
+/** Large grid — comfortable shelf view. */
+export function IconGrid({ size, className }: IconProps) {
+  return (
+    <svg {...base(size)} className={className}>
+      <rect x="3" y="3" width="7" height="7" rx="1" />
+      <rect x="14" y="3" width="7" height="7" rx="1" />
+      <rect x="3" y="14" width="7" height="7" rx="1" />
+      <rect x="14" y="14" width="7" height="7" rx="1" />
+    </svg>
+  );
+}
+
+/** Small grid — compact shelf view. */
+export function IconGridCompact({ size, className }: IconProps) {
+  return (
+    <svg {...base(size)} className={className}>
+      <rect x="3" y="3" width="4" height="4" rx="1" />
+      <rect x="10" y="3" width="4" height="4" rx="1" />
+      <rect x="17" y="3" width="4" height="4" rx="1" />
+      <rect x="3" y="10" width="4" height="4" rx="1" />
+      <rect x="10" y="10" width="4" height="4" rx="1" />
+      <rect x="17" y="10" width="4" height="4" rx="1" />
+      <rect x="3" y="17" width="4" height="4" rx="1" />
+      <rect x="10" y="17" width="4" height="4" rx="1" />
+      <rect x="17" y="17" width="4" height="4" rx="1" />
+    </svg>
+  );
+}
+
+/** Lines — shelf list view. */
+export function IconList({ size, className }: IconProps) {
+  return (
+    <svg {...base(size)} className={className}>
+      <line x1="8" x2="21" y1="6" y2="6" />
+      <line x1="8" x2="21" y1="12" y2="12" />
+      <line x1="8" x2="21" y1="18" y2="18" />
+      <line x1="3" x2="3.01" y1="6" y2="6" />
+      <line x1="3" x2="3.01" y1="12" y2="12" />
+      <line x1="3" x2="3.01" y1="18" y2="18" />
+    </svg>
+  );
+}
+
 /** Moon — dark theme. */
 export function IconMoon({ size, className }: IconProps) {
   return (
