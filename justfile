@@ -20,6 +20,10 @@ test:
 fmt:
     cargo fmt --all
 
+# Format the nix files (flake.nix + nix/); `nix fmt` does the same.
+fmt-nix:
+    nixfmt-tree
+
 # Regenerate crates/bookshelf-server/src/schema.rs from the SQL migrations
 # (run after EVERY new migration; the file is the Diesel compile-time schema).
 schema:
