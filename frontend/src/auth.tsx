@@ -12,6 +12,8 @@ import type { Health, User } from "./types";
 interface AuthState {
   health: Health | null;
   user: User | null;
+  /** True once the initial health + /auth/me round-trip finished. */
+  resolved: boolean;
   login: (token: string, user: User) => void;
   logout: () => void;
   refresh: () => Promise<void>;
@@ -20,6 +22,7 @@ interface AuthState {
 const AuthCtx = createContext<AuthState>({
   health: null,
   user: null,
+  resolved: false,
   login: () => {},
   logout: () => {},
   refresh: async () => {},
@@ -28,17 +31,23 @@ const AuthCtx = createContext<AuthState>({
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [health, setHealth] = useState<Health | null>(null);
   const [user, setUser] = useState<User | null>(null);
+  const [resolved, setResolved] = useState(false);
 
   const refresh = useCallback(async () => {
     const h = await api<Health>("/health").catch(() => null);
     setHealth(h);
-    if (!h) return;
+    if (!h) {
+      // Server unreachable: do not keep the router waiting forever.
+      setResolved(true);
+      return;
+    }
     // Cookie or Bearer token: after a page refresh the localStorage
     // token is still there, but the session cookie alone is enough —
     // `/auth/me` accepts either.
     const u = await api<User>("/auth/me").catch(() => null);
     setUser(u);
     if (!u) setToken(null);
+    setResolved(true);
   }, []);
 
   useEffect(() => {
@@ -58,7 +67,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <AuthCtx.Provider value={{ health, user, login, logout, refresh }}>
+    <AuthCtx.Provider value={{ health, user, resolved, login, logout, refresh }}>
       {children}
     </AuthCtx.Provider>
   );

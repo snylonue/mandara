@@ -18,8 +18,11 @@ import { ReaderPage } from "./pages/ReaderPage";
 import { SharePage } from "./pages/SharePage";
 
 function RequireAuth({ children }: { children: ReactNode }) {
-  const { health, user } = useAuth();
+  const { health, user, resolved } = useAuth();
   const { t } = useTranslation();
+  // Wait for /auth/me before deciding: redirecting on the first render
+  // bounced every refresh / bookmark of a protected page to /login.
+  if (!resolved) return <div className="page-loading">{t("common.loading")}</div>;
   if (!health) return <div className="page-loading">{t("common.loading")}</div>;
   if (!user) return <Navigate to="/login" replace />;
   return <>{children}</>;
