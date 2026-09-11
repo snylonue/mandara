@@ -215,7 +215,9 @@ impl SessionRow {
             label: self.label,
             position: Position {
                 chapter_idx: self.chapter_idx.max(0) as u32,
-                in_chapter: InChapter::Fraction(self.fraction.clamp(0.0, 1.0)),
+                in_chapter: InChapter::Fraction {
+                    fraction: self.fraction.clamp(0.0, 1.0),
+                },
             },
             updated_at: DbTs::from_str(self.updated_at).parse(),
         }

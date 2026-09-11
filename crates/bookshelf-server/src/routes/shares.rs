@@ -242,7 +242,9 @@ pub async fn get_share(
         };
         let position = Position {
             chapter_idx: chapter_idx.max(0) as u32,
-            in_chapter: InChapter::Fraction(fraction.clamp(0.0, 1.0)),
+            in_chapter: InChapter::Fraction {
+                fraction: fraction.clamp(0.0, 1.0),
+            },
         };
         session = Some(ShareSessionView {
             id: sid.clone(),

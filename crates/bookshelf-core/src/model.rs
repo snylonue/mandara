@@ -224,6 +224,39 @@ mod tests {
         assert!(ImageId::from_sha256_hex("../../etc/passwd").is_err());
         assert!(ImageId::from_sha256_hex("").is_err());
     }
+
+    /// The wire format is the documented one (docs/api/openapi.yaml):
+    /// `in_chapter` is `{"fraction": 0.5}` or `{"offset": 120}`, never a
+    /// bare number (which cannot tell the two channels apart).
+    #[test]
+    fn in_chapter_wire_format() {
+        let fraction: InChapter =
+            serde_json::from_str(r#"{"fraction":0.5}"#).expect("fraction accepted");
+        assert_eq!(fraction, InChapter::Fraction { fraction: 0.5 });
+        assert_eq!(
+            serde_json::to_string(&fraction).unwrap(),
+            r#"{"fraction":0.5}"#
+        );
+
+        let offset: InChapter = serde_json::from_str(r#"{"offset":120}"#).expect("offset accepted");
+        assert_eq!(offset, InChapter::CharOffset { offset: 120 });
+        assert_eq!(serde_json::to_string(&offset).unwrap(), r#"{"offset":120}"#);
+
+        // both channels, a bare number and an unknown key are all rejected
+        assert!(serde_json::from_str::<InChapter>(r#"{"fraction":0.5,"offset":120}"#).is_err());
+        assert!(serde_json::from_str::<InChapter>("0.5").is_err());
+        assert!(serde_json::from_str::<InChapter>(r#"{"nope":1}"#).is_err());
+
+        let pos: Position =
+            serde_json::from_str(r#"{"chapter_idx":3,"in_chapter":{"fraction":0.25}}"#)
+                .expect("position accepted");
+        assert_eq!(pos.chapter_idx, 3);
+        assert_eq!(pos.fraction(), 0.25);
+        assert_eq!(
+            serde_json::to_string(&pos).unwrap(),
+            r#"{"chapter_idx":3,"in_chapter":{"fraction":0.25}}"#
+        );
+    }
 }
 
 /// Content format of a book file. Uploads keep their real format
@@ -339,21 +372,60 @@ impl std::str::FromStr for ShareKind {
 
 /// How far inside a chapter a reading position is. The web reader tracks
 /// a 0..1 scroll `Fraction`; non-web readers track a character `CharOffset`.
-/// Exactly one of the two is set — a `Position` cannot carry both (the
-/// previous flat `offset` + `fraction` pair let callers send both and the
-/// server silently zero one).
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+/// Exactly one of the two is set on the wire (`{"fraction": 0.5}` or
+/// `{"offset": 120}`, see `docs/api/openapi.yaml`); a payload carrying
+/// both is rejected at deserialization.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum InChapter {
     /// Scroll fraction within the chapter, 0..1 (web reader).
-    Fraction(f64),
+    Fraction {
+        /// 0..1 scroll position inside the chapter.
+        fraction: f64,
+    },
     /// Character offset within the chapter (non-web readers).
-    CharOffset(u32),
+    CharOffset {
+        /// Character offset inside the chapter.
+        offset: u32,
+    },
+}
+
+impl<'de> Deserialize<'de> for InChapter {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Wire {
+            Fraction(FractionWire),
+            CharOffset(OffsetWire),
+        }
+
+        // `deny_unknown_fields` makes each channel reject the other's key,
+        // so sending both (or a stray key) fails instead of silently
+        // dropping one of them.
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct FractionWire {
+            fraction: f64,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct OffsetWire {
+            offset: u32,
+        }
+
+        Ok(match Wire::deserialize(deserializer)? {
+            Wire::Fraction(f) => InChapter::Fraction {
+                fraction: f.fraction,
+            },
+            Wire::CharOffset(o) => InChapter::CharOffset { offset: o.offset },
+        })
+    }
 }
 
 impl Default for InChapter {
     fn default() -> Self {
-        InChapter::Fraction(0.0)
+        InChapter::Fraction { fraction: 0.0 }
     }
 }
 
@@ -373,8 +445,8 @@ impl Position {
     /// position is a character offset).
     pub fn fraction(&self) -> f64 {
         match self.in_chapter {
-            InChapter::Fraction(f) => f,
-            InChapter::CharOffset(_) => 0.0,
+            InChapter::Fraction { fraction } => fraction,
+            InChapter::CharOffset { .. } => 0.0,
         }
     }
 
@@ -382,8 +454,8 @@ impl Position {
     /// position is a scroll fraction).
     pub fn offset(&self) -> u32 {
         match self.in_chapter {
-            InChapter::Fraction(_) => 0,
-            InChapter::CharOffset(o) => o,
+            InChapter::Fraction { .. } => 0,
+            InChapter::CharOffset { offset } => offset,
         }
     }
 
@@ -400,7 +472,9 @@ impl Position {
             0
         };
         self.in_chapter = match self.in_chapter {
-            InChapter::Fraction(f) => InChapter::Fraction(f.clamp(0.0, 1.0)),
+            InChapter::Fraction { fraction } => InChapter::Fraction {
+                fraction: fraction.clamp(0.0, 1.0),
+            },
             c => c,
         };
         self

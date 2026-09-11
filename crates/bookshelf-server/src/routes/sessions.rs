@@ -166,7 +166,9 @@ pub async fn update_session(
         .unwrap_or(0);
     let position = Position {
         chapter_idx: req.chapter_idx.unwrap_or(row.chapter_idx.max(0) as u32),
-        in_chapter: req.in_chapter.unwrap_or(InChapter::Fraction(row.fraction)),
+        in_chapter: req.in_chapter.unwrap_or(InChapter::Fraction {
+            fraction: row.fraction,
+        }),
     }
     .clamped(chapter_count);
 
