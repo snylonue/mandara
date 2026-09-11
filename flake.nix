@@ -46,6 +46,15 @@
             ;
         }
       );
+
+      # Applying the overlay is part of the module: `services.bookshelf.package`
+      # defaults to `pkgs.bookshelf`.
+      bookshelfModule = {
+        imports = [
+          ./nix/module.nix
+          { nixpkgs.overlays = [ overlay ]; }
+        ];
+      };
     in
     flake-parts.lib.mkFlake { inherit inputs; } {
       # x86_64-darwin is not listed: nixpkgs 26.11 dropped that platform.
@@ -55,10 +64,16 @@
         "aarch64-darwin"
       ];
 
-      flake.overlays.default = overlay;
+      flake = {
+        overlays.default = overlay;
+        nixosModules = {
+          bookshelf = bookshelfModule;
+          default = bookshelfModule;
+        };
+      };
 
       perSystem =
-        { system, ... }:
+        { system, lib, ... }:
         let
           # pkgs with the rust-overlay overlay applied, so that `rust-bin`
           # toolchains are available.
@@ -74,6 +89,14 @@
           };
 
           formatter = pkgs.nixfmt-tree;
+
+          checks = lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+            bookshelf-vm = import ./nix/tests/bookshelf-vm.nix {
+              inherit pkgs;
+              inherit (packages) bookshelf;
+              plugins = packages.bookshelf-plugins;
+            };
+          };
 
           devShells.default = pkgs.mkShell {
             packages = [
