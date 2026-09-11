@@ -36,10 +36,12 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let cfg = config::Config::parse();
-    if cfg.jwt_secret == "dev-only-change-me" {
+    let jwt_secret = cfg.jwt_secret()?;
+    if jwt_secret == "dev-only-change-me" {
         tracing::warn!(
-            "BOOKSHELF_JWT_SECRET is the built-in dev default; anyone who knows it can forge login tokens. \
-             Set a long random value before exposing the server"
+            "no JWT secret configured (BOOKSHELF_JWT_SECRET / --jwt-secret-file); anyone who knows \
+             the built-in dev default can forge login tokens. Set a long random value before \
+             exposing the server"
         );
     }
     tracing::info!(version = env!("CARGO_PKG_VERSION"), addr = %cfg.addr, "starting bookshelf-server");
@@ -102,7 +104,7 @@ async fn main() -> anyhow::Result<()> {
         Err(e) => tracing::warn!(error = %e, "startup plugin sync failed"),
     }
 
-    let auth = auth::AuthService::new(cfg.allow_register, &cfg.jwt_secret, cfg.cookie_secure);
+    let auth = auth::AuthService::new(cfg.allow_register, &jwt_secret, cfg.cookie_secure);
     let state = Arc::new(AppState {
         cfg: cfg.clone(),
         diesel_db,

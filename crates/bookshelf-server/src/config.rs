@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 
+use anyhow::Context as _;
 use clap::Parser;
 
 #[derive(Debug, Clone, Parser)]
@@ -36,6 +37,12 @@ pub struct Config {
     )]
     pub jwt_secret: String,
 
+    /// File holding the JWT signing secret (its content is trimmed). Takes
+    /// precedence over `--jwt-secret`; pairs with systemd
+    /// `LoadCredential=` or container secret files.
+    #[arg(long, env = "BOOKSHELF_JWT_SECRET_FILE", value_name = "PATH")]
+    pub jwt_secret_file: Option<PathBuf>,
+
     /// Allow new user registration.
     #[arg(long, env = "BOOKSHELF_ALLOW_REGISTER", default_value_t = true)]
     pub allow_register: bool,
@@ -63,6 +70,21 @@ pub struct Config {
 }
 
 impl Config {
+    /// Effective JWT signing secret: the contents of `--jwt-secret-file`
+    /// when set, else `--jwt-secret`.
+    pub fn jwt_secret(&self) -> anyhow::Result<String> {
+        let Some(path) = &self.jwt_secret_file else {
+            return Ok(self.jwt_secret.clone());
+        };
+        let secret = std::fs::read_to_string(path)
+            .with_context(|| format!("read JWT secret file {}", path.display()))?;
+        let secret = secret.trim();
+        if secret.is_empty() {
+            anyhow::bail!("JWT secret file {} is empty", path.display());
+        }
+        Ok(secret.to_string())
+    }
+
     /// Effective runtime data directory.
     pub fn data_dir(&self) -> PathBuf {
         if let Some(dir) = &self.data_dir {
