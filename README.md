@@ -37,13 +37,17 @@ and a **wasm plugin system** for user-provided book and metadata sources.
 | Backend | Rust 2021, axum 0.8, sqlx 0.9 (SQLite, runtime queries only), jsonwebtoken, argon2 |
 | Plugin host | wasmtime 48 (component model), WIT in `crates/bookshelf-plugin/wit/` |
 | Frontend | Vite 8 + React 19 + TypeScript (npm), plain CSS, react-router 7 |
-| Environment | Nix (flake-parts + rust-overlay); one-off tools via `nix run` |
+| Environment | Nix flake (flake-parts + rust-overlay): dev shell, packages, NixOS module |
 | Language | UI strings and book examples are Chinese; code comments and docs are English |
 
 ## Repository layout
 
 ```
-├── flake.nix                    # dev env: rust + wasm targets, node, wasm-tools
+├── flake.nix                    # dev shell, packages, overlay, NixOS module
+├── nix/
+│   ├── packages.nix             # server / frontend / wasm plugin builds
+│   ├── module.nix               # services.bookshelf (systemd unit, hardening)
+│   └── tests/bookshelf-vm.nix   # end-to-end NixOS VM test of the module
 ├── Cargo.toml                   # cargo workspace
 ├── crates/
 │   ├── bookshelf-core/          # domain models + BookSource trait (plugin seam)
@@ -86,6 +90,71 @@ cargo run -p bookshelf-server                 # serves frontend/dist (SPA) at /
 > If `npm install` fails with EACCES because `~/.npm` contains root-owned
 > files, use `npm_config_cache=/tmp/npm-cache`.
 
+## Deployment on NixOS
+
+The flake provides the packages, an overlay and a NixOS module:
+
+| Output | What it is |
+|---|---|
+| `packages.<system>.bookshelf` | server binary + built frontend (the default) |
+| `packages.<system>.bookshelf-server` | server binary only |
+| `packages.<system>.bookshelf-frontend` | the Vite build output |
+| `packages.<system>.bookshelf-plugins` | the in-repo wasm components |
+| `overlays.default` | the same as `pkgs.bookshelf*` |
+| `nixosModules.default` | `services.bookshelf` (also applies the overlay) |
+
+```nix
+# flake.nix of the host
+inputs.bookshelf = {
+  url = "github:example/bookshelf";
+  inputs.nixpkgs.follows = "nixpkgs";
+};
+
+# ... in the nixosSystem modules:
+modules = [ inputs.bookshelf.nixosModules.default ./configuration.nix ];
+```
+
+```nix
+# configuration.nix
+services.bookshelf = {
+  enable = true;
+  address = "127.0.0.1";  # TLS terminates in the reverse proxy
+  cookieSecure = true;    # session cookie only over https
+  # openssl rand -base64 32 > /run/secrets/bookshelf-jwt-secret
+  jwtSecretFile = "/run/secrets/bookshelf-jwt-secret";
+  plugins = [ pkgs.bookshelf-plugins ];  # or drop *.wasm into the state dir
+};
+
+services.nginx.virtualHosts."books.example.com" = {
+  forceSSL = true;
+  enableACME = true;
+  locations."/".proxyPass = "http://127.0.0.1:8080";
+};
+```
+
+What the module does:
+
+- runs the server under a dedicated unprivileged system user and a
+  sandboxed unit (read-only `/`, empty capability set, seccomp filter with
+  the `memfd_create` wasmtime's JIT needs),
+- keeps every piece of mutable state in `/var/lib/bookshelf` (SQLite
+  database, retained originals, image store, and the plugin drop-in
+  directory when `plugins` is empty), so a backup is a copy of that one
+  directory,
+- passes the JWT secret through systemd `LoadCredential=`, so the secret
+  file only has to be readable by root,
+- ships `systemctl start bookshelf-reparse-originals`: a one-shot task that
+  re-runs the current parser over every retained original (use it after an
+  upgrade that improves chapter splitting).
+
+Useful options: `port`, `openFirewall`, `allowRegister` (defaults to true,
+because the **first registered account becomes the admin** — turn it off
+once that account exists), `maxUploadMb`, `frontendDir`, `environment`,
+`environmentFile`, `extraArgs`; every option is documented.
+
+`nix build .#checks.x86_64-linux.bookshelf-vm` boots the module in a VM and
+checks the frontend, plugin loading, registration and the upload/read path.
+
 ## Configuration (env vars / CLI flags)
 
 | Variable | Default | Meaning |
@@ -95,9 +164,12 @@ cargo run -p bookshelf-server                 # serves frontend/dist (SPA) at /
 | `BOOKSHELF_DATA_DIR` | db's directory | runtime data directory |
 | `BOOKSHELF_PLUGINS_DIR` | `data/plugins` | directory scanned for `*.wasm` plugins |
 | `BOOKSHELF_JWT_SECRET` | `dev-only-change-me` | JWT secret (change in production) |
+| `BOOKSHELF_JWT_SECRET_FILE` | — | file holding the JWT secret (wins over `BOOKSHELF_JWT_SECRET`) |
 | `BOOKSHELF_ALLOW_REGISTER` | `true` | allow new user registration |
+| `BOOKSHELF_COOKIE_SECURE` | `false` | mark the session cookie `Secure` (TLS deployments) |
 | `BOOKSHELF_MAX_UPLOAD_MB` | `64` | max upload size |
 | `BOOKSHELF_FRONTEND_DIR` | `frontend` | frontend dir (its `dist/` is served at `/` if present) |
+| `BOOKSHELF_REPARSE_ORIGINALS` | `false` | re-parse every retained original, then exit (upgrade task) |
 
 Copy `.env.example` to `.env` to override defaults.
 
@@ -179,7 +251,12 @@ just dev-web      # start the frontend dev server
 just check        # cargo check + clippy
 just test         # cargo test --workspace
 just plugin-build # build the example plugin component
+just fmt          # cargo fmt --all
+just fmt-nix      # format the nix files (nixfmt-tree, same as `nix fmt`)
 ```
+
+`nix run .#` starts the packaged server (binary + built frontend) directly;
+`nix build .#bookshelf-plugins` builds the wasm components.
 
 ## License
 
