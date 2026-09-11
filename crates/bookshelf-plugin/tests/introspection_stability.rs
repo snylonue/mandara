@@ -13,6 +13,8 @@ fn introspection_is_stable_under_epoch_pump() {
         "../../plugins-built/hello.wasm",
         "../../plugins-built/wiki.wasm",
         "../../plugins-built/reader.wasm",
+        "../../plugins-built/wenku8.wasm",
+        "../../plugins-built/bangumi.wasm",
     ] {
         let wasm = std::fs::read(file).expect("read");
         let plugin = bookshelf_plugin::WasmPlugin::load(

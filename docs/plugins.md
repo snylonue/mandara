@@ -386,7 +386,7 @@ and, when it has `lookup`, the book id).
 ## Building & running the demos
 
 ```sh
-./scripts/build-plugins.sh hello wiki reader   # -> plugins-built/*.wasm
+./scripts/build-plugins.sh          # every plugins/*-plugin crate
 cp plugins-built/*.wasm data/plugins/
 ```
 

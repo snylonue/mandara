@@ -31,7 +31,7 @@ schema:
 		|| echo "diesel CLI not found — update src/schema.rs by hand (see the header note)"
 	echo "schema.rs regenerated"
 
-# Build the demo wasm plugins -> plugins-built/{hello,wiki,reader}.wasm
+# Build the wasm plugins (every plugins/*-plugin crate) -> plugins-built/*.wasm
 # Deploy: cp plugins-built/*.wasm data/plugins/
 plugin-build:
     ./scripts/build-plugins.sh

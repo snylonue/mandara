@@ -1,17 +1,24 @@
 #!/usr/bin/env bash
-# Build the demo plugins into loadable wasm components.
+# Build the plugins into loadable wasm components.
 #
 # Usage: ./scripts/build-plugins.sh [name ...]
-#   builds the named plugins (default: hello wiki reader) into plugins-built/,
-#   validates the components, and copies hello.wasm into the plugin crate's
-#   test fixture directory (the host tests embed it).
+#   builds the named plugins (default: every plugins/*-plugin crate) into
+#   plugins-built/, validates the components, and copies hello.wasm into the
+#   plugin crate's test fixture directory (the host tests embed it).
+#
+# The default MUST cover every plugin crate: a wasm left over from an older
+# WIT version fails the host's export type-check and silently loses all its
+# capabilities ("could not introspect plugin").
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
 NAMES=("$@")
 if [ "${#NAMES[@]}" -eq 0 ]; then
-    NAMES=(hello wiki reader)
+    NAMES=()
+    for dir in plugins/*-plugin; do
+        NAMES+=("$(basename "$dir" -plugin)")
+    done
 fi
 
 mkdir -p plugins-built
