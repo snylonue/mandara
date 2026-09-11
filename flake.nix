@@ -82,6 +82,19 @@
             overlays = [ rust-overlay.overlays.default ];
           };
           packages = import ./nix/packages.nix { inherit pkgs; };
+          # Toolchain of the dev shell: same pinned rust, plus every wasm
+          # target the plugins might use (a list element must be a value, so
+          # the override cannot be inlined into `packages` below).
+          devRustToolchain = pkgs.rust-bin.stable.latest.default.override {
+            extensions = [ "rust-src" ];
+            targets = [
+              # wasm32-unknown-unknown: simple reactor modules (no wasi)
+              "wasm32-unknown-unknown"
+              # wasm32-wasip1 / wasip2: preview1/preview2 reactor modules
+              "wasm32-wasip1"
+              "wasm32-wasip2"
+            ];
+          };
         in
         {
           packages = packages // {
@@ -100,18 +113,7 @@
 
           devShells.default = pkgs.mkShell {
             packages = [
-              pkgs.rust-bin.stable.latest.default.override
-              {
-                # targets needed to build wasm plugins:
-                #   wasm32-unknown-unknown: simple reactor modules (no wasi)
-                #   wasm32-wasip1 / wasip2:    preview1/preview2 reactor modules
-                extensions = [ "rust-src" ];
-                targets = [
-                  "wasm32-unknown-unknown"
-                  "wasm32-wasip1"
-                  "wasm32-wasip2"
-                ];
-              }
+              devRustToolchain
               # frontend (js dependencies are installed with npm)
               pkgs.nodejs
               # wasm plugin tooling (componentize a core wasm module)
