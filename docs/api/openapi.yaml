@@ -1147,6 +1147,30 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /api/sessions:
+    get:
+      tags: [sessions]
+      summary: Every reading session of the caller, newest first
+      description: |
+        Progress of one user across all files, in a single request — the
+        shelf and series pages derive per-book/per-volume progress from
+        it (only sessions on files the caller may still view are usable
+        by the client, which maps `file_id` through its book list).
+      operationId: listAllSessions
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Sessions of the caller, ordered by `updated_at` desc
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ReadingSession"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
   /api/files/{id}/sessions:
     get:
       tags: [sessions]

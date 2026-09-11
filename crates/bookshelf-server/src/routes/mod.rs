@@ -146,8 +146,9 @@ pub fn router(state: St) -> Router {
         )
         .route(
             "/api/files/{id}/sessions",
-            get(sessions::list_sessions).post(sessions::create_session),
+            get(sessions::list_file_sessions).post(sessions::create_session),
         )
+        .route("/api/sessions", get(sessions::list_my_sessions))
         .route(
             "/api/sessions/{id}",
             put(sessions::update_session).delete(delete(sessions::delete_session)),

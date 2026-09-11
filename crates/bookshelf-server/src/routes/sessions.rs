@@ -27,9 +27,32 @@ pub struct SessionsResponse {
     pub sessions: Vec<ReadingSession>,
 }
 
+// GET /api/sessions ----------------------------------------------------------
+
+/// Every session of the caller across all files, newest first. The shelf
+/// and series pages use it to show per-book/per-volume progress without
+/// one request per file.
+pub async fn list_my_sessions(
+    State(st): State<St>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    let user = current_user(&st, &headers).await?;
+
+    let mut conn = st.diesel_db.get().await?;
+    let rows: Vec<SessionRow> = sessions::table
+        .filter(sessions::user_id.eq(&user.id))
+        .order(sessions::updated_at.desc())
+        .select(SessionRow::as_select())
+        .load(&mut conn)
+        .await?;
+
+    let sessions: Vec<ReadingSession> = rows.into_iter().map(|r| r.into_model()).collect();
+    Ok(Json(sessions))
+}
+
 // GET /api/files/{id}/sessions ------------------------------------------------
 
-pub async fn list_sessions(
+pub async fn list_file_sessions(
     State(st): State<St>,
     headers: HeaderMap,
     Path(file_id): Path<String>,

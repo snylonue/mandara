@@ -27,6 +27,7 @@ export type TocNode = Schemas["TocNode"];
 export type Chapter = Schemas["Chapter"];
 export type Position = Schemas["Position"];
 export type ReadingSession = Schemas["ReadingSession"];
+export type SessionList = Schemas["ReadingSession"][];
 export type SessionsResponse = Schemas["SessionsResponse"];
 export type ShareKind = Schemas["ShareKind"];
 export type ShareInfo = Schemas["ShareResponse"];

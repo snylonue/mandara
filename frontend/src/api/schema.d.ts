@@ -619,6 +619,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every reading session of the caller, newest first
+         * @description Progress of one user across all files, in a single request — the
+         *     shelf and series pages derive per-book/per-volume progress from
+         *     it (only sessions on files the caller may still view are usable
+         *     by the client, which maps `file_id` through its book list).
+         */
+        get: operations["listAllSessions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/files/{id}/sessions": {
         parameters: {
             query?: never;
@@ -2310,6 +2333,27 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+        };
+    };
+    listAllSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Sessions of the caller, ordered by `updated_at` desc */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadingSession"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
         };
     };
     listSessions: {
