@@ -1134,14 +1134,26 @@ a.btn-primary:hover {
   margin-bottom: var(--space-5);
 }
 
-/* optional blurred cover backdrop behind a hero (series page) */
+/* Optional blurred cover backdrop behind a hero (series page). It should
+   read as a glow, so every edge fades out: the block outlines no
+   rectangle against the flat page (its top used to cut a hard line just
+   under the 书架 back link). */
 .detail-hero-bg {
   position: absolute;
   inset: -24px -16px 0;
   z-index: 0;
   overflow: hidden;
   pointer-events: none;
-  mask-image: linear-gradient(to bottom, #000 0%, transparent 100%);
+  mask-image:
+    linear-gradient(to bottom, transparent, #000 var(--space-5), #000 40%, transparent),
+    linear-gradient(
+      to right,
+      transparent,
+      #000 56px,
+      #000 calc(100% - 56px),
+      transparent
+    );
+  mask-composite: intersect;
 }
 
 .detail-hero-bg img,
