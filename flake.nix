@@ -33,24 +33,22 @@
       # build needs `pkgs.rust-bin`. It only *adds* attributes, so applying it
       # to a consumer's nixpkgs rebuilds nothing.
       overlay = nixpkgs.lib.composeExtensions rust-overlay.overlays.default (
-        final: _prev:
-        let
-          packages = import ./nix/packages.nix { pkgs = final; };
-        in
-        {
-          inherit (packages)
-            mandara
-            mandara-server
-            mandara-frontend
-            mandara-plugins
-            ;
-        }
+        _final: prev:
+        # packages.nix returns exactly the mandara attributes (every
+        # `mandara*`), including one `mandara-plugin-<name>` per in-repo
+        # plugin, so the overlay cannot fall out of sync with the packages.
+        #
+        # Build from `prev` (already carrying rust-overlay) rather than the
+        # final fixed point: the dynamically named `mandara-plugin-*`
+        # attributes would otherwise force `final.lib` while the overlay
+        # spine is computed and recurse.
+        import ./nix/packages.nix { pkgs = prev; }
       );
 
       # The module users import. It defaults the package to this flake's own
       # build, so no overlay is needed (and none is injected into the host);
       # `overlays.default` is there for configurations that prefer
-      # `pkgs.mandara*` (e.g. `plugins = [ pkgs.mandara-plugins ]`).
+      # `pkgs.mandara*` (e.g. `plugins = [ pkgs.mandara-plugin-hello ]`).
       mandaraModule =
         { config, lib, ... }:
         {
@@ -112,7 +110,9 @@
               mandara-vm = import ./nix/tests/mandara-vm.nix {
                 inherit pkgs;
                 module = mandaraModule;
-                plugins = packages.mandara-plugins;
+                # Deploy the plugins as separate packages, the way a user
+                # picking a subset of the in-repo sources would.
+                plugins = lib.attrValues (lib.filterAttrs (name: _: lib.hasPrefix "mandara-plugin-" name) packages);
               };
             }
             // {
@@ -124,6 +124,7 @@
                 in
                 pkgs.runCommand "mandara-overlay-check" { } ''
                   test -f ${overlaid.mandara-plugins}/lib/mandara/plugins/hello.wasm
+                  test -f ${overlaid.mandara-plugin-hello}/lib/mandara/plugins/hello.wasm
                   test -f ${overlaid.mandara-frontend}/share/mandara/frontend/dist/index.html
                   ${lib.getExe overlaid.mandara} --version | grep -q '^mandara-server '
                   touch $out

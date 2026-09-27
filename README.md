@@ -99,7 +99,8 @@ The flake provides the packages, an overlay and a NixOS module:
 | `packages.<system>.mandara` | server binary + built frontend (the default) |
 | `packages.<system>.mandara-server` | server binary only |
 | `packages.<system>.mandara-frontend` | the Vite build output |
-| `packages.<system>.mandara-plugins` | the in-repo wasm components |
+| `packages.<system>.mandara-plugin-<name>` | one wasm component per in-repo plugin |
+| `packages.<system>.mandara-plugins` | all in-repo wasm components in one directory |
 | `overlays.default` | the same as `pkgs.mandara*` |
 | `nixosModules.default` | `services.mandara`, with the package defaulting to this flake's build |
 
@@ -122,10 +123,13 @@ services.mandara = {
   cookieSecure = true;    # session cookie only over https
   # openssl rand -base64 32 > /run/secrets/mandara-jwt-secret
   jwtSecretFile = "/run/secrets/mandara-jwt-secret";
-  # the in-repo wasm plugins; with
-  # `nixpkgs.overlays = [ inputs.mandara.overlays.default ]` this is
-  # simply `[ pkgs.mandara-plugins ]`
-  plugins = [ inputs.mandara.packages.${pkgs.stdenv.hostPlatform.system}.mandara-plugins ];
+  # pick the in-repo wasm plugins you want; with
+  # `nixpkgs.overlays = [ inputs.mandara.overlays.default ]` these are
+  # simply `[ pkgs.mandara-plugin-hello pkgs.mandara-plugin-wenku8 ]`
+  plugins = [
+    inputs.mandara.packages.${pkgs.stdenv.hostPlatform.system}.mandara-plugin-hello
+    inputs.mandara.packages.${pkgs.stdenv.hostPlatform.system}.mandara-plugin-wenku8
+  ];
   # ...or drop *.wasm files into /var/lib/mandara/plugins
 };
 
@@ -264,7 +268,8 @@ just fmt-nix      # format the nix files (nixfmt-tree, same as `nix fmt`)
 ```
 
 `nix run .#` starts the packaged server (binary + built frontend) directly;
-`nix build .#mandara-plugins` builds the wasm components.
+`nix build .#mandara-plugin-hello` builds one wasm component and
+`nix build .#mandara-plugins` builds them all.
 
 ## License
 

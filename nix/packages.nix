@@ -1,11 +1,11 @@
 # Build recipes for mandara: the server binary (bundled with the built
-# web frontend) and the wasm plugin components.
+# web frontend) and one derivation per wasm plugin component.
 #
 # Used by the flake (`packages.<system>`) and by `overlays.default`, so
-# applying the overlay gives a consumer's own nixpkgs `pkgs.mandara`.
+# applying the overlay gives a consumer's own nixpkgs `pkgs.mandara*`.
 #
 # The server and frontend build with plain nixpkgs (whatever rustc that
-# nixpkgs pins); only `mandara-plugins` needs the rust-overlay toolchain,
+# nixpkgs pins); only the plugin packages need the rust-overlay toolchain,
 # because nixpkgs' rustc ships no `wasm32-unknown-unknown` std.
 {
   pkgs,
@@ -123,7 +123,10 @@ let
   # --- wasm plugins ---------------------------------------------------------
   # The guest crates are plain core wasm modules; `wasm-tools component new`
   # lifts them into components (the WIT world imports no wasi, so no
-  # adapter is involved). Output: $out/lib/mandara/plugins/<name>.wasm.
+  # adapter is involved). Each plugin is its own derivation so a deployment
+  # can pull in only the sources it wants; the aggregate below just links
+  # them together for `plugins = [ pkgs.mandara-plugins ]`. A plugin's
+  # output is $out/lib/mandara/plugins/<name>.wasm.
   rustToolchain = pkgs.rust-bin.stable.latest.default.override {
     targets = [ "wasm32-unknown-unknown" ];
   };
@@ -132,11 +135,17 @@ let
     rustc = rustToolchain;
   };
 
-  plugins =
+  buildPlugin =
+    crate:
+    let
+      name = lib.removeSuffix "-plugin" crate;
+      # cargo names the artifact after the lib target, with `-` -> `_`.
+      artifact = lib.replaceStrings [ "-" ] [ "_" ] crate;
+    in
     assert lib.assertMsg (pkgs ? rust-bin)
-      "mandara-plugins needs the rust-overlay toolchain (nixpkgs' rustc has no wasm32-unknown-unknown std); apply `inputs.mandara.overlays.default` or use the flake's packages";
+      "mandara-plugin-${name} needs the rust-overlay toolchain (nixpkgs' rustc has no wasm32-unknown-unknown std); apply `inputs.mandara.overlays.default` or use the flake's packages";
     wasmRustPlatform.buildRustPackage {
-      pname = "mandara-plugins";
+      pname = "mandara-plugin-${name}";
       inherit version;
       src = rustSource;
       cargoLock.lockFile = rustSource + "/Cargo.lock";
@@ -147,32 +156,54 @@ let
       # directly for the wasm target (deps are vendored by the setup hook).
       buildPhase = ''
         runHook preBuild
-        cargo build --offline --release --target wasm32-unknown-unknown \
-          ${lib.concatMapStringsSep " " (name: "-p ${name}") pluginCrates}
+        cargo build --offline --release --target wasm32-unknown-unknown -p ${crate}
         runHook postBuild
       '';
 
       postBuild = ''
         mkdir -p components
-        ${lib.concatMapStrings (name: ''
-          wasm-tools component new \
-            "target/wasm32-unknown-unknown/release/${lib.replaceStrings [ "-" ] [ "_" ] name}.wasm" \
-            -o "components/${lib.removeSuffix "-plugin" name}.wasm"
-        '') pluginCrates}
-        for f in components/*.wasm; do wasm-tools validate --features component-model "$f"; done
+        wasm-tools component new \
+          "target/wasm32-unknown-unknown/release/${artifact}.wasm" \
+          -o "components/${name}.wasm"
+        wasm-tools validate --features component-model "components/${name}.wasm"
       '';
 
       installPhase = ''
         runHook preInstall
         mkdir -p $out/lib/mandara/plugins
-        cp components/*.wasm $out/lib/mandara/plugins/
+        cp components/${name}.wasm $out/lib/mandara/plugins/
         runHook postInstall
       '';
 
       meta = meta // {
-        description = "mandara wasm plugin components (book/metadata sources)";
+        description = "mandara wasm plugin component: ${name} (book/metadata source)";
       };
     };
+
+  # `mandara-plugin-<name>` per crate, the shape the flake and overlay expose.
+  pluginPackages = lib.listToAttrs (
+    map (crate: {
+      name = "mandara-plugin-${lib.removeSuffix "-plugin" crate}";
+      value = buildPlugin crate;
+    }) pluginCrates
+  );
+
+  # All in-repo components in one directory, for deployments that want the
+  # previous `[ pkgs.mandara-plugins ]`; it only links the per-plugin
+  # derivations, so each component is still built by its own derivation.
+  plugins =
+    pkgs.runCommand "mandara-plugins-${version}"
+      {
+        meta = meta // {
+          description = "mandara wasm plugin components (all in-repo plugins)";
+        };
+      }
+      ''
+        mkdir -p $out/lib/mandara/plugins
+        ${lib.concatMapStrings (package: ''
+          ln -s ${package}/lib/mandara/plugins/*.wasm $out/lib/mandara/plugins/
+        '') (lib.attrValues pluginPackages)}
+      '';
 
   # --- combined server package ---------------------------------------------
   # The server binary plus the frontend bundle, with the bundle wired up as
@@ -207,3 +238,4 @@ in
   mandara-frontend = frontend;
   mandara-plugins = plugins;
 }
+// pluginPackages

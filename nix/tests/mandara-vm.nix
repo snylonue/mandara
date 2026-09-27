@@ -9,6 +9,8 @@
 {
   pkgs,
   module,
+  # One package per plugin component; the caller passes them as the list a
+  # deployment gets when it lists `mandara-plugin-<name>` packages.
   plugins,
 }:
 pkgs.testers.runNixOSTest {
@@ -19,7 +21,7 @@ pkgs.testers.runNixOSTest {
       imports = [ module ];
       services.mandara = {
         enable = true;
-        plugins = [ plugins ];
+        inherit plugins;
         jwtSecretFile = "/etc/mandara-jwt-secret";
         # session cookies must carry Secure (asserted below)
         cookieSecure = true;

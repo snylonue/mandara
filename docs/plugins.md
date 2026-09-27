@@ -390,6 +390,10 @@ and, when it has `lookup`, the book id).
 cp plugins-built/*.wasm data/plugins/
 ```
 
+Under Nix each plugin is built as its own package
+(`nix build .#mandara-plugin-<name>`), with `.#mandara-plugins`
+collecting them all.
+
 The guest crates use `wit-bindgen = "0.60"` with
 `wit_bindgen::generate!({ world: "mandara-plugin", path: "../../crates/mandara-plugin/wit" })`
 and `export!(PluginName)`. The generated core module embeds a

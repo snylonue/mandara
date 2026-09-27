@@ -229,12 +229,14 @@ in
     plugins = mkOption {
       type = types.listOf (types.either types.path types.package);
       default = [ ];
-      example = lib.literalExpression "[ pkgs.mandara-plugins ]";
+      example = lib.literalExpression "[ pkgs.mandara-plugin-hello pkgs.mandara-plugin-wenku8 ]";
       description = ''
         wasm plugin components (`*.wasm`) to load at startup. Entries may be
-        component files or directories/packages containing components
-        (like `pkgs.mandara-plugins`), which is also how a plugin built
-        from source is deployed.
+        component files or directories/packages containing components,
+        which is also how a plugin built from source is deployed. The flake
+        builds one package per in-repo plugin (`mandara-plugin-<name>`), so
+        a deployment can select a subset; `pkgs.mandara-plugins` collects
+        them all.
 
         When empty, the server loads the `*.wasm` files dropped into
         `lib/plugins/` inside the state directory instead.
