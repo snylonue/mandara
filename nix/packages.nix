@@ -1,12 +1,14 @@
-# Build recipes for mandara: the server binary (bundled with the built
-# web frontend) and one derivation per wasm plugin component.
+# Build recipes for mandara, composed as a `lib.makeScope` package set so a
+# consumer can override one component at a time:
 #
-# Used by the flake (`packages.<system>`) and by `overlays.default`, so
-# applying the overlay gives a consumer's own nixpkgs `pkgs.mandara*`.
+#   pkgs.mandaraPackages.overrideScope (final: prev: {
+#     frontend = prev.frontend.override { ... };
+#   })
 #
-# The server and frontend build with plain nixpkgs (whatever rustc that
-# nixpkgs pins); only the plugin packages need the rust-overlay toolchain,
-# because nixpkgs' rustc ships no `wasm32-unknown-unknown` std.
+# Each component lives in its own file (frontend.nix, server.nix,
+# plugin.nix, plugins.nix, mandara.nix). The server and frontend build with
+# plain nixpkgs; only the plugins need the rust-overlay toolchain, because
+# nixpkgs' rustc ships no `wasm32-unknown-unknown` std.
 {
   pkgs,
   lib ? pkgs.lib,
@@ -15,227 +17,76 @@
 }:
 
 let
-  workspace = builtins.fromTOML (builtins.readFile (src + "/Cargo.toml"));
-  version = workspace.workspace.package.version;
-  repository = workspace.workspace.package.repository;
+  common = import ./common.nix { inherit lib src; };
 
-  # Keep build artifacts (target/, node_modules/, dist/) and runtime data
-  # (data/) out of the store; the flake already filters by git, this makes
-  # the file work with a plain `callPackage` too.
-  cleanSource =
-    dir:
-    lib.cleanSourceWith {
-      src = dir;
-      filter =
-        path: type:
-        lib.cleanSourceFilter path type
-        && !(builtins.elem (baseNameOf (toString path)) [
-          "target"
-          "node_modules"
-          "dist"
-          "data"
-          "plugins-built"
-        ]);
-    };
-
-  # Source of the Rust builds: only the cargo workspace (the manifests plus
-  # the member crates), so touching docs, the frontend or these nix
-  # expressions never invalidates a Rust build.
-  rustSource = lib.fileset.toSource {
-    root = src;
-    fileset = lib.fileset.unions [
-      (src + "/Cargo.toml")
-      (src + "/Cargo.lock")
-      (src + "/crates")
-      (src + "/plugins")
-    ];
-  };
-
-  source = cleanSource src;
-
-  meta = {
-    description = "Self-hosted light-novel reading website (epub/txt, multi-user, wasm plugins)";
-    homepage = repository;
-    # The workspace declares `MIT OR Apache-2.0`.
-    license = with lib.licenses; [
-      mit
-      asl20
-    ];
-    platforms = lib.platforms.unix;
-    maintainers = [ ];
-  };
-
-  # Every `plugins/*-plugin` crate, so adding a plugin never needs a change
-  # here (each is a cdylib built for wasm32-unknown-unknown).
-  pluginCrates = lib.mapAttrsToList (name: _: name) (
-    lib.filterAttrs (name: type: type == "directory" && lib.hasSuffix "-plugin" name) (
-      builtins.readDir (src + "/plugins")
-    )
-  );
-
-  # --- web frontend ---------------------------------------------------------
-  # Vite build output, laid out where the server expects it: the server
-  # serves `<frontend-dir>/dist`.
-  frontend = pkgs.buildNpmPackage {
-    pname = "mandara-frontend";
-    inherit version;
-    src = cleanSource (src + "/frontend");
-    npmDepsHash = "sha256-sjZFG4aJhN63GFYzKb0VaoJY9kTyYWmdUh3LDM0f3Lg=";
-    installPhase = ''
-      runHook preInstall
-      mkdir -p $out/share/mandara/frontend
-      cp -r dist $out/share/mandara/frontend/
-      runHook postInstall
-    '';
-    meta = meta // {
-      description = "mandara web frontend (Vite build output)";
-    };
-  };
-
-  # --- server binary --------------------------------------------------------
-  server = pkgs.rustPlatform.buildRustPackage {
-    pname = "mandara-server";
-    inherit version;
-    src = rustSource;
-    cargoLock.lockFile = rustSource + "/Cargo.lock";
-    # Only the server: the other workspace members are wasm plugin guests.
-    cargoBuildFlags = [
-      "-p"
-      "mandara-server"
-    ];
-    # The test suite loads `plugins-built/*.wasm` (a dev build output) and
-    # verifies that the components still introspect against this host — a
-    # component built from an older WIT version otherwise loads fine but
-    # silently loses every capability. Stage the packaged components where
-    # the tests expect them; without the wasm toolchain (plain nixpkgs, no
-    # rust-overlay) that is impossible, so the suite is skipped.
-    doCheck = pkgs ? rust-bin;
-    preCheck = lib.optionalString (pkgs ? rust-bin) ''
-      mkdir -p plugins-built
-      cp ${plugins}/lib/mandara/plugins/*.wasm plugins-built/
-    '';
-    meta = meta // {
-      description = "mandara backend: REST API, auth, library, sessions, shares";
-      mainProgram = "mandara-server";
-    };
-  };
-
-  # --- wasm plugins ---------------------------------------------------------
-  # The guest crates are plain core wasm modules; `wasm-tools component new`
-  # lifts them into components (the WIT world imports no wasi, so no
-  # adapter is involved). Each plugin is its own derivation so a deployment
-  # can pull in only the sources it wants; the aggregate below just links
-  # them together for `plugins = [ pkgs.mandara-plugins ]`. A plugin's
-  # output is $out/lib/mandara/plugins/<name>.wasm.
-  rustToolchain = pkgs.rust-bin.stable.latest.default.override {
-    targets = [ "wasm32-unknown-unknown" ];
-  };
-  wasmRustPlatform = pkgs.makeRustPlatform {
-    cargo = rustToolchain;
-    rustc = rustToolchain;
-  };
-
-  buildPlugin =
-    crate:
+  scope = lib.makeScope pkgs.newScope (
+    self:
     let
-      name = lib.removeSuffix "-plugin" crate;
-      # cargo names the artifact after the lib target, with `-` -> `_`.
-      artifact = lib.replaceStrings [ "-" ] [ "_" ] crate;
+      inherit (self) callPackage;
+
+      buildPlugin =
+        crate:
+        callPackage ./plugin.nix {
+          inherit crate;
+          inherit (common) version meta rustSource;
+          buildRustPackage = self.wasmRustPlatform.buildRustPackage;
+          wasmTools = pkgs.wasm-tools;
+        };
+
+      pluginPackages = lib.listToAttrs (
+        map (crate: {
+          name = "mandara-plugin-${lib.removeSuffix "-plugin" crate}";
+          value = buildPlugin crate;
+        }) common.pluginCrates
+      );
     in
-    assert lib.assertMsg (pkgs ? rust-bin)
-      "mandara-plugin-${name} needs the rust-overlay toolchain (nixpkgs' rustc has no wasm32-unknown-unknown std); apply `inputs.mandara.overlays.default` or use the flake's packages";
-    wasmRustPlatform.buildRustPackage {
-      pname = "mandara-plugin-${name}";
-      inherit version;
-      src = rustSource;
-      cargoLock.lockFile = rustSource + "/Cargo.lock";
-      nativeBuildInputs = [ pkgs.wasm-tools ];
-      doCheck = false;
-
-      # buildRustPackage's hooks would force the host target; drive cargo
-      # directly for the wasm target (deps are vendored by the setup hook).
-      buildPhase = ''
-        runHook preBuild
-        cargo build --offline --release --target wasm32-unknown-unknown -p ${crate}
-        runHook postBuild
-      '';
-
-      postBuild = ''
-        mkdir -p components
-        wasm-tools component new \
-          "target/wasm32-unknown-unknown/release/${artifact}.wasm" \
-          -o "components/${name}.wasm"
-        wasm-tools validate --features component-model "components/${name}.wasm"
-      '';
-
-      installPhase = ''
-        runHook preInstall
-        mkdir -p $out/lib/mandara/plugins
-        cp components/${name}.wasm $out/lib/mandara/plugins/
-        runHook postInstall
-      '';
-
-      meta = meta // {
-        description = "mandara wasm plugin component: ${name} (book/metadata source)";
+    {
+      # wasm toolchain for the plugin crates. `pkgs.rust-bin` comes from
+      # rust-overlay; keeping both as scope attributes makes the whole
+      # plugin set rebuildable with a different toolchain.
+      rustToolchain = pkgs.rust-bin.stable.latest.default.override {
+        targets = [ "wasm32-unknown-unknown" ];
       };
-    };
 
-  # `mandara-plugin-<name>` per crate, the shape the flake and overlay expose.
-  pluginPackages = lib.listToAttrs (
-    map (crate: {
-      name = "mandara-plugin-${lib.removeSuffix "-plugin" crate}";
-      value = buildPlugin crate;
-    }) pluginCrates
+      wasmRustPlatform = pkgs.makeRustPlatform {
+        cargo = self.rustToolchain;
+        rustc = self.rustToolchain;
+      };
+
+      frontend = callPackage ./frontend.nix {
+        inherit (common) version meta cleanSource;
+        inherit src;
+      };
+
+      plugins = callPackage ./plugins.nix {
+        inherit pluginPackages;
+        inherit (common) version meta;
+      };
+
+      server = callPackage ./server.nix {
+        inherit (common) version meta rustSource;
+        # The host tests need the packaged components; plain nixpkgs (no
+        # rust-overlay) has no wasm toolchain, so they are skipped there.
+        plugins = if pkgs ? rust-bin then self.plugins else null;
+      };
+
+      mandara = callPackage ./mandara.nix {
+        inherit (common) version meta;
+        inherit (self) server frontend plugins;
+      };
+
+      inherit pluginPackages;
+    }
+    // pluginPackages
   );
-
-  # All in-repo components in one directory, for deployments that want the
-  # previous `[ pkgs.mandara-plugins ]`; it only links the per-plugin
-  # derivations, so each component is still built by its own derivation.
-  plugins =
-    pkgs.runCommand "mandara-plugins-${version}"
-      {
-        meta = meta // {
-          description = "mandara wasm plugin components (all in-repo plugins)";
-        };
-      }
-      ''
-        mkdir -p $out/lib/mandara/plugins
-        ${lib.concatMapStrings (package: ''
-          ln -s ${package}/lib/mandara/plugins/*.wasm $out/lib/mandara/plugins/
-        '') (lib.attrValues pluginPackages)}
-      '';
-
-  # --- combined server package ---------------------------------------------
-  # The server binary plus the frontend bundle, with the bundle wired up as
-  # the *default* of `MANDARA_FRONTEND_DIR` (an explicitly set variable or
-  # `--frontend-dir` still wins, e.g. from the NixOS module).
-  mandara =
-    pkgs.runCommand "mandara-${version}"
-      {
-        nativeBuildInputs = [ pkgs.makeWrapper ];
-        passthru = {
-          inherit
-            server
-            frontend
-            plugins
-            ;
-        };
-        meta = meta // {
-          description = "Self-hosted light-novel reading website";
-          mainProgram = "mandara-server";
-        };
-      }
-      ''
-        mkdir -p $out/bin $out/share/mandara
-        ln -s ${frontend}/share/mandara/frontend $out/share/mandara/frontend
-        makeWrapper ${server}/bin/mandara-server $out/bin/mandara-server \
-          --set-default MANDARA_FRONTEND_DIR $out/share/mandara/frontend
-      '';
 in
 {
-  inherit mandara;
-  mandara-server = server;
-  mandara-frontend = frontend;
-  mandara-plugins = plugins;
+  mandara = scope.mandara;
+  mandara-server = scope.server;
+  mandara-frontend = scope.frontend;
+  mandara-plugins = scope.plugins;
+  # The whole scope, for `overrideScope`-style overrides. Not a derivation,
+  # so the flake keeps it out of `packages.<system>`.
+  mandaraPackages = scope;
 }
-// pluginPackages
+// scope.pluginPackages

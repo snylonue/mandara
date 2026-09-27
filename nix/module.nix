@@ -123,7 +123,10 @@ in
         Package to run: the server binary plus (unless {option}`frontendDir`
         is set) the web frontend it serves. `nixosModules.default` defaults
         this to the flake's own build; importing this file directly expects
-        `pkgs.mandara` from `overlays.default`.
+        `pkgs.mandara` from `overlays.default`. The frontend, server and
+        plugins are separate derivations in `pkgs.mandaraPackages`, so an
+        overridden variant can be built with
+        `pkgs.mandaraPackages.overrideScope`.
       '';
     };
 

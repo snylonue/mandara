@@ -101,7 +101,7 @@ The flake provides the packages, an overlay and a NixOS module:
 | `packages.<system>.mandara-frontend` | the Vite build output |
 | `packages.<system>.mandara-plugin-<name>` | one wasm component per in-repo plugin |
 | `packages.<system>.mandara-plugins` | all in-repo wasm components in one directory |
-| `overlays.default` | the same as `pkgs.mandara*` |
+| `overlays.default` | the same as `pkgs.mandara*`, plus the `pkgs.mandaraPackages` scope |
 | `nixosModules.default` | `services.mandara`, with the package defaulting to this flake's build |
 
 ```nix
@@ -139,6 +139,21 @@ services.nginx.virtualHosts."books.example.com" = {
   locations."/".proxyPass = "http://127.0.0.1:8080";
 };
 ```
+
+The server, frontend and plugins are separate derivations composed by
+`lib.makeScope`, so one can be replaced without touching the others. With
+`nixpkgs.overlays = [ inputs.mandara.overlays.default ]` this is either
+the scope:
+
+```nix
+services.mandara.package =
+  (pkgs.mandaraPackages.overrideScope (final: prev: {
+    server = prev.server.override { plugins = null; };
+  })).mandara;
+```
+
+or an individual package: `pkgs.mandara.override { frontend = …; }`,
+`pkgs.mandara-server.override { plugins = null; }`.
 
 What the module does:
 
