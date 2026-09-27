@@ -2,7 +2,7 @@ set shell := ["bash", "-uc"]
 
 # Start the backend dev server (default http://127.0.0.1:8080, data in data/)
 dev:
-    cargo run -p bookshelf-server
+    cargo run -p mandara-server
 
 # Start the frontend dev server (http://localhost:5173, /api proxied to the backend)
 dev-web:
@@ -24,14 +24,14 @@ fmt:
 fmt-nix:
     nixfmt-tree
 
-# Regenerate crates/bookshelf-server/src/schema.rs from the SQL migrations
+# Regenerate crates/mandara-server/src/schema.rs from the SQL migrations
 # (run after EVERY new migration; the file is the Diesel compile-time schema).
 schema:
 	#!/usr/bin/env bash
 	set -euo pipefail
 	db=$(mktemp -d)/schema.db
-	for f in crates/bookshelf-server/migrations/*.sql; do sqlite3 "$db" < "$f"; done
-	cd crates/bookshelf-server && DATABASE_URL="$db" diesel print-schema > src/schema.rs 2>/dev/null \
+	for f in crates/mandara-server/migrations/*.sql; do sqlite3 "$db" < "$f"; done
+	cd crates/mandara-server && DATABASE_URL="$db" diesel print-schema > src/schema.rs 2>/dev/null \
 		|| echo "diesel CLI not found — update src/schema.rs by hand (see the header note)"
 	echo "schema.rs regenerated"
 

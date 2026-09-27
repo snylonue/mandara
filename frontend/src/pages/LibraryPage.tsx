@@ -31,8 +31,8 @@ interface ShelfPrefs {
   view: ViewKey;
 }
 
-const PREFS_KEY = "bookshelf_shelf_prefs";
-const SCROLL_KEY = "bookshelf_shelf_scroll";
+const PREFS_KEY = "mandara_shelf_prefs";
+const SCROLL_KEY = "mandara_shelf_scroll";
 
 const SHELF_PREF_DEFAULTS: ShelfPrefs = { sort: "default", group: "series", view: "grid" };
 

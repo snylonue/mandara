@@ -43,8 +43,8 @@ cleanup() {
     remove_pid_stale() {
         # kill leftover mock/servers still bound to our e2e database
         for pid in $(pgrep -f 'mock-source.py' || true); do kill "$pid" 2>/dev/null || true; done
-        for pid in $(pgrep -f 'bookshelf-server' || true); do
-            if tr '\0' ' ' < /proc/$pid/environ 2>/dev/null | grep -q "BOOKSHELF_DB=.*e2e-http"; then
+        for pid in $(pgrep -f 'mandara-server' || true); do
+            if tr '\0' ' ' < /proc/$pid/environ 2>/dev/null | grep -q "MANDARA_DB=.*e2e-http"; then
                 kill "$pid" 2>/dev/null || true
             fi
         done
@@ -55,9 +55,9 @@ cleanup() {
 trap cleanup EXIT
 
 stop_server() {
-    for pid in $(pgrep -f 'bookshelf-server' || true); do
+    for pid in $(pgrep -f 'mandara-server' || true); do
         # only ours (the one using the e2e database)
-        if tr '\0' ' ' < /proc/$pid/environ 2>/dev/null | grep -q "BOOKSHELF_DB=.*e2e-http"; then
+        if tr '\0' ' ' < /proc/$pid/environ 2>/dev/null | grep -q "MANDARA_DB=.*e2e-http"; then
             kill "$pid" 2>/dev/null || true
         fi
     done
@@ -73,10 +73,10 @@ start_mock() {
 start_server() {
     stop_server
     rm -f "$DB"
-    BOOKSHELF_DB="$DB" \
-    BOOKSHELF_PLUGINS_DIR="$PWD/plugins-built" \
-    BOOKSHELF_ADDR="127.0.0.1:8870" \
-    nohup target/debug/bookshelf-server > "$SERVER_LOG" 2>&1 &
+    MANDARA_DB="$DB" \
+    MANDARA_PLUGINS_DIR="$PWD/plugins-built" \
+    MANDARA_ADDR="127.0.0.1:8870" \
+    nohup target/debug/mandara-server > "$SERVER_LOG" 2>&1 &
     echo $! > /tmp/e2e-http-server.pid
     for i in $(seq 1 30); do
         grep -q 'listening on' "$SERVER_LOG" 2>/dev/null && return 0
@@ -115,7 +115,7 @@ jq_field() { # jq-ish helper: python -c reading stdin
 
 echo "== e2e: plugin HTTP acquisition (docs/plugin-http-api-design.md) =="
 [ "$BUILD" = 1 ] && ./scripts/build-plugins.sh > /dev/null
-cargo build -p bookshelf-server > /dev/null 2>&1 || fail "server build"
+cargo build -p mandara-server > /dev/null 2>&1 || fail "server build"
 
 start_mock
 start_server

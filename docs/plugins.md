@@ -1,6 +1,6 @@
 # Plugin authoring guide (v3)
 
-Bookshelf's wasm plugin system lets users provide custom book and metadata
+Mandara's wasm plugin system lets users provide custom book and metadata
 sources. Plugins run as **WebAssembly components** inside the host sandbox
 (wasmtime): the only way they touch the outside world is the host's
 `http.fetch` import — plain network access with timeout/size caps.
@@ -56,8 +56,8 @@ the full design. This guide is for plugin authors.
 
 ## Interface (WIT)
 
-Interface file: `crates/bookshelf-plugin/wit/bookshelf.wit`, world
-`bookshelf:plugin/bookshelf-plugin@0.7.0`. Every export is **required**
+Interface file: `crates/mandara-plugin/wit/mandara.wit`, world
+`mandara:plugin/mandara-plugin@0.7.0`. Every export is **required**
 (the WIT parser has no optional exports) — unsupported features return
 `none`/empty and are declared via `capabilities()`:
 
@@ -173,7 +173,7 @@ Host caps: `search-books` limit ≤ 50 / offset ≤ 10 000 (400 beyond);
 chapter content ≤ 2 MiB per call; book files ≤ 256 MiB (the http size cap
 usually applies first). Runaway plugins are trapped by the epoch deadline:
 per call, a plugin may run for at most the fetch-timeout budget
-(`BOOKSHELF_PLUGIN_FETCH_TIMEOUT_MS`, default 30 s — network waits
+(`MANDARA_PLUGIN_FETCH_TIMEOUT_MS`, default 30 s — network waits
 count, they are bounded by that same cap) plus a few 200 ms pump ticks;
 compute-only calls (e.g. `declare` sync) keep that minimum. A call that
 exceeds the budget is interrupted at the next wasm backedge — keep
@@ -188,12 +188,12 @@ Plugins declare how their chapter body is interpreted via the WIT
 - **`"text"`** — the body is plain text. The host escapes it, splits on
   blank lines into paragraphs, wraps each in `<p>` and turns single
   newlines into `<br/>` (the same conversion txt uploads use,
-  `bookshelf_formats::htmlize::text_to_html`). This is the default and
+  `mandara_formats::htmlize::text_to_html`). This is the default and
   covers sources that return prose.
 - **`"html"`** — the body is the plugin's **own final HTML fragment**
   (escaped text and known safe tags). The host runs it through the same
   whitelist sanitizer epub uploads use (`DROP_TAGS`/`ALLOWED_TAGS`/
-  `allowed_attrs` in `bookshelf_formats::htmlize::sanitize_html_fragment`):
+  `allowed_attrs` in `mandara_formats::htmlize::sanitize_html_fragment`):
   scripts, styles, forms, foreign content and event handlers are stripped,
   unknown tags are unwrapped, and `href`s are kept only for in-page
   anchors / http(s) / mailto targets — a broken or malicious plugin cannot
@@ -244,7 +244,7 @@ time too, so chapters materialized before this existed get annotated on
 the fly.
 
 **Epoch budget note.** Every `fetch` (pages *and* images) spends the
-same call budget (`BOOKSHELF_PLUGIN_FETCH_TIMEOUT_MS`, default 30 s).
+same call budget (`MANDARA_PLUGIN_FETCH_TIMEOUT_MS`, default 30 s).
 A plate-heavy chapter fetched over a slow CDN can need more: the wenku8
 verification measured ~7 s per plate, ≈2 min for a 16-plate 插图 chapter.
 Sources that store images should run with a raised fetch-timeout cap.
@@ -258,16 +258,16 @@ decides what a status means (4xx/5xx are plain `response`s, not errors):
 - **Redirects**: at most 5 hops, curl-style method downgrade on 301–303;
   exceeding the cap is a `redirect-limit` error (not the last response).
 - **Timeout**: overall deadline = `min(requested,
-  BOOKSHELF_PLUGIN_FETCH_TIMEOUT_MS)` (default 30 s).
+  MANDARA_PLUGIN_FETCH_TIMEOUT_MS)` (default 30 s).
 - **Proxy**: outbound requests honor the standard environment variables
   (`ALL_PROXY` / `HTTPS_PROXY` / `HTTP_PROXY`, lowercase variants too);
   hosts in `NO_PROXY` connect directly. Useful where the server has no
   direct internet route.
 - **Size**: response bodies are capped
-  (`BOOKSHELF_PLUGIN_FETCH_MAX_BYTES`, default 64 MiB); oversized
+  (`MANDARA_PLUGIN_FETCH_MAX_BYTES`, default 64 MiB); oversized
   responses abort with `size-limit` and no partial data.
-- **Caps**: overall timeout = `min(requested, BOOKSHELF_PLUGIN_FETCH_TIMEOUT_MS)`
-  (default 30 s); response bodies ≤ `BOOKSHELF_PLUGIN_FETCH_MAX_BYTES`
+- **Caps**: overall timeout = `min(requested, MANDARA_PLUGIN_FETCH_TIMEOUT_MS)`
+  (default 30 s); response bodies ≤ `MANDARA_PLUGIN_FETCH_MAX_BYTES`
   (default 64 MiB, no partial data).
 - **No ambient credentials**: only the headers you set are sent (plus the
   ones the host manages: host/content-length/transfer-encoding/connection;
@@ -281,7 +281,7 @@ return `none`/empty and let the user retrigger via refresh /
 materialize). A typical guest request:
 
 ```rust
-let resp = bookshelf::plugin::http::fetch(&bookshelf::plugin::http::Request {
+let resp = mandara::plugin::http::fetch(&mandara::plugin::http::Request {
     method: "GET".into(),
     url: url.into(),
     headers: vec![],                       // or an api-key header from config
@@ -311,7 +311,7 @@ const FIELDS: [&str; 2] = ["site-name", "page-size"];
 
 fn site_name() -> String {
     let idx = FIELDS.iter().position(|k| *k == "site-name").unwrap();
-    match bookshelf::plugin::config::configure().get(idx) {
+    match mandara::plugin::config::configure().get(idx) {
         Some(ConfigValue::Text(s)) if !s.is_empty() => s.clone(),
         _ => "默认站点".into(),
     }
@@ -391,7 +391,7 @@ cp plugins-built/*.wasm data/plugins/
 ```
 
 The guest crates use `wit-bindgen = "0.60"` with
-`wit_bindgen::generate!({ world: "bookshelf-plugin", path: "../../crates/bookshelf-plugin/wit" })`
+`wit_bindgen::generate!({ world: "mandara-plugin", path: "../../crates/mandara-plugin/wit" })`
 and `export!(PluginName)`. The generated core module embeds a
 `component-type` section, so `wasm-tools component new` lifts it into a
 component without adapters (the world imports no wasi interfaces).
@@ -400,7 +400,7 @@ End-to-end demo of the HTTP acquisition layer (chapter mode + file mode):
 
 ```sh
 python3 scripts/mock-source.py 8765 &           # the remote source
-cargo run -p bookshelf-server                   # the server
+cargo run -p mandara-server                   # the server
 ./scripts/e2e-http-plugins.sh                   # full automated check
 ```
 

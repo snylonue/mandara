@@ -22,7 +22,7 @@ const DEFAULTS: ReaderSettings = {
   widthEm: 42,
 };
 
-const KEY = "bookshelf_reader_settings";
+const KEY = "mandara_reader_settings";
 
 function load(): ReaderSettings {
   try {

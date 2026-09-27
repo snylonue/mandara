@@ -262,7 +262,7 @@ export function IconLogout({ size, className }: IconProps) {
   );
 }
 
-/** Bookshelf logo mark (filled). */
+/** Mandara logo mark (filled). */
 export function LogoMark({ size = 22, className }: IconProps) {
   return (
     <svg

@@ -1,7 +1,7 @@
 # Plugin System v2 — Design & Development Plan
 
 Status: **proposal** (dev phase; no backward compatibility constraints).
-Supersedes the v1 interface in `crates/bookshelf-plugin/wit/bookshelf.wit`
+Supersedes the v1 interface in `crates/mandara-plugin/wit/mandara.wit`
 and the authoring guide `docs/plugins.md` (rewritten at implementation time).
 
 ## 1. Requirements summary
@@ -16,7 +16,7 @@ Collected from the project owner (dev phase, breaking changes allowed):
 | R4 | **Large sources**: catalog fetched by id or by **search** with pagination, never fully enumerated; no eager materialization of huge catalogs | not met — `list-books` is unparameterized, startup sync materializes everything; `get-book(id)`-by-scan |
 | R5 | **Metadata and chapter content fetched independently**: e.g. metadata from a wiki plugin, chapter content from a reading-site plugin | not met — one plugin is both; `book_files.source/external_id` drives every path |
 
-Non-goals (dev phase): no compatibility with v1 plugins, v1 `bookshelf:plugin@0.1.0`
+Non-goals (dev phase): no compatibility with v1 plugins, v1 `mandara:plugin@0.1.0`
 package, or the v1 sync policy. `local` uploads and the unified books →
 book_files → chapters model stay untouched.
 
@@ -26,7 +26,7 @@ book_files → chapters model stay untouched.
 data/plugins/*.wasm
    │  loaded once per file
    ▼
-bookshelf-plugin host                plugin_instances (SQLite, new)
+mandara-plugin host                plugin_instances (SQLite, new)
   WasmPlugin per registered instance ── id = source id
   ├─ Fresh Store per call            ── config validated & stored here
   ├─ configure(values) before call   ── injected per call (stateless)
@@ -61,10 +61,10 @@ Design decisions:
   globals. All durable state (instances, config, catalog, chapters) lives in
   SQLite under the host's control.
 
-## 3. WIT v2 (`bookshelf:plugin@0.2.0`)
+## 3. WIT v2 (`mandara:plugin@0.2.0`)
 
 ```wit
-package bookshelf:plugin@0.2.0;
+package mandara:plugin@0.2.0;
 
 interface types {
     record book-entry {
@@ -121,7 +121,7 @@ interface config {
     }
 }
 
-world bookshelf-plugin {
+world mandara-plugin {
     import types;
     import store;
     import config;
@@ -308,7 +308,7 @@ checked.
 
 | Phase | Scope | Acceptance |
 |---|---|---|
-| P0 | WIT@0.2 rewrite (`bookshelf.wit`), host `bindgen!` regen + `WasmPlugin` rework (per-instance config, `configure` injection, capabilities call, epoch deadline/limits), rewrite `hello-plugin` as data-driven demo, delete v1-only plumbing (`list-books`/scan-based `plugin_entry`) | `cargo test` green (config roundtrip, capability stubs, timeout trap); wasm-tools lift still works; `cargo fmt` before commit |
+| P0 | WIT@0.2 rewrite (`mandara.wit`), host `bindgen!` regen + `WasmPlugin` rework (per-instance config, `configure` injection, capabilities call, epoch deadline/limits), rewrite `hello-plugin` as data-driven demo, delete v1-only plumbing (`list-books`/scan-based `plugin_entry`) | `cargo test` green (config roundtrip, capability stubs, timeout trap); wasm-tools lift still works; `cargo fmt` before commit |
 | P1 | `plugin_instances` migration; register/enable/delete APIs; config-schema + validation + PUT config; admin UI form | e2e: register instance → schema GET → bad config 400 with field errors → good config → plugin log shows injected values |
 | P2 | `declare` + `search-books` + `get-book` host plumbing; lazy sync policy (no startup listing for search-only); `/search` + `/books` endpoints; library source-browser UI; refresh via `get-book` | e2e: search-only plugin → empty library until user picks a book; caps enforced (400 beyond limit) |
 | P3 | `content_source`/`content_external_id` columns; content routing in `ensure_titles`/`materialize_from_source`; rebind endpoint + book-detail UI | e2e with two demo plugins: `wiki-plugin` (declare/search, metadata only) + `reader-plugin` (content; searchable) → metadata from wiki, chapters materialized from reader; rebind switches reader book |

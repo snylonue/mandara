@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
-description = "example bookshelf plugin: a static catalog provided by a wasm component"
+description = "example mandara plugin: a static catalog provided by a wasm component"
 
 [lib]
 crate-type = ["cdylib"]

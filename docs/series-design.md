@@ -146,7 +146,7 @@ record volume-info {
 
 ### 7.1 `SourceBook` model
 
-`bookshelf_core::source::SourceBook` gains
+`mandara_core::source::SourceBook` gains
 `pub volumes: Vec<SourceVolume>` where `SourceVolume { title, chapter_count }`.
 The WIT→model conversion populates it (`none` → empty vec).
 
@@ -266,7 +266,7 @@ embeds them; the frontend regenerates `src/api/schema.d.ts`.
 - Host: WIT roundtrip with `volumes` (incl. `none`), slice computation
   (sums, clamp, degenerate empty volume collapse), conflict 409,
   `get-chapter` offset mapping, refresh slice — unit tests in the
-  bookshelf-server / bookshelf-plugin crates; existing 44 backend tests
+  mandara-server / mandara-plugin crates; existing 44 backend tests
   keep passing.
 - wenku8 guest: `volumes` shape from a fixture TOC (vcss titles incl.
   empty titles → `第N卷` fallback; placement Skip changes counts).

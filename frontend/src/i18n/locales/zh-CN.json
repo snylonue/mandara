@@ -195,8 +195,8 @@
     "progressOf": "{{owner}} 的进度 · 会话「{{label}}」",
     "readTo": "已读到",
     "updatedAt": "（更新于 {{time}}）",
-    "from": "分享自 Bookshelf · ",
-    "deploy": "自己部署一个 Bookshelf"
+    "from": "分享自 Mandara · ",
+    "deploy": "自己部署一个 Mandara"
   },
   "plugin": {
     "chooseSource": "选择插件源…",

@@ -1,4 +1,4 @@
-//! Guest side of the `bookshelf:plugin/bookshelf-plugin` world (v3).
+//! Guest side of the `mandara:plugin/mandara-plugin` world (v3).
 //!
 //! A *content* source speaking HTTP (chapter mode): the reading-site
 //! catalog lives on a remote site (config `base-url`), fetched through
@@ -27,8 +27,8 @@
 //! ```
 
 wit_bindgen::generate!({
-    world: "bookshelf-plugin",
-    path: "../../crates/bookshelf-plugin/wit",
+    world: "mandara-plugin",
+    path: "../../crates/mandara-plugin/wit",
 });
 
 const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8765/reader";
@@ -37,7 +37,7 @@ const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8765/reader";
 const FIELDS: [&str; 3] = ["base-url", "site-name", "max-chapters"];
 
 fn values() -> Vec<ConfigValue> {
-    bookshelf::plugin::config::configure()
+    mandara::plugin::config::configure()
 }
 
 fn config_string(key: &str, default: &str) -> String {
@@ -57,7 +57,7 @@ fn config_number(key: &str, default: u32) -> u32 {
 }
 
 fn log_error(context: &str, url: &str, err: &str) {
-    bookshelf::plugin::store::log(&format!("{context} `{url}` failed: {err}"));
+    mandara::plugin::store::log(&format!("{context} `{url}` failed: {err}"));
 }
 
 /// RFC 3986 percent-encoding of a UTF-8 string (query values).
@@ -77,14 +77,14 @@ fn urlencode(s: &str) -> String {
 /// One remote `http.fetch` (timeout 5 s); application statuses come back
 /// as `(status, body)` — only transport-level problems are errors.
 fn http_get(url: &str) -> Result<(u16, Vec<u8>), String> {
-    let request = bookshelf::plugin::http::Request {
+    let request = mandara::plugin::http::Request {
         method: "GET".into(),
         url: url.into(),
         headers: Vec::new(),
         body: None,
         timeout_ms: Some(5_000),
     };
-    match bookshelf::plugin::http::fetch(&request) {
+    match mandara::plugin::http::fetch(&request) {
         Ok(resp) => Ok((resp.status, resp.body)),
         Err(e) => Err(format!("{e:?}")),
     }
@@ -181,7 +181,7 @@ impl Guest for ReaderPlugin {
             ConfigField {
                 key: "base-url".into(),
                 label: "站点地址".into(),
-                kind: bookshelf::plugin::config::ConfigKind::Text,
+                kind: mandara::plugin::config::ConfigKind::Text,
                 default: Some(DEFAULT_BASE_URL.into()),
                 required: true,
                 hint: Some(
@@ -191,7 +191,7 @@ impl Guest for ReaderPlugin {
             ConfigField {
                 key: "site-name".into(),
                 label: "站点名称".into(),
-                kind: bookshelf::plugin::config::ConfigKind::Text,
+                kind: mandara::plugin::config::ConfigKind::Text,
                 default: Some("远程阅读源".into()),
                 required: true,
                 hint: Some("显示在词条描述里".into()),
@@ -199,7 +199,7 @@ impl Guest for ReaderPlugin {
             ConfigField {
                 key: "max-chapters".into(),
                 label: "每章上限".into(),
-                kind: bookshelf::plugin::config::ConfigKind::Number,
+                kind: mandara::plugin::config::ConfigKind::Number,
                 default: Some("3".into()),
                 required: false,
                 hint: Some("每本书最多提供的章节数（1~20，向上游 max 参数）".into()),

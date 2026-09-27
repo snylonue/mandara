@@ -1,4 +1,4 @@
-//! Guest side of the `bookshelf:plugin/bookshelf-plugin` world (v2).
+//! Guest side of the `mandara:plugin/mandara-plugin` world (v2).
 //!
 //! Build:
 //! ```sh
@@ -19,8 +19,8 @@
 //! stays stateless (R2) — there is no mutable state anywhere.
 
 wit_bindgen::generate!({
-    world: "bookshelf-plugin",
-    path: "../../crates/bookshelf-plugin/wit",
+    world: "mandara-plugin",
+    path: "../../crates/mandara-plugin/wit",
 });
 
 // `BookEntry`, `Chapter`, `DeclaredBook`, `SearchResult`, `ConfigField`,
@@ -33,7 +33,7 @@ const FIELDS: [&str; 5] = ["site-name", "mode", "verbose", "spin", "tags"];
 
 /// Pull the host-injected configuration for this call.
 fn values() -> Vec<ConfigValue> {
-    bookshelf::plugin::config::configure()
+    mandara::plugin::config::configure()
 }
 
 fn field_value(key: &str) -> Option<ConfigValue> {
@@ -96,15 +96,15 @@ impl Guest for HelloPlugin {
             ConfigField {
                 key: "site-name".into(),
                 label: "站点名称".into(),
-                kind: bookshelf::plugin::config::ConfigKind::Text,
-                default: Some("Bookshelf 示例库".into()),
+                kind: mandara::plugin::config::ConfigKind::Text,
+                default: Some("Mandara 示例库".into()),
                 required: true,
                 hint: Some("出现在推荐书目和识别提示里".into()),
             },
             ConfigField {
                 key: "mode".into(),
                 label: "内容版本".into(),
-                kind: bookshelf::plugin::config::ConfigKind::EnumOptions(vec![
+                kind: mandara::plugin::config::ConfigKind::EnumOptions(vec![
                     "default".into(),
                     "alt".into(),
                 ]),
@@ -115,7 +115,7 @@ impl Guest for HelloPlugin {
             ConfigField {
                 key: "verbose".into(),
                 label: "详细日志".into(),
-                kind: bookshelf::plugin::config::ConfigKind::Boolean,
+                kind: mandara::plugin::config::ConfigKind::Boolean,
                 default: Some("false".into()),
                 required: false,
                 hint: Some("每次取章时写一条宿主日志".into()),
@@ -123,7 +123,7 @@ impl Guest for HelloPlugin {
             ConfigField {
                 key: "spin".into(),
                 label: "死循环测试(不要开启)".into(),
-                kind: bookshelf::plugin::config::ConfigKind::Boolean,
+                kind: mandara::plugin::config::ConfigKind::Boolean,
                 default: Some("false".into()),
                 required: false,
                 hint: Some("开启后取章会陷入死循环，用于演示宿主超时保护".into()),
@@ -131,7 +131,7 @@ impl Guest for HelloPlugin {
             ConfigField {
                 key: "tags".into(),
                 label: "额外标签".into(),
-                kind: bookshelf::plugin::config::ConfigKind::ListOfString,
+                kind: mandara::plugin::config::ConfigKind::ListOfString,
                 default: Some("[]".into()),
                 required: false,
                 hint: Some("逗号分隔，会附在书目描述中".into()),
@@ -148,7 +148,7 @@ impl Guest for HelloPlugin {
     /// Static catalog. Bodies are inline (non-empty `content`), so the
     /// host materializes them eagerly.
     fn declare() -> Option<Vec<DeclaredBook>> {
-        let site = config_string("site-name", "Bookshelf 示例库");
+        let site = config_string("site-name", "Mandara 示例库");
         let tags = config_tags();
         let tail = if tags.is_empty() {
             String::new()
@@ -157,8 +157,8 @@ impl Guest for HelloPlugin {
         };
         let book1 = BookEntry {
             id: "hello-1".into(),
-            title: format!("Hello Bookshelf（{site}）"),
-            authors: vec!["Bookshelf Team".into()],
+            title: format!("Hello Mandara（{site}）"),
+            authors: vec!["Mandara Team".into()],
             description: Some(format!(
                 "这是一本由 wasm 插件依据配置生成的示例书。当前配置：站点={site}，版本=default。{tail}"
             )),
@@ -170,14 +170,14 @@ impl Guest for HelloPlugin {
         };
         let book2 = BookEntry {
             id: "hello-2".into(),
-            title: "Hello Bookshelf·幕后".into(),
-            authors: vec!["Bookshelf Team".into()],
+            title: "Hello Mandara·幕后".into(),
+            authors: vec!["Mandara Team".into()],
             description: Some("示例插件内部机制的说明。".into()),
             cover_url: None,
             // Extended-metadata demo: known keys validate against BookExt,
             // unknown keys round-trip verbatim.
             extra: Some(
-                r#"{"publisher":"Bookshelf Press","pub_date":"2026-08","pages":42,"future_key":{"nested":true}}"#.into(),
+                r#"{"publisher":"Mandara Press","pub_date":"2026-08","pages":42,"future_key":{"nested":true}}"#.into(),
             ),
             content_source: None,
             content_id: None,
@@ -247,7 +247,7 @@ impl Guest for HelloPlugin {
             }
         }
         if config_bool("verbose", false) {
-            bookshelf::plugin::store::log(&format!("get_chapter({book_id}, {index})"));
+            mandara::plugin::store::log(&format!("get_chapter({book_id}, {index})"));
         }
         let mode = config_enum_index("mode");
         let alt = mode == 1;
@@ -287,11 +287,11 @@ impl Guest for HelloPlugin {
     fn identify_upload(filename: String, _file_hash: String) -> Option<BookEntry> {
         let lower = filename.to_lowercase();
         if lower.contains("hello") || lower.contains("示例") {
-            let site = config_string("site-name", "Bookshelf 示例库");
+            let site = config_string("site-name", "Mandara 示例库");
             Some(BookEntry {
                 id: "hello-1".into(),
-                title: format!("Hello Bookshelf（{site}）"),
-                authors: vec!["Bookshelf Team".into()],
+                title: format!("Hello Mandara（{site}）"),
+                authors: vec!["Mandara Team".into()],
                 description: Some("这是一本由 wasm 插件提供的示例书。".into()),
                 cover_url: None,
                 extra: None,

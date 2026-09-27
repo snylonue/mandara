@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
-description = "demo bookshelf plugin: reading-site source (searchable, provides chapter content)"
+description = "demo mandara plugin: reading-site source (searchable, provides chapter content)"
 
 [lib]
 crate-type = ["cdylib"]

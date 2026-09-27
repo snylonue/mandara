@@ -4,8 +4,8 @@ Status: **implemented** (owner decision, 2026-08-25:
 "wasm 插件的请求不用检查了，提供联网能力就行" — the host provides
 plain network access with timeout/size caps only). The rest of this
  document (book-file acquisition, config-driven base URLs) stands.
-Extends the v2 plugin interface (`crates/bookshelf-plugin/wit/bookshelf.wit`,
-`bookshelf:plugin@0.2.0`). Does **not** replace the config channel, the
+Extends the v2 plugin interface (`crates/mandara-plugin/wit/mandara.wit`,
+`mandara:plugin@0.2.0`). Does **not** replace the config channel, the
 capabilities model, or the lazy catalog policy of `docs/plugin-v2-design.md`.
 
 ## 1. Motivation
@@ -55,7 +55,7 @@ Non-goals (dev phase):
 - No streaming responses (a full response body is returned at once; sizes
   are capped).
 
-## 3. WIT additions (`bookshelf:plugin@0.3.0`)
+## 3. WIT additions (`mandara:plugin@0.3.0`)
 
 A new imported interface `http`, plus a `book-file` type and one optional
 (declared-via-capabilities) export.
@@ -104,7 +104,7 @@ interface http {
 Notes:
 
 - `timeout-ms`: the plugin asks for a timeout, the host enforces
-  `min(requested, BOOKSHELF_PLUGIN_FETCH_TIMEOUT_MS)`.
+  `min(requested, MANDARA_PLUGIN_FETCH_TIMEOUT_MS)`.
 - `fetch-error` distinguishes **permanent** (do not retry: bad URL,
   denied, redirect loop, oversized) from **transient** (retry with
   backoff: timeout, connect failures) errors.
@@ -125,7 +125,7 @@ interface types {
     }
 }
 
-world bookshelf-plugin {
+world mandara-plugin {
     // added export (declared via the new `book-file` capability):
     /// Fetch a whole book file. `none` = not available as a file
     /// (fall back to chapter mode). Errors are `fetch`-style results;
@@ -142,8 +142,8 @@ Capabilities gain one entry: `"book-file"`.
 |---|---|
 | Scheme | http + https (self-hosted sources are often plain http). |
 | Redirects | Followed up to 5 hops; exceeding the cap is a `redirect-limit` error (not the last response). |
-| Timeout | Hard cap `BOOKSHELF_PLUGIN_FETCH_TIMEOUT_MS` (default 30 000). |
-| Size | `BOOKSHELF_PLUGIN_FETCH_MAX_BYTES` (default 64 MiB, aligned with `max_upload_mb`). Oversized responses abort with `size-limit` — no partial data. |
+| Timeout | Hard cap `MANDARA_PLUGIN_FETCH_TIMEOUT_MS` (default 30 000). |
+| Size | `MANDARA_PLUGIN_FETCH_MAX_BYTES` (default 64 MiB, aligned with `max_upload_mb`). Oversized responses abort with `size-limit` — no partial data. |
 | Secrets | Host logs never include full URLs (only `scheme://host/path`, query/fragment stripped). Plugins should put credentials in config, not URLs. |
 | State | `fetch` is a synchronous import; the host runs it on a blocking thread (`tokio::task::spawn_blocking`), so a slow source never stalls a worker. |
 
@@ -188,7 +188,7 @@ Materialization rules (host side, extending §6 of the v2 design):
 - **File mode**: declarers of `book-file` are materialized by fetching the
   file *once* (on first access / on the unified acquisition endpoint
   `POST /api/books` with `plugin_source` + `plugin_book_id`) and
-  running the **existing upload parser** (`bookshelf-formats::parse`):
+  running the **existing upload parser** (`mandara-formats::parse`):
   chapters, `chapters.format`, hierarchical `toc`, sanitized HTML all come
   for free; the file row is stored like a local upload
   (`format` = `epub`|`txt` from the mime). The DB remains the single
@@ -223,9 +223,9 @@ as `none`/empty results (the host logs the underlying error).
 
 | Phase | Scope | Acceptance |
 |---|---|---|
-| P1 | WIT 0.3.0 (`http` interface + `book-file`), host `fetch` import (`ureq` or `reqwest::blocking` inside `spawn_blocking`; timeout/size caps, redirect policy, stripped logging), config knobs; a tiny local test source (e.g. `python3 -m http.server`-style fixture or a mock endpoint in `bookshelf-server`) | unit tests: timeout, size-limit, redirect-limit, header-strip-on-cross-host; chapter-mode e2e against the mock source |
+| P1 | WIT 0.3.0 (`http` interface + `book-file`), host `fetch` import (`ureq` or `reqwest::blocking` inside `spawn_blocking`; timeout/size caps, redirect policy, stripped logging), config knobs; a tiny local test source (e.g. `python3 -m http.server`-style fixture or a mock endpoint in `mandara-server`) | unit tests: timeout, size-limit, redirect-limit, header-strip-on-cross-host; chapter-mode e2e against the mock source |
 | P2 | Rewrite `wiki-plugin` against a real public API (e.g. Chinese Wikipedia REST/Action API) and `reader-plugin` chapter-mode against it (or a documented mock); config-driven base-url | e2e: search → materialize → lazy chapters all served from the network source; refresh pulls metadata only |
-| P3 | `get-book-file` export + host file-mode materialization through `bookshelf-formats::parse` + capability plumbing; `reader-plugin` gains file mode returning a generated epub | e2e: file-mode book materializes with real TOC + sanitized chapters like an upload |
+| P3 | `get-book-file` export + host file-mode materialization through `mandara-formats::parse` + capability plumbing; `reader-plugin` gains file mode returning a generated epub | e2e: file-mode book materializes with real TOC + sanitized chapters like an upload |
 | P4 | Guard hardening (per-instance QPS token bucket if needed), `docs/plugins.md` rewrite, AGENTS.md progress log | `just` checks green; both patterns documented |
 
 The `fetch` import keeps the world's imports free of WASI, so the build
@@ -235,10 +235,10 @@ pipeline (`wasm-tools component new`, no adapter) stays untouched.
 
 - Q1 **Rate limiting**: per-instance QPS token bucket? (Self-hosted single
   user: probably unnecessary; a global
-  `BOOKSHELF_PLUGIN_FETCH_CONCURRENCY` semaphore is a cheap middle ground.)
+  `MANDARA_PLUGIN_FETCH_CONCURRENCY` semaphore is a cheap middle ground.)
 - Q2 **HTTPS proxy**: RESOLVED (2026-08-26) — the host upgraded to ureq 3,
   whose default agent honors the standard `ALL_PROXY`/`HTTPS_PROXY`/
-  `HTTP_PROXY`/`NO_PROXY` environment variables. No bookshelf-specific
+  `HTTP_PROXY`/`NO_PROXY` environment variables. No mandara-specific
   flag; deployments behind a proxy just export the usual vars.
 - Q3 **HTTP scheme default**: allow http by default (self-hosted sources).
 - Q4 **Chapter HTML**: **resolved** — `chapter.format` landed (WIT v7):

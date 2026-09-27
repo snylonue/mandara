@@ -1,4 +1,4 @@
-//! Guest side of the `bookshelf:plugin/bookshelf-plugin` world (v3).
+//! Guest side of the `mandara:plugin/mandara-plugin` world (v3).
 //!
 //! A *metadata-only* source speaking HTTP: the catalog lives on a remote
 //! site (config `base-url`), fetched through the host's `http.fetch`
@@ -23,8 +23,8 @@
 //! ```
 
 wit_bindgen::generate!({
-    world: "bookshelf-plugin",
-    path: "../../crates/bookshelf-plugin/wit",
+    world: "mandara-plugin",
+    path: "../../crates/mandara-plugin/wit",
 });
 
 const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8765/wiki";
@@ -33,7 +33,7 @@ const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8765/wiki";
 const FIELDS: [&str; 4] = ["base-url", "api-key", "site-name", "page-size"];
 
 fn values() -> Vec<ConfigValue> {
-    bookshelf::plugin::config::configure()
+    mandara::plugin::config::configure()
 }
 
 fn config_string(key: &str, default: &str) -> String {
@@ -53,7 +53,7 @@ fn config_number(key: &str, default: u32) -> u32 {
 }
 
 fn log_error(context: &str, url: &str, err: &str) {
-    bookshelf::plugin::store::log(&format!("{context} `{url}` failed: {err}"));
+    mandara::plugin::store::log(&format!("{context} `{url}` failed: {err}"));
 }
 
 /// RFC 3986 percent-encoding of a UTF-8 string (query values; the host
@@ -77,19 +77,19 @@ fn http_get(url: &str) -> Result<(u16, Vec<u8>), String> {
     let mut headers = Vec::new();
     let api_key = config_string("api-key", "");
     if !api_key.is_empty() {
-        headers.push(bookshelf::plugin::http::Header {
+        headers.push(mandara::plugin::http::Header {
             name: "X-Api-Key".into(),
             value: api_key,
         });
     }
-    let request = bookshelf::plugin::http::Request {
+    let request = mandara::plugin::http::Request {
         method: "GET".into(),
         url: url.into(),
         headers,
         body: None,
         timeout_ms: Some(5_000),
     };
-    match bookshelf::plugin::http::fetch(&request) {
+    match mandara::plugin::http::fetch(&request) {
         Ok(resp) => Ok((resp.status, resp.body)),
         Err(e) => Err(format!("{e:?}")),
     }
@@ -183,7 +183,7 @@ impl Guest for WikiPlugin {
             ConfigField {
                 key: "base-url".into(),
                 label: "站点地址".into(),
-                kind: bookshelf::plugin::config::ConfigKind::Text,
+                kind: mandara::plugin::config::ConfigKind::Text,
                 default: Some(DEFAULT_BASE_URL.into()),
                 required: true,
                 hint: Some("远程 API 的根地址（含命名空间），如 http://127.0.0.1:8765/wiki".into()),
@@ -191,7 +191,7 @@ impl Guest for WikiPlugin {
             ConfigField {
                 key: "api-key".into(),
                 label: "API 密钥".into(),
-                kind: bookshelf::plugin::config::ConfigKind::Text,
+                kind: mandara::plugin::config::ConfigKind::Text,
                 default: None,
                 required: false,
                 hint: Some("非空时作为 X-Api-Key 请求头发送；仅在管理员配置页可见".into()),
@@ -199,7 +199,7 @@ impl Guest for WikiPlugin {
             ConfigField {
                 key: "site-name".into(),
                 label: "站点名称".into(),
-                kind: bookshelf::plugin::config::ConfigKind::Text,
+                kind: mandara::plugin::config::ConfigKind::Text,
                 default: Some("维基书源".into()),
                 required: true,
                 hint: Some("显示在词条描述里".into()),
@@ -207,7 +207,7 @@ impl Guest for WikiPlugin {
             ConfigField {
                 key: "page-size".into(),
                 label: "词条数量".into(),
-                kind: bookshelf::plugin::config::ConfigKind::Number,
+                kind: mandara::plugin::config::ConfigKind::Number,
                 default: Some("8".into()),
                 required: false,
                 hint: Some("向上游请求的词条数上限（page_size 参数）".into()),

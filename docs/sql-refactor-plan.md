@@ -55,11 +55,11 @@ bytes to the store and reference them by id.
 1. *Plugins* — new WIT import (v6): `store.store-image(bytes, mime)
    -> string` under the existing per-call budget (epoch deadline already
    covers the extra http.fetch round-trips); host caps per-image/per-call
-   byte totals via env (`BOOKSHELF_PLUGIN_IMAGE_MAX_BYTES`, …). The plugin
+   byte totals via env (`MANDARA_PLUGIN_IMAGE_MAX_BYTES`, …). The plugin
    downloads via `http.fetch` itself (its own retry/referer policy, e.g.
    wenku8 CDN), calls `store-image`, embeds the returned `/api/images/{id}`
    ref. Duplicate bytes return the same id.
-2. *Epub/txt uploads* — `bookshelf-formats` stays pure (no DB): the epub
+2. *Epub/txt uploads* — `mandara-formats` stays pure (no DB): the epub
    sanitizer stops inlining `data:` URIs and instead emits placeholder refs
    (`src="image:{n}"`) plus a parallel `ParsedBook.images: list<{mime,
    bytes}>`; the server's ingest boundary stores each entry through the

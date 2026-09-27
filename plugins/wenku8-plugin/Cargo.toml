@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
-description = "bookshelf plugin: wenku8.net (轻小说文库) source — lookup + chapter content"
+description = "mandara plugin: wenku8.net (轻小说文库) source — lookup + chapter content"
 
 [lib]
 crate-type = ["cdylib"]

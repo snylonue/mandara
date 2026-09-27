@@ -5,10 +5,10 @@ members = [
     "plugins/reader-plugin",
     "plugins/wenku8-plugin",
     "plugins/bangumi-plugin",
-    "crates/bookshelf-core",
-    "crates/bookshelf-formats",
-    "crates/bookshelf-plugin",
-    "crates/bookshelf-server",
+    "crates/mandara-core",
+    "crates/mandara-formats",
+    "crates/mandara-plugin",
+    "crates/mandara-server",
     "plugins/hello-plugin",
 ]
 
@@ -16,7 +16,7 @@ members = [
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/example/bookshelf"
+repository = "https://github.com/example/mandara"
 
 # the wasm plugin (cdylib) is built size-optimized.
 [profile.release.package.hello-plugin]

@@ -34,8 +34,8 @@ done
 
 # The host unit tests embed the hello component as a fixture; keep it in
 # sync whenever the WIT or the hello guest changes.
-mkdir -p crates/bookshelf-plugin/tests/fixtures
-cp plugins-built/hello.wasm crates/bookshelf-plugin/tests/fixtures/hello.wasm
+mkdir -p crates/mandara-plugin/tests/fixtures
+cp plugins-built/hello.wasm crates/mandara-plugin/tests/fixtures/hello.wasm
 
 echo ""
 echo "deploy: cp plugins-built/*.wasm data/plugins/"

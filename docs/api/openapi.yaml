@@ -1,9 +1,9 @@
 openapi: 3.1.0
 info:
-  title: Bookshelf API
+  title: Mandara API
   version: 0.1.0
   description: |
-    Bookshelf is a self-hosted light-novel reading server.
+    Mandara is a self-hosted light-novel reading server.
 
     This document is the single source of truth for the HTTP API contract:
     the backend implements it and the frontend generates its types from it
@@ -105,7 +105,7 @@ paths:
         - bearerAuth: []
       description: |
         The authenticated user. Accepts the JWT via `Authorization:
-        Bearer …` or via the `bookshelf_token` session cookie (set on
+        Bearer …` or via the `mandara_token` session cookie (set on
         register/login) — the cookie keeps the login alive across page
         refreshes.
       responses:

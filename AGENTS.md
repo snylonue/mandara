@@ -4,7 +4,7 @@ Guidance for AI coding assistants (and humans) working in this repository.
 
 ## Project
 
-**Bookshelf** — a self-hosted light-novel reading website with a Rust backend
+**Mandara** — a self-hosted light-novel reading website with a Rust backend
 and a web frontend. Supports epub/txt books, multiple users, unified storage of
 books and metadata, optional permission control, reading progress
 management/sharing, and a wasm plugin system for user-provided book and
@@ -54,9 +54,9 @@ metadata sources.
 |---|---|---|
 | Backend | Rust 2024, cargo workspace | 4 crates, see layout below |
 | Web framework | axum 0.8 | `{param}` path syntax, multipart upload |
-| DB | SQLite via diesel | runtime queries only so no `DATABASE_URL` is needed at compile time (nix-friendly). Migrations in `crates/bookshelf-server/migrations/`. Two-level model: `books` = pure metadata, `book_files` = actual files (uploads or virtual plugin books); chapters/sessions/shares attach to files |
+| DB | SQLite via diesel | runtime queries only so no `DATABASE_URL` is needed at compile time (nix-friendly). Migrations in `crates/mandara-server/migrations/`. Two-level model: `books` = pure metadata, `book_files` = actual files (uploads or virtual plugin books); chapters/sessions/shares attach to files |
 | Auth | JWT (jsonwebtoken 11, `rust_crypto` backend) + Argon2 | roles `admin`/`user`; the first registered account becomes admin |
-| Plugin host | wasmtime 48 (component model) | WIT world `bookshelf:plugin/bookshelf-plugin` in `crates/bookshelf-plugin/wit/`; plugins loaded from `data/plugins/*.wasm`; chapters materialized into the central DB on first read |
+| Plugin host | wasmtime 48 (component model) | WIT world `mandara:plugin/mandara-plugin` in `crates/mandara-plugin/wit/`; plugins loaded from `data/plugins/*.wasm`; chapters materialized into the central DB on first read |
 | Plugin guest | wit-bindgen 0.60 (`generate!` + `export!`), `wasm32-unknown-unknown` | module is lifted with `wasm-tools component new` (no adapter needed, world imports no wasi) |
 | Formats | `epub` (epub-rs) + `html2text`/`scraper`; custom txt parser | txt: UTF-8/UTF-16/GB18030 detection + chapter-heading split (CJK ordinal-marker headings, Chapter N, VOL.N, prologues, ...) |
 | Frontend | Vite 8 + React 19 + TypeScript 5.9, npm | plain CSS, react-router 7; dev proxy `/api` → 127.0.0.1:8080 |
@@ -67,17 +67,17 @@ metadata sources.
 - A world that uses types from an imported interface must `use types.{...}`
   explicitly, otherwise parsing fails with "name `x` does not exist".
 - wasmtime 48: sync host functions return `()` (no `Result`); world bindings
-  are `BookshelfPlugin` itself; `add_to_linker::<_, HasSelf<_>>`.
+  are `MandaraPlugin` itself; `add_to_linker::<_, HasSelf<_>>`.
 
 ## Repository Layout
 
 ```
 flake.nix                          # toolchain: rust + wasm targets, node, wasm-tools
 Cargo.toml                         # workspace root (shared deps)
-crates/bookshelf-core/             # domain models + BookSource trait (plugin seam)
-crates/bookshelf-formats/          # epub / txt parsing → ParsedBook
-crates/bookshelf-plugin/           # wasmtime host + WIT interface
-crates/bookshelf-server/           # axum app, migrations/, routes/, service/
+crates/mandara-core/             # domain models + BookSource trait (plugin seam)
+crates/mandara-formats/          # epub / txt parsing → ParsedBook
+crates/mandara-plugin/           # wasmtime host + WIT interface
+crates/mandara-server/           # axum app, migrations/, routes/, service/
 plugins/hello-plugin/              # example wasm plugin (guest)
 frontend/                          # React app (npm)
 docs/plugins.md                    # plugin authoring guide
@@ -91,10 +91,10 @@ scripts/build-plugin-hello.sh      # build example plugin → plugins-built/
   one-off tools use `nix run` (per requirement 8).
 - **Language deps**: cargo / npm only — never commit `node_modules` or
   `target`; `frontend/dist` is gitignored (built artifact).
-- **DB**: SQLite at `data/bookshelf.db`; runtime queries only (no compile-time
+- **DB**: SQLite at `data/mandara.db`; runtime queries only (no compile-time
   `query!` macros → no `DATABASE_URL`).
 - **ApiError** implements `std::error::Error`; new domain errors should plug
-  into the `ApiError::*` variants in `crates/bookshelf-server/src/error.rs`.
+  into the `ApiError::*` variants in `crates/mandara-server/src/error.rs`.
 - **Admin bootstrap**: the first registered account gets the `admin` role
   (there is no other way to create an admin).
 - **Checks before commit**: `just fmt` (cargo fmt --all), then `just check`
@@ -102,7 +102,7 @@ scripts/build-plugin-hello.sh      # build example plugin → plugins-built/
   `just test`, `cd frontend && npm run typecheck` (use
   `npm_config_cache=/tmp/npm-cache` if `~/.npm` has root-owned files),
   then commit with a detailed message (see requirement 9).
-- **Diesel schema** (`crates/bookshelf-server/src/schema.rs`): regenerate
+- **Diesel schema** (`crates/mandara-server/src/schema.rs`): regenerate
   after EVERY new migration with `just schema`. The diesel CLI ships in
   the dev shell (`flake.nix`, sqlite-only via `pkgs.diesel-cli.override`);
   run `nix develop`, then `just schema`, then re-apply the documented

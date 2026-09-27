@@ -1,11 +1,11 @@
-# Build recipes for bookshelf: the server binary (bundled with the built
+# Build recipes for mandara: the server binary (bundled with the built
 # web frontend) and the wasm plugin components.
 #
 # Used by the flake (`packages.<system>`) and by `overlays.default`, so
-# applying the overlay gives a consumer's own nixpkgs `pkgs.bookshelf`.
+# applying the overlay gives a consumer's own nixpkgs `pkgs.mandara`.
 #
 # The server and frontend build with plain nixpkgs (whatever rustc that
-# nixpkgs pins); only `bookshelf-plugins` needs the rust-overlay toolchain,
+# nixpkgs pins); only `mandara-plugins` needs the rust-overlay toolchain,
 # because nixpkgs' rustc ships no `wasm32-unknown-unknown` std.
 {
   pkgs,
@@ -77,31 +77,31 @@ let
   # Vite build output, laid out where the server expects it: the server
   # serves `<frontend-dir>/dist`.
   frontend = pkgs.buildNpmPackage {
-    pname = "bookshelf-frontend";
+    pname = "mandara-frontend";
     inherit version;
     src = cleanSource (src + "/frontend");
-    npmDepsHash = "sha256-e1tiPqse6xp3uGvQlsDOSv136G2vl0j8/2ZbV9JI7JE=";
+    npmDepsHash = "sha256-sjZFG4aJhN63GFYzKb0VaoJY9kTyYWmdUh3LDM0f3Lg=";
     installPhase = ''
       runHook preInstall
-      mkdir -p $out/share/bookshelf/frontend
-      cp -r dist $out/share/bookshelf/frontend/
+      mkdir -p $out/share/mandara/frontend
+      cp -r dist $out/share/mandara/frontend/
       runHook postInstall
     '';
     meta = meta // {
-      description = "bookshelf web frontend (Vite build output)";
+      description = "mandara web frontend (Vite build output)";
     };
   };
 
   # --- server binary --------------------------------------------------------
   server = pkgs.rustPlatform.buildRustPackage {
-    pname = "bookshelf-server";
+    pname = "mandara-server";
     inherit version;
     src = rustSource;
     cargoLock.lockFile = rustSource + "/Cargo.lock";
     # Only the server: the other workspace members are wasm plugin guests.
     cargoBuildFlags = [
       "-p"
-      "bookshelf-server"
+      "mandara-server"
     ];
     # The test suite loads `plugins-built/*.wasm` (a dev build output) and
     # verifies that the components still introspect against this host — a
@@ -112,18 +112,18 @@ let
     doCheck = pkgs ? rust-bin;
     preCheck = lib.optionalString (pkgs ? rust-bin) ''
       mkdir -p plugins-built
-      cp ${plugins}/lib/bookshelf/plugins/*.wasm plugins-built/
+      cp ${plugins}/lib/mandara/plugins/*.wasm plugins-built/
     '';
     meta = meta // {
-      description = "bookshelf backend: REST API, auth, library, sessions, shares";
-      mainProgram = "bookshelf-server";
+      description = "mandara backend: REST API, auth, library, sessions, shares";
+      mainProgram = "mandara-server";
     };
   };
 
   # --- wasm plugins ---------------------------------------------------------
   # The guest crates are plain core wasm modules; `wasm-tools component new`
   # lifts them into components (the WIT world imports no wasi, so no
-  # adapter is involved). Output: $out/lib/bookshelf/plugins/<name>.wasm.
+  # adapter is involved). Output: $out/lib/mandara/plugins/<name>.wasm.
   rustToolchain = pkgs.rust-bin.stable.latest.default.override {
     targets = [ "wasm32-unknown-unknown" ];
   };
@@ -134,9 +134,9 @@ let
 
   plugins =
     assert lib.assertMsg (pkgs ? rust-bin)
-      "bookshelf-plugins needs the rust-overlay toolchain (nixpkgs' rustc has no wasm32-unknown-unknown std); apply `inputs.bookshelf.overlays.default` or use the flake's packages";
+      "mandara-plugins needs the rust-overlay toolchain (nixpkgs' rustc has no wasm32-unknown-unknown std); apply `inputs.mandara.overlays.default` or use the flake's packages";
     wasmRustPlatform.buildRustPackage {
-      pname = "bookshelf-plugins";
+      pname = "mandara-plugins";
       inherit version;
       src = rustSource;
       cargoLock.lockFile = rustSource + "/Cargo.lock";
@@ -164,22 +164,22 @@ let
 
       installPhase = ''
         runHook preInstall
-        mkdir -p $out/lib/bookshelf/plugins
-        cp components/*.wasm $out/lib/bookshelf/plugins/
+        mkdir -p $out/lib/mandara/plugins
+        cp components/*.wasm $out/lib/mandara/plugins/
         runHook postInstall
       '';
 
       meta = meta // {
-        description = "bookshelf wasm plugin components (book/metadata sources)";
+        description = "mandara wasm plugin components (book/metadata sources)";
       };
     };
 
   # --- combined server package ---------------------------------------------
   # The server binary plus the frontend bundle, with the bundle wired up as
-  # the *default* of `BOOKSHELF_FRONTEND_DIR` (an explicitly set variable or
+  # the *default* of `MANDARA_FRONTEND_DIR` (an explicitly set variable or
   # `--frontend-dir` still wins, e.g. from the NixOS module).
-  bookshelf =
-    pkgs.runCommand "bookshelf-${version}"
+  mandara =
+    pkgs.runCommand "mandara-${version}"
       {
         nativeBuildInputs = [ pkgs.makeWrapper ];
         passthru = {
@@ -191,19 +191,19 @@ let
         };
         meta = meta // {
           description = "Self-hosted light-novel reading website";
-          mainProgram = "bookshelf-server";
+          mainProgram = "mandara-server";
         };
       }
       ''
-        mkdir -p $out/bin $out/share/bookshelf
-        ln -s ${frontend}/share/bookshelf/frontend $out/share/bookshelf/frontend
-        makeWrapper ${server}/bin/bookshelf-server $out/bin/bookshelf-server \
-          --set-default BOOKSHELF_FRONTEND_DIR $out/share/bookshelf/frontend
+        mkdir -p $out/bin $out/share/mandara
+        ln -s ${frontend}/share/mandara/frontend $out/share/mandara/frontend
+        makeWrapper ${server}/bin/mandara-server $out/bin/mandara-server \
+          --set-default MANDARA_FRONTEND_DIR $out/share/mandara/frontend
       '';
 in
 {
-  inherit bookshelf;
-  bookshelf-server = server;
-  bookshelf-frontend = frontend;
-  bookshelf-plugins = plugins;
+  inherit mandara;
+  mandara-server = server;
+  mandara-frontend = frontend;
+  mandara-plugins = plugins;
 }

@@ -65,7 +65,7 @@ export interface paths {
         /**
          * Current user (Authorization header or session cookie)
          * @description The authenticated user. Accepts the JWT via `Authorization:
-         *     Bearer …` or via the `bookshelf_token` session cookie (set on
+         *     Bearer …` or via the `mandara_token` session cookie (set on
          *     register/login) — the cookie keeps the login alive across page
          *     refreshes.
          */

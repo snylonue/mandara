@@ -31,7 +31,7 @@ function RequireAuth({ children }: { children: ReactNode }) {
 /** App-wide color theme (dark default), persisted to localStorage. */
 type AppTheme = "dark" | "light";
 
-const THEME_KEY = "bookshelf_theme";
+const THEME_KEY = "mandara_theme";
 
 function loadTheme(): AppTheme {
   const raw = localStorage.getItem(THEME_KEY);
@@ -76,7 +76,7 @@ export default function App() {
           <div className="nav-left">
             <Link to="/" className="brand">
               <LogoMark className="brand-mark" />
-              Bookshelf
+              Mandara
             </Link>
             {user && (
               <nav className="nav-items">

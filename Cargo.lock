@@ -284,72 +284,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bookshelf-core"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "chrono",
- "serde",
- "serde_json",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "bookshelf-formats"
-version = "0.1.0"
-dependencies = [
- "bookshelf-core",
- "ego-tree",
- "encoding_rs",
- "epub",
- "scraper",
- "uuid",
- "zip",
-]
-
-[[package]]
-name = "bookshelf-plugin"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bookshelf-core",
- "serde",
- "serde_json",
- "tracing",
- "ureq",
- "wasmtime",
-]
-
-[[package]]
-name = "bookshelf-server"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "argon2",
- "async-trait",
- "axum",
- "bookshelf-core",
- "bookshelf-formats",
- "bookshelf-plugin",
- "chrono",
- "clap",
- "diesel",
- "diesel-async",
- "dotenvy",
- "jsonwebtoken",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "sqlx",
- "thiserror 2.0.20",
- "tokio",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2065,6 +1999,72 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "mandara-core"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "mandara-formats"
+version = "0.1.0"
+dependencies = [
+ "ego-tree",
+ "encoding_rs",
+ "epub",
+ "mandara-core",
+ "scraper",
+ "uuid",
+ "zip",
+]
+
+[[package]]
+name = "mandara-plugin"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "mandara-core",
+ "serde",
+ "serde_json",
+ "tracing",
+ "ureq",
+ "wasmtime",
+]
+
+[[package]]
+name = "mandara-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "argon2",
+ "async-trait",
+ "axum",
+ "chrono",
+ "clap",
+ "diesel",
+ "diesel-async",
+ "dotenvy",
+ "jsonwebtoken",
+ "mandara-core",
+ "mandara-formats",
+ "mandara-plugin",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "sqlx",
+ "thiserror 2.0.20",
+ "tokio",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

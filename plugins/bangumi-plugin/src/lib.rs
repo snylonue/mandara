@@ -30,8 +30,8 @@
 //! ```
 
 wit_bindgen::generate!({
-    world: "bookshelf-plugin",
-    path: "../../crates/bookshelf-plugin/wit",
+    world: "mandara-plugin",
+    path: "../../crates/mandara-plugin/wit",
 });
 
 const DEFAULT_BASE_URL: &str = "https://api.bgm.tv";
@@ -40,7 +40,7 @@ const DEFAULT_BASE_URL: &str = "https://api.bgm.tv";
 const FIELDS: [&str; 2] = ["base-url", "access-token"];
 
 fn values() -> Vec<ConfigValue> {
-    bookshelf::plugin::config::configure()
+    mandara::plugin::config::configure()
 }
 
 fn config_string(key: &str) -> Option<String> {
@@ -52,10 +52,10 @@ fn config_string(key: &str) -> Option<String> {
 }
 
 /// Descriptive User-Agent — required by the Bangumi developer guidelines.
-const USER_AGENT: &str = "snylonue/bookshelf (https://github.com/snylonue/bookshelf)";
+const USER_AGENT: &str = "snylonue/mandara (https://github.com/snylonue/mandara)";
 
 fn log_error(context: &str, url: &str, err: &str) {
-    bookshelf::plugin::store::log(&format!("{context} `{url}` failed: {err}"));
+    mandara::plugin::store::log(&format!("{context} `{url}` failed: {err}"));
 }
 
 /// One `http.fetch`; application statuses come back as `(status, body)` —
@@ -66,30 +66,30 @@ fn http_request(
     body: Option<Vec<u8>>,
     json_body: bool,
 ) -> Result<(u16, Vec<u8>), String> {
-    let mut headers = vec![bookshelf::plugin::http::Header {
+    let mut headers = vec![mandara::plugin::http::Header {
         name: "User-Agent".into(),
         value: USER_AGENT.into(),
     }];
     if let Some(token) = config_string("access-token") {
-        headers.push(bookshelf::plugin::http::Header {
+        headers.push(mandara::plugin::http::Header {
             name: "Authorization".into(),
             value: format!("Bearer {token}"),
         });
     }
     if json_body {
-        headers.push(bookshelf::plugin::http::Header {
+        headers.push(mandara::plugin::http::Header {
             name: "Content-Type".into(),
             value: "application/json".into(),
         });
     }
-    let request = bookshelf::plugin::http::Request {
+    let request = mandara::plugin::http::Request {
         method: method.into(),
         url: url.into(),
         headers,
         body,
         timeout_ms: Some(10_000),
     };
-    match bookshelf::plugin::http::fetch(&request) {
+    match mandara::plugin::http::fetch(&request) {
         Ok(resp) => Ok((resp.status, resp.body)),
         Err(e) => Err(format!("{e:?}")),
     }
@@ -491,7 +491,7 @@ impl Guest for BangumiPlugin {
             ConfigField {
                 key: "base-url".into(),
                 label: "API 地址".into(),
-                kind: bookshelf::plugin::config::ConfigKind::Text,
+                kind: mandara::plugin::config::ConfigKind::Text,
                 default: Some(DEFAULT_BASE_URL.into()),
                 required: true,
                 hint: Some("Bangumi 官方 API 根地址，一般无需修改".into()),
@@ -499,7 +499,7 @@ impl Guest for BangumiPlugin {
             ConfigField {
                 key: "access-token".into(),
                 label: "Access Token".into(),
-                kind: bookshelf::plugin::config::ConfigKind::Text,
+                kind: mandara::plugin::config::ConfigKind::Text,
                 default: None,
                 required: false,
                 hint: Some(

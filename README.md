@@ -1,4 +1,4 @@
-# Bookshelf · Light-novel reading website
+# Mandara · Light-novel reading website
 
 Self-hosted light-novel reading website: **Rust backend + web frontend**.
 Supports **epub / txt**, multiple users, unified storage of books and metadata,
@@ -19,10 +19,10 @@ and a **wasm plugin system** for user-provided book and metadata sources.
   translations. Chapters, sessions and shares attach to files, since
   different files may split chapters differently.
 - 🗄️ Unified storage: all metadata, files and chapter content live in a
-  single SQLite database (`data/bookshelf.db`); backup = copy one file.
+  single SQLite database (`data/mandara.db`); backup = copy one file.
 - 🧩 wasm plugin system: `data/plugins/*.wasm` are loaded at startup as
   WebAssembly components (wasmtime + component model). Plugins implement the
-  `bookshelf:plugin` world to offer their own catalogs; chapters are
+  `mandara:plugin` world to offer their own catalogs; chapters are
   materialized into the central store on first read.
 - 📑 Multi-session progress: several reading sessions per file (phone /
   tablet / computer...), each with independent progress
@@ -35,7 +35,7 @@ and a **wasm plugin system** for user-provided book and metadata sources.
 | Layer | Tech |
 |---|---|
 | Backend | Rust 2021, axum 0.8, sqlx 0.9 (SQLite, runtime queries only), jsonwebtoken, argon2 |
-| Plugin host | wasmtime 48 (component model), WIT in `crates/bookshelf-plugin/wit/` |
+| Plugin host | wasmtime 48 (component model), WIT in `crates/mandara-plugin/wit/` |
 | Frontend | Vite 8 + React 19 + TypeScript (npm), plain CSS, react-router 7 |
 | Environment | Nix flake (flake-parts + rust-overlay): dev shell, packages, NixOS module |
 | Language | UI strings and book examples are Chinese; code comments and docs are English |
@@ -46,14 +46,14 @@ and a **wasm plugin system** for user-provided book and metadata sources.
 ├── flake.nix                    # dev shell, packages, overlay, NixOS module
 ├── nix/
 │   ├── packages.nix             # server / frontend / wasm plugin builds
-│   ├── module.nix               # services.bookshelf (systemd unit, hardening)
-│   └── tests/bookshelf-vm.nix   # end-to-end NixOS VM test of the module
+│   ├── module.nix               # services.mandara (systemd unit, hardening)
+│   └── tests/mandara-vm.nix   # end-to-end NixOS VM test of the module
 ├── Cargo.toml                   # cargo workspace
 ├── crates/
-│   ├── bookshelf-core/          # domain models + BookSource trait (plugin seam)
-│   ├── bookshelf-formats/       # epub / txt parsing
-│   ├── bookshelf-plugin/        # wasmtime component host + WIT interface
-│   └── bookshelf-server/        # axum app: routes, auth, library, migrations/
+│   ├── mandara-core/          # domain models + BookSource trait (plugin seam)
+│   ├── mandara-formats/       # epub / txt parsing
+│   ├── mandara-plugin/        # wasmtime component host + WIT interface
+│   └── mandara-server/        # axum app: routes, auth, library, migrations/
 ├── plugins/
 │   └── hello-plugin/            # example plugin (wasm component)
 ├── frontend/                    # React app (npm)
@@ -84,7 +84,7 @@ Single-binary deployment: build the frontend and let the backend serve it.
 
 ```sh
 cd frontend && npm install && npm run build   # produces frontend/dist
-cargo run -p bookshelf-server                 # serves frontend/dist (SPA) at /
+cargo run -p mandara-server                 # serves frontend/dist (SPA) at /
 ```
 
 > If `npm install` fails with EACCES because `~/.npm` contains root-owned
@@ -96,37 +96,37 @@ The flake provides the packages, an overlay and a NixOS module:
 
 | Output | What it is |
 |---|---|
-| `packages.<system>.bookshelf` | server binary + built frontend (the default) |
-| `packages.<system>.bookshelf-server` | server binary only |
-| `packages.<system>.bookshelf-frontend` | the Vite build output |
-| `packages.<system>.bookshelf-plugins` | the in-repo wasm components |
-| `overlays.default` | the same as `pkgs.bookshelf*` |
-| `nixosModules.default` | `services.bookshelf`, with the package defaulting to this flake's build |
+| `packages.<system>.mandara` | server binary + built frontend (the default) |
+| `packages.<system>.mandara-server` | server binary only |
+| `packages.<system>.mandara-frontend` | the Vite build output |
+| `packages.<system>.mandara-plugins` | the in-repo wasm components |
+| `overlays.default` | the same as `pkgs.mandara*` |
+| `nixosModules.default` | `services.mandara`, with the package defaulting to this flake's build |
 
 ```nix
 # flake.nix of the host
-inputs.bookshelf = {
-  url = "github:example/bookshelf";
+inputs.mandara = {
+  url = "github:example/mandara";
   inputs.nixpkgs.follows = "nixpkgs";
 };
 
 # ... in the nixosSystem modules:
-modules = [ inputs.bookshelf.nixosModules.default ./configuration.nix ];
+modules = [ inputs.mandara.nixosModules.default ./configuration.nix ];
 ```
 
 ```nix
 # configuration.nix
-services.bookshelf = {
+services.mandara = {
   enable = true;
   address = "127.0.0.1";  # TLS terminates in the reverse proxy
   cookieSecure = true;    # session cookie only over https
-  # openssl rand -base64 32 > /run/secrets/bookshelf-jwt-secret
-  jwtSecretFile = "/run/secrets/bookshelf-jwt-secret";
+  # openssl rand -base64 32 > /run/secrets/mandara-jwt-secret
+  jwtSecretFile = "/run/secrets/mandara-jwt-secret";
   # the in-repo wasm plugins; with
-  # `nixpkgs.overlays = [ inputs.bookshelf.overlays.default ]` this is
-  # simply `[ pkgs.bookshelf-plugins ]`
-  plugins = [ inputs.bookshelf.packages.${pkgs.stdenv.hostPlatform.system}.bookshelf-plugins ];
-  # ...or drop *.wasm files into /var/lib/bookshelf/plugins
+  # `nixpkgs.overlays = [ inputs.mandara.overlays.default ]` this is
+  # simply `[ pkgs.mandara-plugins ]`
+  plugins = [ inputs.mandara.packages.${pkgs.stdenv.hostPlatform.system}.mandara-plugins ];
+  # ...or drop *.wasm files into /var/lib/mandara/plugins
 };
 
 services.nginx.virtualHosts."books.example.com" = {
@@ -143,15 +143,15 @@ What the module does:
   the `memfd_create` wasmtime's JIT needs),
 - defaults {option}`package` to the flake's own build, so no overlay is
   needed — `overlays.default` only exists for reaching the packages as
-  `pkgs.bookshelf*`,
-- keeps every piece of mutable state in `/var/lib/bookshelf` (SQLite
+  `pkgs.mandara*`,
+- keeps every piece of mutable state in `/var/lib/mandara` (SQLite
   database, retained originals, image store, and the plugin drop-in
   directory when `plugins` is empty), so a backup is a copy of that one
   directory (stop the service, or use `sqlite3 … ".backup"`: the database
   runs in WAL mode),
 - passes the JWT secret through systemd `LoadCredential=`, so the secret
   file only has to be readable by root,
-- ships `systemctl start bookshelf-reparse-originals`: a one-shot task that
+- ships `systemctl start mandara-reparse-originals`: a one-shot task that
   re-runs the current parser over every retained original (use it after an
   upgrade that improves chapter splitting).
 
@@ -160,24 +160,24 @@ because the **first registered account becomes the admin** — turn it off
 once that account exists), `maxUploadMb`, `frontendDir`, `environment`,
 `environmentFile`, `extraArgs`; every option is documented.
 
-`nix build .#checks.x86_64-linux.bookshelf-vm` boots the module in a VM and
+`nix build .#checks.x86_64-linux.mandara-vm` boots the module in a VM and
 checks the frontend, plugin loading, registration and the upload/read path.
 
 ## Configuration (env vars / CLI flags)
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `BOOKSHELF_ADDR` | `127.0.0.1:8080` | listen address |
-| `BOOKSHELF_DB` | `data/bookshelf.db` | SQLite database (unified storage) |
-| `BOOKSHELF_DATA_DIR` | db's directory | runtime data directory |
-| `BOOKSHELF_PLUGINS_DIR` | `data/plugins` | directory scanned for `*.wasm` plugins |
-| `BOOKSHELF_JWT_SECRET` | `dev-only-change-me` | JWT secret (change in production) |
-| `BOOKSHELF_JWT_SECRET_FILE` | — | file holding the JWT secret (wins over `BOOKSHELF_JWT_SECRET`) |
-| `BOOKSHELF_ALLOW_REGISTER` | `true` | allow new user registration |
-| `BOOKSHELF_COOKIE_SECURE` | `false` | mark the session cookie `Secure` (TLS deployments) |
-| `BOOKSHELF_MAX_UPLOAD_MB` | `64` | max upload size |
-| `BOOKSHELF_FRONTEND_DIR` | `frontend` | frontend dir (its `dist/` is served at `/` if present) |
-| `BOOKSHELF_REPARSE_ORIGINALS` | `false` | re-parse every retained original, then exit (upgrade task) |
+| `MANDARA_ADDR` | `127.0.0.1:8080` | listen address |
+| `MANDARA_DB` | `data/mandara.db` | SQLite database (unified storage) |
+| `MANDARA_DATA_DIR` | db's directory | runtime data directory |
+| `MANDARA_PLUGINS_DIR` | `data/plugins` | directory scanned for `*.wasm` plugins |
+| `MANDARA_JWT_SECRET` | `dev-only-change-me` | JWT secret (change in production) |
+| `MANDARA_JWT_SECRET_FILE` | — | file holding the JWT secret (wins over `MANDARA_JWT_SECRET`) |
+| `MANDARA_ALLOW_REGISTER` | `true` | allow new user registration |
+| `MANDARA_COOKIE_SECURE` | `false` | mark the session cookie `Secure` (TLS deployments) |
+| `MANDARA_MAX_UPLOAD_MB` | `64` | max upload size |
+| `MANDARA_FRONTEND_DIR` | `frontend` | frontend dir (its `dist/` is served at `/` if present) |
+| `MANDARA_REPARSE_ORIGINALS` | `false` | re-parse every retained original, then exit (upgrade task) |
 
 Copy `.env.example` to `.env` to override defaults.
 
@@ -242,7 +242,7 @@ POST /api/plugins/sync                   (admin) re-sync plugin catalogs
 
 ## wasm plugins
 
-Write a component implementing the `bookshelf:plugin` world and drop it into
+Write a component implementing the `mandara:plugin` world and drop it into
 `data/plugins/`. Full guide: **[docs/plugins.md](docs/plugins.md)**;
 in-repo example: `plugins/hello-plugin`.
 
@@ -264,7 +264,7 @@ just fmt-nix      # format the nix files (nixfmt-tree, same as `nix fmt`)
 ```
 
 `nix run .#` starts the packaged server (binary + built frontend) directly;
-`nix build .#bookshelf-plugins` builds the wasm components.
+`nix build .#mandara-plugins` builds the wasm components.
 
 ## License
 

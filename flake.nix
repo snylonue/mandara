@@ -1,5 +1,5 @@
 {
-  description = "bookshelf: a self-hosted light-novel reading website (rust backend + web frontend)";
+  description = "mandara: a self-hosted light-novel reading website (rust backend + web frontend)";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixpkgs-unstable";
@@ -39,10 +39,10 @@
         in
         {
           inherit (packages)
-            bookshelf
-            bookshelf-server
-            bookshelf-frontend
-            bookshelf-plugins
+            mandara
+            mandara-server
+            mandara-frontend
+            mandara-plugins
             ;
         }
       );
@@ -50,13 +50,13 @@
       # The module users import. It defaults the package to this flake's own
       # build, so no overlay is needed (and none is injected into the host);
       # `overlays.default` is there for configurations that prefer
-      # `pkgs.bookshelf*` (e.g. `plugins = [ pkgs.bookshelf-plugins ]`).
-      bookshelfModule =
+      # `pkgs.mandara*` (e.g. `plugins = [ pkgs.mandara-plugins ]`).
+      mandaraModule =
         { config, lib, ... }:
         {
           imports = [ ./nix/module.nix ];
-          services.bookshelf.package = lib.mkDefault (
-            inputs.self.packages.${config.nixpkgs.hostPlatform.system}.bookshelf
+          services.mandara.package = lib.mkDefault (
+            inputs.self.packages.${config.nixpkgs.hostPlatform.system}.mandara
           );
         };
     in
@@ -71,8 +71,8 @@
       flake = {
         overlays.default = overlay;
         nixosModules = {
-          bookshelf = bookshelfModule;
-          default = bookshelfModule;
+          mandara = mandaraModule;
+          default = mandaraModule;
         };
       };
 
@@ -102,17 +102,17 @@
         in
         {
           packages = packages // {
-            default = packages.bookshelf;
+            default = packages.mandara;
           };
 
           formatter = pkgs.nixfmt-tree;
 
           checks =
             lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
-              bookshelf-vm = import ./nix/tests/bookshelf-vm.nix {
+              mandara-vm = import ./nix/tests/mandara-vm.nix {
                 inherit pkgs;
-                module = bookshelfModule;
-                plugins = packages.bookshelf-plugins;
+                module = mandaraModule;
+                plugins = packages.mandara-plugins;
               };
             }
             // {
@@ -122,10 +122,10 @@
                 let
                   overlaid = pkgs.extend overlay;
                 in
-                pkgs.runCommand "bookshelf-overlay-check" { } ''
-                  test -f ${overlaid.bookshelf-plugins}/lib/bookshelf/plugins/hello.wasm
-                  test -f ${overlaid.bookshelf-frontend}/share/bookshelf/frontend/dist/index.html
-                  ${lib.getExe overlaid.bookshelf} --version | grep -q '^bookshelf-server '
+                pkgs.runCommand "mandara-overlay-check" { } ''
+                  test -f ${overlaid.mandara-plugins}/lib/mandara/plugins/hello.wasm
+                  test -f ${overlaid.mandara-frontend}/share/mandara/frontend/dist/index.html
+                  ${lib.getExe overlaid.mandara} --version | grep -q '^mandara-server '
                   touch $out
                 '';
             };
@@ -156,7 +156,7 @@
               pkgs.python3
             ];
             shellHook = ''
-              echo "bookshelf dev shell: $(cargo --version) / node $(node --version) / wasm-tools $(wasm-tools --version)"
+              echo "mandara dev shell: $(cargo --version) / node $(node --version) / wasm-tools $(wasm-tools --version)"
             '';
           };
         };

@@ -30,7 +30,7 @@ Add a single column instead of one column per field:
 ALTER TABLE books ADD COLUMN ext_meta TEXT NOT NULL DEFAULT '{}';
 ```
 
-with one typed struct in `bookshelf-core` that owns the well-known keys
+with one typed struct in `mandara-core` that owns the well-known keys
 and passes everything else through verbatim:
 
 ```rust

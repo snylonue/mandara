@@ -1,6 +1,6 @@
-// Typed API client for the bookshelf backend.
+// Typed API client for the mandara backend.
 
-const TOKEN_KEY = "bookshelf_token";
+const TOKEN_KEY = "mandara_token";
 
 export const getToken = (): string | null => localStorage.getItem(TOKEN_KEY);
 export const setToken = (t: string | null) => {

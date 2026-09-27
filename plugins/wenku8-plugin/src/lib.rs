@@ -1,4 +1,4 @@
-//! Guest side of the `bookshelf:plugin/bookshelf-plugin` world (v3) for
+//! Guest side of the `mandara:plugin/mandara-plugin` world (v3) for
 //! **wenku8.net** (轻小说文库), fetched through the host's `http.fetch`
 //! import — the only network a plugin gets.
 //!
@@ -38,14 +38,14 @@
 //!
 //! Deploy (host side needs the allow list):
 //! ```sh
-//! BOOKSHELF_PLUGIN_FETCH_ALLOWED_HOSTS=www.wenku8.net ./scripts/build-plugins.sh wenku8
+//! MANDARA_PLUGIN_FETCH_ALLOWED_HOSTS=www.wenku8.net ./scripts/build-plugins.sh wenku8
 //! cp plugins-built/wenku8.wasm data/plugins/
 //! # register: POST /api/plugins/instances {"id": "wenku8", "wasm_file": "wenku8.wasm"}
 //! ```
 
 wit_bindgen::generate!({
-    world: "bookshelf-plugin",
-    path: "../../crates/bookshelf-plugin/wit",
+    world: "mandara-plugin",
+    path: "../../crates/mandara-plugin/wit",
 });
 
 const DEFAULT_BASE_URL: &str = "https://www.wenku8.net";
@@ -56,7 +56,7 @@ const FIELDS: [&str; 3] = ["base-url", "referer", "illustration-placement"];
 
 /// fn values() reads the injected config once per call.
 fn values() -> Vec<ConfigValue> {
-    bookshelf::plugin::config::configure()
+    mandara::plugin::config::configure()
 }
 
 fn config_string(key: &str, default: &str) -> String {
@@ -88,7 +88,7 @@ fn placement() -> Placement {
 }
 
 fn log_error(context: &str, url: &str, err: &str) {
-    bookshelf::plugin::store::log(&format!("{context} `{url}` failed: {err}"));
+    mandara::plugin::store::log(&format!("{context} `{url}` failed: {err}"));
 }
 
 // ---------------------------------------------------------------------------
@@ -105,24 +105,24 @@ fn http_get(url: &str, referer: &str) -> Result<(u16, Vec<u8>), String> {
     let mut attempt = 0;
     loop {
         attempt += 1;
-        let mut headers = vec![bookshelf::plugin::http::Header {
+        let mut headers = vec![mandara::plugin::http::Header {
             name: "User-Agent".into(),
             value: DEFAULT_UA.into(),
         }];
         if !referer.is_empty() {
-            headers.push(bookshelf::plugin::http::Header {
+            headers.push(mandara::plugin::http::Header {
                 name: "Referer".into(),
                 value: referer.into(),
             });
         }
-        let request = bookshelf::plugin::http::Request {
+        let request = mandara::plugin::http::Request {
             method: "GET".into(),
             url: url.into(),
             headers,
             body: None,
             timeout_ms: Some(15_000),
         };
-        match bookshelf::plugin::http::fetch(&request) {
+        match mandara::plugin::http::fetch(&request) {
             // Retry on transient application states (429 rate limiting,
             // 5xx, anti-bot 403) and on transport-level errors: up to
             // three attempts per request; 404/4xx are final.
@@ -625,7 +625,7 @@ fn store_image_ref(url: &str) -> Option<String> {
         return None;
     }
     let mime = sniff_mime(&body)?;
-    let id = bookshelf::plugin::store::store_image(&body, mime);
+    let id = mandara::plugin::store::store_image(&body, mime);
     Some(format!("/api/images/{id}"))
 }
 
@@ -918,7 +918,7 @@ fn normalize_book_id(id: &str) -> Option<String> {
     if !t.is_empty() && t.chars().all(|c| c.is_ascii_digit()) && t.len() <= 9 {
         Some(t.to_string())
     } else {
-        bookshelf::plugin::store::log(&format!(
+        mandara::plugin::store::log(&format!(
             "invalid wenku8 book id `{id}` (expected the numeric id from the book URL, e.g. 3617)"
         ));
         None
@@ -952,7 +952,7 @@ impl Guest for Wenku8Plugin {
             ConfigField {
                 key: "base-url".into(),
                 label: "站点地址".into(),
-                kind: bookshelf::plugin::config::ConfigKind::Text,
+                kind: mandara::plugin::config::ConfigKind::Text,
                 default: Some(DEFAULT_BASE_URL.into()),
                 required: true,
                 hint: Some("轻小说文库根地址；镜像可改（如 https://www.wenku8.cc）".into()),
@@ -960,7 +960,7 @@ impl Guest for Wenku8Plugin {
             ConfigField {
                 key: "referer".into(),
                 label: "Referer 覆盖".into(),
-                kind: bookshelf::plugin::config::ConfigKind::Text,
+                kind: mandara::plugin::config::ConfigKind::Text,
                 default: None,
                 required: false,
                 hint: Some("留空 = 自动用同站点书页当 Referer（wenku8 校验，缺失会 403）".into()),
@@ -968,7 +968,7 @@ impl Guest for Wenku8Plugin {
             ConfigField {
                 key: "illustration-placement".into(),
                 label: "插画章节位置".into(),
-                kind: bookshelf::plugin::config::ConfigKind::EnumOptions(vec![
+                kind: mandara::plugin::config::ConfigKind::EnumOptions(vec![
                     "保留在卷尾（原文位置，与 wenku8 目录一致）".into(),
                     "移至卷首（如实体书彩插）".into(),
                     "跳过不收".into(),
@@ -993,7 +993,7 @@ impl Guest for Wenku8Plugin {
     }
 
     fn search_books(_query: String, _offset: u32, _limit: u32) -> SearchResult {
-        bookshelf::plugin::store::log(
+        mandara::plugin::store::log(
             "wenku8 search is login-walled; materialize books by id instead (source browser manual-id entry)",
         );
         SearchResult {

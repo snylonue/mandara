@@ -1,4 +1,4 @@
-# NixOS module for bookshelf.
+# NixOS module for mandara.
 #
 # Everything mutable (SQLite database, retained originals, images, plugin
 # drop-ins) lives in one directory under /var/lib, so a backup is a tar of
@@ -12,7 +12,7 @@
 }:
 
 let
-  cfg = config.services.bookshelf;
+  cfg = config.services.mandara;
   inherit (lib)
     mkIf
     mkOption
@@ -30,7 +30,7 @@ let
     if cfg.plugins == [ ] then
       null
     else
-      pkgs.runCommand "bookshelf-plugins-dir" { } ''
+      pkgs.runCommand "mandara-plugins-dir" { } ''
         mkdir -p $out
         for src in ${lib.escapeShellArgs (map (p: "${p}") cfg.plugins)}; do
           if [ -f "$src" ]; then
@@ -43,12 +43,12 @@ let
 
   # Command line arguments of the server (clap). Booleans are environment
   # variables instead: `--allow-register` has no negation and defaults to
-  # on, so `BOOKSHELF_ALLOW_REGISTER=false` is the only way to turn it off.
+  # on, so `MANDARA_ALLOW_REGISTER=false` is the only way to turn it off.
   cliArgs = [
     "--addr"
     "${cfg.address}:${toString cfg.port}"
     "--db"
-    "${dataDir}/bookshelf.db"
+    "${dataDir}/mandara.db"
     "--data-dir"
     dataDir
     "--plugins-dir"
@@ -112,24 +112,24 @@ let
   };
 in
 {
-  options.services.bookshelf = {
-    enable = mkEnableOption "the bookshelf light-novel reading server";
+  options.services.mandara = {
+    enable = mkEnableOption "the mandara light-novel reading server";
 
     package = mkOption {
       type = types.package;
-      default = pkgs.bookshelf;
-      defaultText = lib.literalExpression "pkgs.bookshelf";
+      default = pkgs.mandara;
+      defaultText = lib.literalExpression "pkgs.mandara";
       description = ''
         Package to run: the server binary plus (unless {option}`frontendDir`
         is set) the web frontend it serves. `nixosModules.default` defaults
         this to the flake's own build; importing this file directly expects
-        `pkgs.bookshelf` from `overlays.default`.
+        `pkgs.mandara` from `overlays.default`.
       '';
     };
 
     user = mkOption {
       type = types.str;
-      default = "bookshelf";
+      default = "mandara";
       description = ''
         User the service runs as. A system user of this name is created
         when it is left at the default.
@@ -138,7 +138,7 @@ in
 
     group = mkOption {
       type = types.str;
-      default = "bookshelf";
+      default = "mandara";
       description = ''
         Group the service runs as. A group of this name is created when it
         is left at the default.
@@ -147,12 +147,12 @@ in
 
     stateDirectory = mkOption {
       type = types.str;
-      default = "bookshelf";
+      default = "mandara";
       description = ''
         Name of the state directory below {file}`/var/lib`. It holds the
         SQLite database, the retained original files, the image store and
         (unless {option}`plugins` is set) the `*.wasm` plugin drop-ins, so
-        backing bookshelf up means copying this one directory.
+        backing mandara up means copying this one directory.
       '';
     };
 
@@ -178,7 +178,7 @@ in
     jwtSecretFile = mkOption {
       type = types.nullOr types.path;
       default = null;
-      example = "/run/secrets/bookshelf-jwt-secret";
+      example = "/run/secrets/mandara-jwt-secret";
       description = ''
         File holding the secret session tokens are signed with; its content
         is read at startup and only needs to be readable by root (systemd
@@ -219,7 +219,7 @@ in
     frontendDir = mkOption {
       type = types.nullOr types.path;
       default = null;
-      example = "/srv/www/bookshelf";
+      example = "/srv/www/mandara";
       description = ''
         Directory whose `dist/` subdirectory is served at `/`. Defaults to
         the frontend bundled with {option}`package`.
@@ -229,11 +229,11 @@ in
     plugins = mkOption {
       type = types.listOf (types.either types.path types.package);
       default = [ ];
-      example = lib.literalExpression "[ pkgs.bookshelf-plugins ]";
+      example = lib.literalExpression "[ pkgs.mandara-plugins ]";
       description = ''
         wasm plugin components (`*.wasm`) to load at startup. Entries may be
         component files or directories/packages containing components
-        (like `pkgs.bookshelf-plugins`), which is also how a plugin built
+        (like `pkgs.mandara-plugins`), which is also how a plugin built
         from source is deployed.
 
         When empty, the server loads the `*.wasm` files dropped into
@@ -246,7 +246,7 @@ in
       default = { };
       example = {
         RUST_LOG = "info";
-        BOOKSHELF_PLUGIN_FETCH_TIMEOUT_MS = "15000";
+        MANDARA_PLUGIN_FETCH_TIMEOUT_MS = "15000";
       };
       description = "Extra environment variables for the service.";
     };
@@ -256,7 +256,7 @@ in
       default = null;
       description = ''
         Environment file (systemd `EnvironmentFile=`) with further settings,
-        e.g. `BOOKSHELF_JWT_SECRET=...` for deployments that cannot use
+        e.g. `MANDARA_JWT_SECRET=...` for deployments that cannot use
         {option}`jwtSecretFile`.
       '';
     };
@@ -272,43 +272,41 @@ in
     warnings =
       lib.optional
         (
-          cfg.jwtSecretFile == null
-          && !(cfg.environment ? BOOKSHELF_JWT_SECRET)
-          && cfg.environmentFile == null
+          cfg.jwtSecretFile == null && !(cfg.environment ? MANDARA_JWT_SECRET) && cfg.environmentFile == null
         )
         ''
-          services.bookshelf.jwtSecretFile is not set, so the server signs session
+          services.mandara.jwtSecretFile is not set, so the server signs session
           tokens with a built-in development secret and anyone can forge logins.
-          Set services.bookshelf.jwtSecretFile (e.g. `openssl rand -base64 32`).
+          Set services.mandara.jwtSecretFile (e.g. `openssl rand -base64 32`).
         '';
 
-    users.users = mkIf (cfg.user == "bookshelf") {
-      bookshelf = {
+    users.users = mkIf (cfg.user == "mandara") {
+      mandara = {
         isSystemUser = true;
         group = cfg.group;
         home = dataDir;
-        description = "bookshelf service user";
+        description = "mandara service user";
       };
     };
-    users.groups = mkIf (cfg.group == "bookshelf") { bookshelf = { }; };
+    users.groups = mkIf (cfg.group == "mandara") { mandara = { }; };
 
     networking.firewall.allowedTCPPorts = mkIf cfg.openFirewall [ cfg.port ];
 
-    systemd.services.bookshelf = {
-      description = "Bookshelf light-novel reading server";
-      documentation = [ "https://github.com/example/bookshelf" ];
+    systemd.services.mandara = {
+      description = "Mandara light-novel reading server";
+      documentation = [ "https://github.com/example/mandara" ];
       wantedBy = [ "multi-user.target" ];
       wants = [ "network-online.target" ];
       after = [ "network-online.target" ];
       environment = {
-        BOOKSHELF_ALLOW_REGISTER = lib.boolToString cfg.allowRegister;
-        BOOKSHELF_COOKIE_SECURE = lib.boolToString cfg.cookieSecure;
+        MANDARA_ALLOW_REGISTER = lib.boolToString cfg.allowRegister;
+        MANDARA_COOKIE_SECURE = lib.boolToString cfg.cookieSecure;
       }
       // lib.optionalAttrs (cfg.jwtSecretFile != null) {
-        BOOKSHELF_JWT_SECRET_FILE = "%d/jwt-secret";
+        MANDARA_JWT_SECRET_FILE = "%d/jwt-secret";
       }
       // lib.optionalAttrs (cfg.frontendDir != null) {
-        BOOKSHELF_FRONTEND_DIR = toString cfg.frontendDir;
+        MANDARA_FRONTEND_DIR = toString cfg.frontendDir;
       }
       // cfg.environment;
 
@@ -322,12 +320,12 @@ in
     };
 
     # One-shot upgrade task: re-run the current parser over every retained
-    # original (e.g. after a bookshelf upgrade that improves chapter
-    # splitting): `systemctl start bookshelf-reparse-originals`.
-    systemd.services.bookshelf-reparse-originals = {
-      description = "Bookshelf: re-parse every retained original book file";
-      documentation = [ "https://github.com/example/bookshelf" ];
-      after = [ "bookshelf.service" ];
+    # original (e.g. after a mandara upgrade that improves chapter
+    # splitting): `systemctl start mandara-reparse-originals`.
+    systemd.services.mandara-reparse-originals = {
+      description = "Mandara: re-parse every retained original book file";
+      documentation = [ "https://github.com/example/mandara" ];
+      after = [ "mandara.service" ];
       serviceConfig = commonServiceConfig // {
         Type = "oneshot";
         ExecStart = lib.escapeShellArgs (

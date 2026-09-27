@@ -8,20 +8,20 @@ newtype can make the "this is already-escaped/sanitized HTML" invariant explicit
 
 | Site | Code | Parsing approach |
 |---|---|---|
-| epub parser | `bookshelf-formats/src/epub.rs` | **mature**: `scraper`/`html5ever` (`Html::parse_document`, `Selector`, `ElementRef`) |
-| txt/plugin text → HTML | `bookshelf-formats/src/htmlize.rs` | **hand-rolled emit** (escaping + `<p>`/`<br>`/`<figure>` assembly) |
-| plugin chapters, host-side | `bookshelf-server/src/service/library.rs` | calls `htmlize::plugin_to_html` (dispatches on `chapter.format`), then `annotate_image_dims` |
+| epub parser | `mandara-formats/src/epub.rs` | **mature**: `scraper`/`html5ever` (`Html::parse_document`, `Selector`, `ElementRef`) |
+| txt/plugin text → HTML | `mandara-formats/src/htmlize.rs` | **hand-rolled emit** (escaping + `<p>`/`<br>`/`<figure>` assembly) |
+| plugin chapters, host-side | `mandara-server/src/service/library.rs` | calls `htmlize::plugin_to_html` (dispatches on `chapter.format`), then `annotate_image_dims` |
 | image `src` surgery | `library.rs::image_ids_in_html` / `annotate_image_dimensions` | **hand-rolled string scanning** |
 | wenku8 guest plugin | `plugins/wenku8-plugin/src/lib.rs` | **hand-rolled scanning** (`content_div`, `strip_contentdp`, `html_to_text`, `decode_entities`, `parse_toc`, …) |
 | reader/wiki/bangumi/hello guest plugins | — | JSON API only, no HTML |
-| imgdim | `bookshelf-formats/src/imgdim.rs` | binary header sniffing, out of scope |
+| imgdim | `mandara-formats/src/imgdim.rs` | binary header sniffing, out of scope |
 
 So the "hand-rolled HTML" surface is three places: `htmlize.rs` (text→HTML
 construction), the host-side `annotate_*` string surgery, and the wenku8 guest.
 
 ## Would a mature library pay off?
 
-### Native server side (`bookshelf-formats`, `bookshelf-server`) — yes for some sites, no for others
+### Native server side (`mandara-formats`, `mandara-server`) — yes for some sites, no for others
 
 - **epub already uses scraper** (which sits on `html5ever`). The native cost is
   already paid; the wasm target doesn't matter here because the server runs on

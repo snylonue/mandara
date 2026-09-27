@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
-description = "demo bookshelf plugin: metadata-only wiki source (search + lookup, no content)"
+description = "demo mandara plugin: metadata-only wiki source (search + lookup, no content)"
 
 [lib]
 crate-type = ["cdylib"]

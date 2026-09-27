@@ -1,0 +1,380 @@
+// mandara plugin interface v7 (dev phase: no backward compatibility).
+//
+// v7 adds `chapter.format`: how the chapter body is interpreted
+// (`"text"` = plain text normalized by the host, `"html"` = the plugin's
+// own final HTML, passed through after image-reference annotation).
+// Plugins that need site-specific markup (e.g. wenku8's 插图 plates)
+// emit `"html"` and keep their expansion logic in the guest.
+//
+// v6 added `book-entry.extra`: an optional JSON object with extended
+// metadata (ISBN, publisher, dates, translators/illustrators, pages,
+// price, binding, language; series splits also read status/
+// total-volumes/tags from the same object). The host validates and
+// normalizes it at the storage boundary — future metadata fields never
+// require a WIT bump (see docs/metadata-ext-design.md).
+//
+// v5 added `volume-info`/`book-entry.volumes`: sources with multi-volume
+// books (light-novel series where vcss-style TOC rows group chapters into
+// 卷) declare the volume structure, and the host acquires each volume as
+// its own library book under one series entry instead of merging the whole
+// series into a single book (see docs/series-design.md).
+//
+// v4 added `source-info`: the plugin declares how the frontend should
+// present it when a user acquires books (interaction kind + id/search
+// hints), so UIs do not need to hardcode one plugin's shape (e.g. wenku8's
+// login-walled search / numeric book ids).
+//
+// See docs/plugin-v2-design.md and docs/plugin-http-api-design.md for the
+// full design. Key differences vs v2:
+//   - new `http` import: a controlled outbound HTTP channel, the ONLY way
+//     a plugin can reach the outside world (no wasi); every request runs
+//     under host policy (timeout/size caps, redirect limit, secret-free
+//     logging);
+//   - `get-book-file`: whole book files (epub/txt downloads) flow through
+//     the host's existing upload parser, so file-mode books get chapters,
+//     hierarchical TOC and sanitized HTML like uploads (capability
+//     `"book-file"`);
+//   - `source-info` (v4): per-plugin interaction hints;
+//   - `volumes` (v5): multi-volume structure (auto-split by the host);
+//   - every export is still required (wit-parser has no `optional-export`;
+//     unsupported features are declared via `capabilities()` and return
+//     `none`/empty).
+
+package mandara:plugin@0.7.0;
+
+/// Shared types between mandara and plugins.
+interface types {
+    /// One volume of a multi-volume source book (a light-novel series).
+    ///
+    /// A volume's chapter list is a consecutive slice of the flat
+    /// `chapter-titles` order: volume `k` starts at the sum of the
+    /// `chapter-count`s of its predecessors, and the host maps
+    /// per-volume chapter indices to flat indices using these counts
+    /// (the persisted per-file `volume-offset` is the cache of that
+    /// sum). The sum of all counts should equal `chapter-titles`; the
+    /// host clamps mismatches defensively.
+    record volume-info {
+        /// Volume title as shown in the library (e.g. `"第一卷"`); the
+        /// host falls back to `第N卷` when empty.
+        title: string,
+        /// Number of chapters in this volume, in the flat reading order
+        /// (after the plugin's own 插图/etc. placement policy).
+        chapter-count: u32,
+    }
+
+    /// A book offered by a plugin source.
+    record book-entry {
+        /// Stable id of the book within this plugin.
+        id: string,
+        title: string,
+        authors: list<string>,
+        description: option<string>,
+        cover-url: option<string>,
+        /// Optional extended metadata as a JSON object (`BookExt` shape:
+        /// subtitle/original-title/isbn/publisher/pub-date/translators/
+        /// illustrators/pages/price/binding/language + free-form extras;
+        /// series splits also read status/total-volumes/tags). The host
+        /// validates it — malformed objects fail the call.
+        extra: option<string>,
+        /// Chapters come from another plugin instance when set.
+        ///
+        /// Metadata-only plugins set this to the id of a content plugin
+        /// instance; content plugins leave it `none` (the book's content
+        /// comes from this instance itself). Must be an instance id known
+        /// to the host, or the book's chapters stay unavailable.
+        content-source: option<string>,
+        /// Book id inside the content source. Defaults to `id` when `none`.
+        content-id: option<string>,
+        /// Volume structure when the source book spans several volumes
+        /// (e.g. a 卷-split series TOC). `none`/empty = single volume
+        /// (one library book, today's behavior). When >1 volumes are
+        /// declared, the host auto-splits acquisition into one series +
+        /// one library book (and file) per volume.
+        volumes: option<list<volume-info>>,
+    }
+
+    /// A single chapter of a book.
+    record chapter {
+        title: string,
+        /// Empty string = title-only placeholder (body fetched lazily via
+        /// `get-chapter`); non-empty = can be materialized eagerly.
+        content: string,
+        /// How `content` is interpreted: `"text"` (default) = plain text,
+        /// the host escapes and paragraph-wraps it; `"html"` = the plugin
+        /// already emits sanitized HTML fragments (escaped text, known
+        /// tags) and the host only annotates images. HTML-emitting plugins
+        /// are responsible for escaping text and emitting only safe tags
+        /// (see docs/plugins.md); the host never re-parses `"html"`
+        /// content.
+        format: string,
+    }
+
+    /// One book of a `declare` catalog: metadata plus (optionally eager)
+    /// chapter bodies.
+    record declared-book {
+        book: book-entry,
+        chapters: list<chapter>,
+    }
+
+    /// Paginated catalog search result.
+    record search-result {
+        /// Source-side total number of matches (may be capped by the
+        /// source; the host relies on pagination, not on this number).
+        total: u64,
+        items: list<book-entry>,
+    }
+
+    /// A whole book as the source stores it (epub/txt download).
+    ///
+    /// The host parses `bytes` with the same pipeline as uploads
+    /// (chapters, hierarchical TOC, sanitized HTML), so file-mode books
+    /// are stored like local files — the plugin is not consulted for
+    /// content afterwards.
+    record book-file {
+        /// Original download name, e.g. `"mystery-ep1.epub"`. The
+        /// extension selects the parser.
+        filename: string,
+        /// `"application/epub+zip"` | `"text/plain"` | `"text/plain; charset=utf-8"` | ...
+        mime: string,
+        bytes: list<u8>,
+    }
+
+    /// How the frontend should present this plugin source when a user
+    /// acquires books from it (获取书籍). Advisory: the UI falls back to
+    /// the capabilities-derived default when the declared kind is
+    /// unsupported (e.g. a future kind a new frontend does not know yet).
+    record source-info {
+        /// Interaction kind used to acquire books:
+        ///   - `"search"`    — the catalog is browsed with a query box
+        ///     (`search-books`; requires the `search` capability);
+        ///   - `"manual-id"` — no search; users enter a book id directly
+        ///     (requires `lookup`; wenku8-style sources);
+        ///   - `"browse"`    — a declared category tree (`declare`;
+        ///     reserved for future frontends).
+        /// The capability default when `""`/unknown: `search` →
+        /// `"search"`, `lookup`-only → `"manual-id"`, `declare`-only →
+        /// `"browse"`.
+        kind: string,
+        /// What a manual book id looks like, e.g. `"numeric"`,
+        /// `"slug"`, `"uuid"`. Not enforced; only shapes UI hints.
+        id-kind: string,
+        /// zh-CN hint for the manual id entry, e.g.
+        /// `"wenku8 数字书号（如 3617）"`.
+        id-hint: option<string>,
+        /// zh-CN placeholder for the search box, e.g. `"搜索书名 / 作者"`.
+        search-hint: option<string>,
+    }
+}
+
+/// Functions provided by the host (the mandara server).
+interface store {
+    /// Append a line to the server log, tagged with the instance id.
+    log: func(message: string);
+
+    /// Store image bytes in the server's content-addressed image store.
+    ///
+    /// The id is the sha256 of the bytes (hex): identical bytes return the
+    /// same id, so images dedup across chapters and books. Reference a
+    /// stored image in chapter content as `<img src="/api/images/{id}">`
+    /// — that exact form is the canonical reference every producer
+    /// (plugins and epub upload ingest) converges on.
+    ///
+    /// Per-image and per-call byte budgets are host caps; exceeding them
+    /// traps the call. Fails (traps) when the store cannot persist the
+    /// bytes.
+    store-image: func(bytes: list<u8>, mime: string) -> string;
+}
+
+/// Configuration channel.
+///
+/// The host renders an admin form from `config-schema`, validates submitted
+/// values, stores the validated JSON, and injects the values at the start
+/// of every call. Plugins pull them with `configure`; stores are per-call,
+/// so nothing persists in the guest.
+interface config {
+    /// One field of the configuration schema.
+    record config-field {
+        /// Stable key; the value is stored in JSON under this key.
+        key: string,
+        /// zh-CN display label rendered by the admin form.
+        label: string,
+        kind: config-kind,
+        /// Serialized default value (JSON), e.g. `"10"` or `"false"`.
+        default: option<string>,
+        required: bool,
+        hint: option<string>,
+    }
+
+    /// Field kinds. `enum` options are rendered as a select and the
+    /// config value is the option index; `list-of-string` is a
+    /// newline/comma separated text area in the UI.
+    /// (`string` is a WIT keyword, hence the `text` case name.)
+    variant config-kind {
+        text,
+        number,
+        boolean,
+        enum-options(list<string>),
+        list-of-string,
+    }
+
+    /// A validated configuration value, in `config-schema` field order.
+    variant config-value {
+        text(string),
+        number(f64),
+        boolean(bool),
+        enum-index(u32),
+        string-list(list<string>),
+    }
+
+    /// Fetch the configuration injected by the host for this call.
+    /// Returns the values in the same order as `config-schema` fields.
+    /// Plugins call this at the start of every export implementation.
+    configure: func() -> list<config-value>;
+}
+
+/// Outbound HTTP (see docs/plugin-http-api-design.md §3.1).
+///
+/// This is the only network access a plugin gets. The host caps timeout,
+/// response size and redirect count. The plugin decides what an
+/// application-level status (404, ...) means: `fetch` only fails on
+/// transport-level problems.
+interface http {
+    /// One HTTP header (name/value pair).
+    record header {
+        name: string,
+        value: string,
+    }
+
+    /// A request the plugin wants the host to perform.
+    record request {
+        /// "GET", "POST", ... (host normalizes case).
+        method: string,
+        /// Absolute http(s) URL.
+        url: string,
+        /// Plugin-controlled headers. The host sends exactly these (plus
+        /// the ones it manages itself) — nothing ambient, no cookies.
+        headers: list<header>,
+        body: option<list<u8>>,
+        /// Desired timeout; the host enforces
+        /// `min(requested, MANDARA_PLUGIN_FETCH_TIMEOUT_MS)`.
+        timeout-ms: option<u64>,
+    }
+
+    /// The response as received. `status` is always the raw HTTP status —
+    /// including 4xx/5xx, which are *not* errors.
+    record response {
+        status: u16,
+        headers: list<header>,
+        body: list<u8>,
+        /// URL after redirects (host-validated hops).
+        final-url: string,
+    }
+
+    /// Transport-level outcome. Application-level statuses (404, ...) are
+    /// *not* errors — the plugin inspects `response.status`.
+    variant fetch-error {
+        /// Permanent: URL parse/protocol problem.
+        invalid-url(string),
+        /// Permanent: host policy rejected the URL/scheme/address.
+        denied(string),
+        /// Permanent: too many redirect hops (host cap).
+        redirect-limit(u32),
+        /// Transient: took longer than the (capped) timeout.
+        timeout(u64),
+        /// Permanent: response exceeded the size cap (no partial data).
+        size-limit(u64),
+        /// Transient-if-connect: DNS/TLS/connection problem.
+        transport(string),
+    }
+
+    /// Perform one HTTP request. Only `url`, `method` and the given
+    /// `headers`/`body` are sent; the host never adds credentials.
+    fetch: func(request: request) -> result<response, fetch-error>;
+}
+
+/// World implemented by mandara plugins.
+///
+/// A plugin is a stateless component that offers metadata (and optionally
+/// content) for books. The server registers *instances* of a plugin (one
+/// wasm file can back several instances with different configurations),
+/// validates configuration against `config-schema`, and materializes
+/// books/chapters into the central library.
+world mandara-plugin {
+    import types;
+    import store;
+    import config;
+    import http;
+
+    // Types used by this world's exports come from the imported `types`
+    // interface; WIT requires an explicit `use` to bring them into the
+    // world scope.
+    use types.{book-entry, chapter, declared-book, search-result, book-file, source-info, volume-info};
+    use config.{config-field, config-value};
+
+    /// Human-readable name of this plugin (same for all instances).
+    export name: func() -> string;
+
+    /// How users acquire books from this plugin (interaction kind +
+    /// hints). The host exposes it via `GET /api/plugins` so the UI can
+    /// render the right picker without hardcoding a specific source.
+    export source-info: func() -> source-info;
+
+    /// Configuration schema; the host renders an admin form from it and
+    /// validates submitted values against it.
+    export config-schema: func() -> list<config-field>;
+
+    /// Catalog access patterns implemented by this plugin: a subset of
+    /// ["declare", "search", "lookup", "identify", "content", "book-file"].
+    ///
+    /// Host policy:
+    ///   - `declare`  -> the catalog is fully synced at startup / on sync;
+    ///   - `search`   -> the catalog is browsed with `search-books`;
+    ///   - `lookup`   -> single books can be fetched with `get-book`
+    ///     (materialize-on-demand, refresh);
+    ///   - `identify` -> the source takes part in upload identification;
+    ///   - `content`  -> the source provides `chapter-titles` and
+    ///     `get-chapter` (chapter mode);
+    ///   - `book-file`-> the source provides whole book files via
+    ///     `get-book-file` (file mode). When both `content` and
+    ///     `book-file` are declared, file mode wins and chapter mode is
+    ///     the fallback when `get-book-file` returns `none`.
+    /// Metadata-only plugins declare everything except `content`/
+    /// `book-file`.
+    export capabilities: func() -> list<string>;
+
+    /// Full static catalog, when it is small enough to enumerate eagerly
+    /// (host cap: a few thousand books). `none` when the source is large
+    /// or has no books; use `search-books`/`get-book` instead.
+    export declare: func() -> option<list<declared-book>>;
+
+    /// Paginated catalog search (large sources). `query` may be empty to
+    /// page through everything; the host clamps `limit`/`offset`.
+    export search-books: func(query: string, offset: u32, limit: u32) -> search-result;
+
+    /// Single book by id (materialize-on-demand, refresh). `none` = not
+    /// found.
+    export get-book: func(book-id: string) -> option<book-entry>;
+
+    /// Chapter titles of `book-id`, in reading order. Indices returned
+    /// here are the same indices passed to `get-chapter`.
+    export chapter-titles: func(book-id: string) -> list<string>;
+
+    /// Fetch one chapter of `book-id` by index. `none` means not found.
+    export get-chapter: func(book-id: string, index: u32) -> option<chapter>;
+
+    /// Try to identify the book behind an uploaded file.
+    ///
+    /// `filename` is the original upload name, `file-hash` the sha-256 hex
+    /// digest of the file bytes. Return the matching `book-entry` (usually
+    /// with an `id` already offered by this source) or `none` when this
+    /// plugin does not recognize the file. The server asks every enabled
+    /// instance in creation order; the first match supplies the metadata.
+    export identify-upload: func(filename: string, file-hash: string) -> option<book-entry>;
+
+    /// Fetch a whole book file (epub/txt download, `book-file` capability).
+    /// `none` = not available as a file (fall back to chapter mode).
+    /// Permanent `fetch` errors should surface as `none` too (the guest
+    /// logs the underlying error; the host logs and falls back to chapter
+    /// mode as well).
+    export get-book-file: func(book-id: string) -> option<book-file>;
+}

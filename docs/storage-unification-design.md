@@ -71,7 +71,7 @@ Consequences observed in practice:
 
 `chapters.content` becomes **always** sanitized HTML; `chapters.format`
 is retired (see §6). Ingest converters, all host-side in
-`bookshelf-formats` / the server service layer:
+`mandara-formats` / the server service layer:
 
 - **epub** — unchanged; already emits sanitized XHTML.
 - **txt** — HTML-escape, split on blank lines, wrap each paragraph in
@@ -113,7 +113,7 @@ roomier paragraph rhythm readers are used to from txt (§7.3).
   (owner/admin/public). `Content-Disposition` uses the book title.
 - **`POST /api/files/{id}/reparse`** — **rejected by owner decision**: no
   HTTP endpoint. Instead, reparse is an **upgrade-time manual migration**:
-  a one-shot CLI mode (`bookshelf-server --reparse-originals`) that
+  a one-shot CLI mode (`mandara-server --reparse-originals`) that
   re-runs the current parser over every stored original and replaces
   chapters + toc in place (sessions kept, positions clamped), then
   exits. The operator runs it deliberately after deploying a parser
@@ -181,7 +181,7 @@ paragraph margins.
   the rejected HTTP endpoint; owner decision 2), e2e via a temp
   instance (reparse → chapters/toc replaced → sessions clamped).
 - **P2 — canonical ingest (G1):** txt→html and plugin-text→html
-  converters in `bookshelf-formats` (unit tests: escaping, blank-line
+  converters in `mandara-formats` (unit tests: escaping, blank-line
   paragraphs, convention expansion, URL validation), wired into upload
   parsing and plugin materialization; new rows all `'html'`.
 - **P3 — backfill + single render path (G3/G4):** startup backfill,
