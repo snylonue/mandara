@@ -102,6 +102,8 @@
             default = packageSet.mandara;
           };
 
+          legacyPackages.mandaraPackages = packageSet.mandaraPackages;
+
           formatter = pkgs.nixfmt-tree;
 
           checks =

@@ -1,18 +1,9 @@
-# Build recipes for mandara, composed as a `lib.makeScope` package set so a
-# consumer can override one component at a time:
-#
-#   pkgs.mandaraPackages.overrideScope (final: prev: {
-#     frontend = prev.frontend.override { ... };
-#   })
-#
-# Each component lives in its own file (frontend.nix, server.nix,
-# plugin.nix, plugins.nix, mandara.nix). The server and frontend build with
-# plain nixpkgs; only the plugins need the rust-overlay toolchain, because
-# nixpkgs' rustc ships no `wasm32-unknown-unknown` std.
+# The server and frontend build with plain nixpkgs;
+# only the plugins need the rust-overlay toolchain,
+# because nixpkgs' rustc ships no `wasm32-unknown-unknown` std.
 {
   pkgs,
   lib ? pkgs.lib,
-  # Repository root; override to build from another checkout.
   src ? ../.,
 }:
 
@@ -29,7 +20,7 @@ let
         callPackage ./plugin.nix {
           inherit crate;
           inherit (common) version meta rustSource;
-          buildRustPackage = self.wasmRustPlatform.buildRustPackage;
+          inherit (self.wasmRustPlatform) buildRustPackage;
           wasmTools = pkgs.wasm-tools;
         };
 
@@ -44,7 +35,7 @@ let
       # wasm toolchain for the plugin crates. `pkgs.rust-bin` comes from
       # rust-overlay; keeping both as scope attributes makes the whole
       # plugin set rebuildable with a different toolchain.
-      rustToolchain = pkgs.rust-bin.stable.latest.default.override {
+      rustToolchain = pkgs.rust-bin.stable.latest.minimal.override {
         targets = [ "wasm32-unknown-unknown" ];
       };
 
@@ -85,8 +76,6 @@ in
   mandara-server = scope.server;
   mandara-frontend = scope.frontend;
   mandara-plugins = scope.plugins;
-  # The whole scope, for `overrideScope`-style overrides. Not a derivation,
-  # so the flake keeps it out of `packages.<system>`.
   mandaraPackages = scope;
 }
 // scope.pluginPackages
