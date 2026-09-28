@@ -7,10 +7,6 @@
       url = "github:hercules-ci/flake-parts";
       inputs.nixpkgs-lib.follows = "nixpkgs";
     };
-    llm-agents = {
-      url = "github:numtide/llm-agents.nix";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
     # Pinned rust toolchain (rustup-dist based). The wasm plugin crates need
     # it (nixpkgs' rustc ships no wasm32-unknown-unknown std); the dev shell
     # uses the same toolchain.
@@ -158,7 +154,6 @@
                 postgresqlSupport = false;
                 mysqlSupport = false;
               })
-              inputs.llm-agents.packages.${system}.pi
               pkgs.just
               pkgs.python3
             ];
