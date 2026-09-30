@@ -167,7 +167,7 @@ export function ShelfSeriesCard({
   const readCount = volumes.filter((v) => hasStarted(v.progress)).length;
   const percent = Math.round((readCount / volumes.length) * 100);
   return (
-    <Link className="book-card book-card--series" to={`/series/${series.id}`}>
+    <Link className="book-card" to={`/series/${series.id}`}>
       <CardCover
         bookId={lead.book.id}
         title={lead.book.title}

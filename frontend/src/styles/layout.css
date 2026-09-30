@@ -5,18 +5,30 @@
 }
 
 /* ---- nav ---- */
+/* The header rule is a hairline inset to the content column, not a
+   full-bleed border. */
 .nav {
+  --nav-inset: max(var(--space-5), calc((100vw - 1240px) / 2 + var(--space-4)));
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: var(--space-3) var(--space-5);
+  padding: var(--space-3) var(--nav-inset);
   background: var(--nav-bg);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  border-bottom: 1px solid var(--border);
   position: sticky;
   top: 0;
   z-index: var(--z-nav);
+}
+
+.nav::after {
+  content: "";
+  position: absolute;
+  left: var(--nav-inset);
+  right: var(--nav-inset);
+  bottom: 0;
+  height: 1px;
+  background: var(--border-strong);
 }
 
 /* subtle lift once the page is scrolled */
@@ -65,8 +77,8 @@
 }
 
 .nav-item.active {
-  color: var(--accent);
-  background: var(--accent-dim);
+  color: var(--text-1);
+  background: var(--wash);
   font-weight: 600;
 }
 
@@ -84,7 +96,15 @@
   width: 32px;
   height: 32px;
   padding: 0;
+  background: none;
+  border-color: transparent;
   border-radius: 50%;
+}
+
+.icon-btn:hover:not(:disabled) {
+  background: var(--wash);
+  border-color: transparent;
+  color: var(--text-1);
 }
 
 .user-menu {
@@ -127,13 +147,7 @@
 .content {
   flex: 1;
   width: 100%;
-  max-width: 960px;
+  max-width: 1240px;
   margin: 0 auto;
-  padding: 24px 16px 64px;
-}
-
-/* grid pages (library / series) use the full width */
-.content:has(.book-grid),
-.content:has(.shelf-page) {
-  max-width: 1600px;
+  padding: 32px 16px 64px;
 }

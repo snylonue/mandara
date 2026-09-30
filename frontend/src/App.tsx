@@ -28,14 +28,14 @@ function RequireAuth({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
-/** App-wide color theme (dark default), persisted to localStorage. */
+/** App-wide color theme (light default), persisted to localStorage. */
 type AppTheme = "dark" | "light";
 
 const THEME_KEY = "mandara_theme";
 
 function loadTheme(): AppTheme {
   const raw = localStorage.getItem(THEME_KEY);
-  return raw === "light" ? "light" : "dark";
+  return raw === "dark" ? "dark" : "light";
 }
 
 export default function App() {

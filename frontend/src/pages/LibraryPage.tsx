@@ -125,6 +125,7 @@ export function LibraryPage() {
   };
   const [entries, setEntries] = useState<BookListEntry[] | null>(null);
   const syncedSearch = useRef<string | null>(null);
+  const adopted = useRef(false);
   const [sessions, setSessions] = useState<SessionList>([]);
   const [q, setQ] = useState("");
   // The unified add dialog (添加书籍 / 新建系列 → 一个对话框).
@@ -166,11 +167,16 @@ export function LibraryPage() {
   }, []);
 
   // Entering the shelf without parameters (mount, 书架 nav, back button)
-  // adopts the last used preferences and writes them into the URL.
+  // adopts the last used preferences and writes them into the URL. Only
+  // once per mount: switching back to a default clears the URL, and that
+  // must not look like a fresh visit (which would re-adopt the saved prefs
+  // and snap the control back).
   useEffect(() => {
     const search = params.toString();
     if (search === syncedSearch.current) return;
     syncedSearch.current = search;
+    if (adopted.current) return;
+    adopted.current = true;
     if (search) return;
     const saved = loadPrefs();
     if (JSON.stringify(saved) !== JSON.stringify(SHELF_PREF_DEFAULTS)) setPrefs(saved);
@@ -275,7 +281,7 @@ export function LibraryPage() {
           </span>
         )}
         <button
-          className="btn primary"
+          className="btn"
           onClick={() => {
             setAddMode("book");
             setAddOpen(true);
@@ -284,6 +290,7 @@ export function LibraryPage() {
           {t("library.addBook")}
         </button>
         <button
+          className="btn"
           onClick={() => {
             setAddMode("series");
             setAddOpen(true);

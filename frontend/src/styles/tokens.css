@@ -32,6 +32,9 @@
   --ok: #98c379;
   --warn: #e5c07b;
 
+  /* neutral interaction wash (hovers, active tiles) */
+  --wash: rgb(255 255 255 / 0.06);
+
   /* status washes and lines */
   --danger-dim: color-mix(in srgb, var(--danger) 12%, transparent);
   --danger-dim-hover: color-mix(in srgb, var(--danger) 22%, transparent);
@@ -47,17 +50,15 @@
   /* shadows */
   --shadow-pop: 0 8px 24px rgb(0 0 0 / 0.4);
   --shadow-modal: 0 16px 48px rgb(0 0 0 / 0.5);
+  --shadow-button: 0 1px 2px rgb(0 0 0 / 0.4);
+  --ring-focus: 0 0 0 3px var(--accent-dim);
 
-  /* covers: a ring keeps white covers from melting into the page, the
-     shadow is the hover lift */
-  --cover-ring: rgb(255 255 255 / 0.06);
+  /* covers: a real frame (an inset shadow would sit behind the image),
+     plus the hover lift */
+  --frame: 1px solid var(--border-strong);
+  --frame-btn: 1.5px solid var(--border-strong);
   --shadow-card: 0 10px 26px rgb(0 0 0 / 0.45);
-
-  /* composite cover shadows and the coverless placeholder glyph */
-  --ring-cover: inset 0 0 0 1px var(--cover-ring);
-  --shadow-cover-hover: var(--ring-cover), var(--shadow-card);
-  --shadow-detail-cover: var(--shadow-modal), 0 0 0 1px var(--border);
-  --fs-placeholder: 42cqw;
+  --fs-placeholder: 32cqw;
 
   /* elevated surfaces: menus, modals, toasts, drawers */
   --surface-raised: #1b1f28;
@@ -81,14 +82,17 @@
   --fs-xl: 20px;
   --fs-2xl: 24px;
   --fs-3xl: 28px;
+  --fs-card-title: 15px;
 
   /* typography */
   --font-sans: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
   --font-serif: "Noto Serif SC", "Songti SC", "SimSun", serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-body: var(--font-sans);
 
   /* chrome metrics */
   --nav-h: 53px;
+  --control-h: 36px;
   --dur: 0.15s;
 
   --radius: 10px;
@@ -105,38 +109,49 @@
   --z-toast: 200;
 }
 
-/* Light theme — same token names, different values. */
+/* Light theme — warm paper, navy ink, serif type, squared corners. */
 :root[data-theme="light"] {
   color-scheme: light;
 
-  --bg: #f4f5f8;
-  --surface: #ffffff;
-  --surface-2: #eceef4;
-  --surface-raised: #ffffff;
+  --bg: #efede4;
+  --surface: #fcfbf6;
+  --surface-2: #e6e3d7;
+  --surface-raised: #fffefb;
 
-  --border: #d9dee8;
-  --border-strong: #bcc4d2;
+  --border: rgb(27 33 48 / 0.28);
+  --border-strong: rgb(27 33 48 / 0.55);
 
-  --text-1: #1b202a;
-  --text-2: #5d6675;
-  --text-3: #8b93a1;
+  --text-1: #1b2130;
+  --text-2: #565e76;
+  --text-3: #8a8f9e;
 
-  --accent: #3f6fe8;
-  --accent-hover: #2f5fd8;
-  --accent-dim: rgb(63 111 232 / 0.12);
+  --accent: #2b4a8c;
+  --accent-hover: #1f3a70;
+  --accent-dim: rgb(43 74 140 / 0.1);
 
-  --cover-ring: rgb(0 0 0 / 0.08);
-  --shadow-card: 0 8px 20px rgb(15 23 42 / 0.12);
-  --shadow-pop: 0 8px 24px rgb(15 23 42 / 0.12);
-  --shadow-modal: 0 16px 40px rgb(15 23 42 / 0.16);
-  --backdrop: rgb(15 23 42 / 0.35);
+  /* flat paper: no drop shadows — layering is the lightness gap + hairlines */
+  --shadow-card: none;
+  --shadow-pop: none;
+  --shadow-modal: none;
+  --shadow-button: none;
+  --backdrop: rgb(27 33 48 / 0.32);
+  --overlay: rgb(27 33 48 / 0.55);
 
-  /* status colors need more contrast on white */
-  --danger: #d14352;
-  --danger-hover: #b23544;
-  --ok: #3a9e5f;
-  --warn: #b7791f;
+  /* status colors need more contrast on paper */
+  --danger: #b03a48;
+  --danger-hover: #8f2d39;
+  --ok: #3d7a4e;
+  --warn: #9a6f1c;
 
-  --glow: rgb(63 111 232 / 0.06);
-  --nav-bg: rgb(255 255 255 / 0.85);
+  --glow: transparent;
+  --wash: rgb(27 33 48 / 0.07);
+  --nav-bg: rgb(239 237 228 / 0.92);
+
+  /* editorial: serif body and soft corners */
+  --font-body: var(--font-serif);
+  --radius: 4px;
+  --radius-sm: 3px;
+  --radius-md: 4px;
+  --radius-pill: 4px;
+  --fs-3xl: 34px;
 }

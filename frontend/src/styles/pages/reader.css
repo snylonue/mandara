@@ -74,7 +74,7 @@
   z-index: calc(var(--z-drawer) + 1);
   width: min(360px, 86vw);
   border: none;
-  border-right: 1px solid var(--border-strong);
+  border-right: var(--frame);
   box-shadow: var(--shadow-modal);
   display: flex;
   flex-direction: column;
@@ -150,7 +150,7 @@
 }
 
 .reader-topbar .sm.active {
-  background: var(--accent);
+  background: var(--text-1);
   color: var(--on-accent);
 }
 
