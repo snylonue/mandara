@@ -225,7 +225,7 @@ export function SourceSearchPane({
             />
             {manual.trim() && (
               <button
-                className="link-btn"
+                className="btn link"
                 disabled={picking !== null}
                 onClick={() =>
                   pick({
@@ -266,7 +266,7 @@ export function SourceSearchPane({
               </div>
             </div>
             <button
-              className="link-btn"
+              className="btn link"
               disabled={picking !== null}
               onClick={() => pick(item)}
             >
@@ -278,7 +278,7 @@ export function SourceSearchPane({
       {!loading && total > shown && (
         <div className="row">
           <button
-            className="link-btn"
+            className="btn link"
             disabled={sel === ""}
             onClick={() => void load(sel, q, shown)}
           >

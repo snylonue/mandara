@@ -83,7 +83,7 @@ export function Modal({
       >
         <div className="modal-head">
           <h2>{title}</h2>
-          <button className="ghost sm" onClick={onClose} aria-label={t("common.close")}>
+          <button className="btn ghost sm" onClick={onClose} aria-label={t("common.close")}>
             ✕
           </button>
         </div>

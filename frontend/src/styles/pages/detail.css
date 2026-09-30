@@ -136,17 +136,6 @@ a.chip:hover {
   display: block;
 }
 
-.detail-desc-toggle {
-  align-self: flex-start;
-  padding: 0;
-  background: none;
-  border: none;
-  color: var(--accent);
-  font-size: var(--fs-sm);
-  cursor: pointer;
-  transform: none;
-}
-
 .detail-actions {
   display: flex;
   flex-wrap: wrap;
@@ -249,49 +238,6 @@ a.chip:hover {
   flex-wrap: wrap;
   gap: var(--space-1);
   white-space: nowrap;
-}
-
-/* compact action buttons usable on <button> and <a> */
-.mini-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 11px;
-  font-size: var(--fs-sm);
-  border-radius: var(--radius-sm);
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--text-1);
-  cursor: pointer;
-  text-decoration: none;
-  transition: border-color var(--dur), color var(--dur), background-color var(--dur);
-}
-
-.mini-btn:hover {
-  border-color: var(--accent);
-  color: var(--text-1);
-}
-
-.mini-btn.primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--on-accent);
-  font-weight: 600;
-}
-
-.mini-btn.primary:hover {
-  background: var(--accent-hover);
-  border-color: var(--accent-hover);
-  color: var(--on-accent);
-}
-
-.mini-btn.danger {
-  color: var(--danger);
-}
-
-.mini-btn.danger:hover {
-  border-color: var(--danger);
-  background: var(--danger-dim);
 }
 
 /* attach / share panels under a section heading */

@@ -98,12 +98,12 @@ export function ReaderPage() {
                 </option>
               ))}
             </select>
-            <button className="link-btn" onClick={() => void createSession()}>
+            <button className="btn link" onClick={() => void createSession()}>
               <IconPlus size={13} /> {t("reader.newSession")}
             </button>
           </>
         ) : (
-          <button className="link-btn" onClick={() => void createSession()}>
+          <button className="btn link" onClick={() => void createSession()}>
             <IconPlus size={13} /> {t("reader.createSession")}
           </button>
         )}

@@ -275,7 +275,7 @@ export function LibraryPage() {
           </span>
         )}
         <button
-          className="primary"
+          className="btn primary"
           onClick={() => {
             setAddMode("book");
             setAddOpen(true);

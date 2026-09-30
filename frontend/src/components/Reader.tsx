@@ -160,12 +160,12 @@ export function Reader({
       <header className="reader-topbar">
         <div className="reader-topbar-side">
           {(toc ?? []).length > 0 && (
-            <button className="sm" onClick={() => setTocOpen(true)}>
+            <button className="btn sm" onClick={() => setTocOpen(true)}>
               {t("reader.toc")}
             </button>
           )}
           {backHref && (
-            <Link className="link-btn" to={backHref}>
+            <Link className="btn link" to={backHref}>
               <IconArrowLeft size={14} /> {t("common.backToDetail")}
             </Link>
           )}
@@ -179,7 +179,7 @@ export function Reader({
         </div>
         <div className="reader-topbar-side reader-topbar-end">
           <button
-            className={`sm${settingsOpen ? " active" : ""}`}
+            className={`btn sm${settingsOpen ? " active" : ""}`}
             onClick={() => setSettingsOpen((v) => !v)}
             aria-expanded={settingsOpen}
           >
@@ -202,7 +202,7 @@ export function Reader({
           <nav className="toc-drawer" aria-label={t("reader.toc")}>
             <div className="toc-drawer-head">
               <h2>{t("reader.toc")}</h2>
-              <button className="ghost sm" onClick={() => setTocOpen(false)} aria-label={t("common.close")}>
+              <button className="btn ghost sm" onClick={() => setTocOpen(false)} aria-label={t("common.close")}>
                 ✕
               </button>
             </div>

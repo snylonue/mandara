@@ -63,7 +63,7 @@ export function ReaderSettingsPanel({
     <div className="reader-settings" onClick={(e) => e.stopPropagation()}>
       <div className="reader-settings-head">
         <span>{t("reader.settings")}</span>
-        <button className="ghost sm" onClick={onClose} aria-label={t("common.close")}>
+        <button className="btn ghost sm" onClick={onClose} aria-label={t("common.close")}>
           ✕
         </button>
       </div>
@@ -72,14 +72,14 @@ export function ReaderSettingsPanel({
         <span className="reader-setting-label">{t("reader.fontSize")}</span>
         <div className="row">
           <button
-            className="sm"
+            className="btn sm"
             onClick={() => patch({ fontSize: Math.max(13, settings.fontSize - 1) })}
           >
             A−
           </button>
           <span className="reader-setting-value">{settings.fontSize}px</span>
           <button
-            className="sm"
+            className="btn sm"
             onClick={() => patch({ fontSize: Math.min(28, settings.fontSize + 1) })}
           >
             A+
@@ -93,7 +93,7 @@ export function ReaderSettingsPanel({
           {LINE_HEIGHTS.map((lh) => (
             <button
               key={lh}
-              className={`sm${settings.lineHeight === lh ? " active" : ""}`}
+              className={`btn sm${settings.lineHeight === lh ? " active" : ""}`}
               onClick={() => patch({ lineHeight: lh })}
             >
               {lh.toFixed(1)}
@@ -106,13 +106,13 @@ export function ReaderSettingsPanel({
         <span className="reader-setting-label">{t("reader.fontFamily")}</span>
         <div className="seg">
           <button
-            className={`sm${settings.font === "serif" ? " active" : ""}`}
+            className={`btn sm${settings.font === "serif" ? " active" : ""}`}
             onClick={() => patch({ font: "serif" })}
           >
             {t("reader.fontSerif")}
           </button>
           <button
-            className={`sm${settings.font === "sans" ? " active" : ""}`}
+            className={`btn sm${settings.font === "sans" ? " active" : ""}`}
             onClick={() => patch({ font: "sans" })}
           >
             {t("reader.fontSans")}
@@ -126,7 +126,7 @@ export function ReaderSettingsPanel({
           {WIDTHS.map((w) => (
             <button
               key={w}
-              className={`sm${settings.widthEm === w ? " active" : ""}`}
+              className={`btn sm${settings.widthEm === w ? " active" : ""}`}
               onClick={() => patch({ widthEm: w })}
             >
               {w === WIDTHS[0] ? t("reader.widthNarrow") : w === WIDTHS[WIDTHS.length - 1] ? t("reader.widthWide") : String(w)}
@@ -141,7 +141,7 @@ export function ReaderSettingsPanel({
           {(["dark", "sepia", "light"] as const).map((th) => (
             <button
               key={th}
-              className={`sm${settings.theme === th ? " active" : ""}`}
+              className={`btn sm${settings.theme === th ? " active" : ""}`}
               onClick={() => patch({ theme: th })}
             >
               {t(`reader.theme_${th}`)}

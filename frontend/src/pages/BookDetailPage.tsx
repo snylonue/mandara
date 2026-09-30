@@ -155,16 +155,16 @@ function FileSection({
         </div>
         <div className="row-actions">
           {readable && (
-            <Link className="mini-btn primary" to={`/read/${file.id}`}>
+            <Link className="btn sm primary" to={`/read/${file.id}`}>
               {t("book.read")}
             </Link>
           )}
-          <button className="mini-btn" onClick={() => void onShare(file.id, "book")}>
+          <button className="btn sm" onClick={() => void onShare(file.id, "book")}>
             {t("book.share")}
           </button>
           {file.original && (
             <button
-              className="mini-btn"
+              className="btn sm"
               title={t("book.downloadOriginal")}
               onClick={() =>
                 void downloadBinary(
@@ -180,10 +180,10 @@ function FileSection({
           )}
           {canManage && file.source === "local" && (
             <>
-              <button className="mini-btn" onClick={() => void toggleVisibility()}>
+              <button className="btn sm" onClick={() => void toggleVisibility()}>
                 {file.visibility === "public" ? t("book.setPrivate") : t("book.setPublic")}
               </button>
-              <button className="mini-btn danger" onClick={() => void deleteFile()}>
+              <button className="btn sm danger" onClick={() => void deleteFile()}>
                 {t("book.delete")}
               </button>
             </>
@@ -191,13 +191,13 @@ function FileSection({
           {canManage && file.source !== "local" && (
             <>
               <button
-                className="mini-btn"
+                className="btn sm"
                 title={t("book.rematerializeHint")}
                 onClick={() => void rematerialize()}
               >
                 {t("book.rematerialize")}
               </button>
-              <button className="mini-btn" onClick={() => setRebindOpen(true)}>
+              <button className="btn sm" onClick={() => setRebindOpen(true)}>
                 {t("book.changeContentSource")}
               </button>
             </>
@@ -249,7 +249,7 @@ function FileSection({
                   <td className="hint">{fmtTime(s.updated_at)}</td>
                   <td className="row-actions">
                     <button
-                      className="link-btn"
+                      className="btn link"
                       onClick={() => void onShare(file.id, "session", s.id)}
                     >
                       {t("book.shareProgress")}
@@ -495,7 +495,7 @@ export function BookDetailPage() {
     return (
       <div>
         <div className="error">{loadError}</div>
-        <Link to="/" className="link-btn">
+        <Link to="/" className="btn link">
           {t("common.backToShelf")}
         </Link>
       </div>
@@ -510,7 +510,7 @@ export function BookDetailPage() {
   return (
     <div className="book-detail">
       <div className="page-back">
-        <Link to="/" className="link-btn">
+        <Link to="/" className="btn link">
           <IconArrowLeft size={14} /> {t("common.backToShelf")}
         </Link>
       </div>
@@ -550,7 +550,7 @@ export function BookDetailPage() {
           )}
           {descLong && (
             <button
-              className="detail-desc-toggle"
+              className="btn link sm"
               onClick={() => setDescExpanded((v) => !v)}
             >
               {descExpanded ? t("book.descCollapse") : t("book.descExpand")} ▾
@@ -559,30 +559,30 @@ export function BookDetailPage() {
           <div className="detail-actions">
             {firstReadable && (
               <button
-                className="primary"
+                className="btn primary"
                 onClick={() => navigate(`/read/${firstReadable.id}`)}
               >
                 {t("book.startReading")}
               </button>
             )}
             {files[0] && (
-              <button className="ghost" onClick={() => void makeShare(files[0].id, "book")}>
+              <button className="btn ghost" onClick={() => void makeShare(files[0].id, "book")}>
                 <IconShare size={14} /> {t("book.shareBookShort")}
               </button>
             )}
             {canManage && pluginBacked && (
-              <button className="ghost" disabled={deleting} onClick={() => void refreshFromSource()}>
+              <button className="btn ghost" disabled={deleting} onClick={() => void refreshFromSource()}>
                 <IconRefresh size={14} /> {t("book.refreshFromSource")}
               </button>
             )}
             {canManage && (
-              <button className="ghost" onClick={() => void openSeriesDialog()}>
+              <button className="btn ghost" onClick={() => void openSeriesDialog()}>
                 {t("book.manageSeries")}
               </button>
             )}
             {canManage && (
               <button
-                className="ghost"
+                className="btn ghost"
                 onClick={() => {
                   setExtDraft({ ...(book.ext ?? {}) });
                   setExtOpen(true);
@@ -593,7 +593,7 @@ export function BookDetailPage() {
             )}
             {canManage && (
               <button
-                className="ghost danger-text"
+                className="btn ghost danger-text"
                 disabled={deleting}
                 onClick={() => void deleteMetadata(false)}
               >
@@ -611,7 +611,7 @@ export function BookDetailPage() {
           </span>
           <code>{share.url}</code>
           <button
-            className="mini-btn"
+            className="btn sm"
             onClick={() => void navigator.clipboard?.writeText(`${location.origin}${share.url}`)}
           >
             {t("book.copy")}
@@ -622,7 +622,7 @@ export function BookDetailPage() {
         <div className="error">
           <p className="hint">{t("book.metadataHasFiles", { count: fileCount409 })}</p>
           <button
-            className="danger"
+            className="btn danger"
             disabled={deleting}
             onClick={() => void deleteMetadata(true)}
           >
@@ -663,7 +663,7 @@ export function BookDetailPage() {
               <option value="private">{t("book.privateTag")}</option>
               <option value="public">{t("book.publicTag")}</option>
             </select>
-            <button className="primary" onClick={() => setAttachOpen(true)}>
+            <button className="btn primary" onClick={() => setAttachOpen(true)}>
               {t("book.attachOpen")}
             </button>
             <input
@@ -759,7 +759,7 @@ export function BookDetailPage() {
         <div className="modal-actions">
           <button onClick={closeAttachDialog}>{t("library.cancel")}</button>
           <button
-            className="primary"
+            className="btn primary"
             disabled={!attachPluginPick || attachBusy}
             onClick={() => attachPluginPick && void attachPlugin(attachPluginPick)}
           >
@@ -800,7 +800,7 @@ export function BookDetailPage() {
         {seriesError && <div className="error">{seriesError}</div>}
         <div className="modal-actions">
           <button onClick={() => setSeriesOpen(false)}>{t("library.cancel")}</button>
-          <button className="primary" disabled={seriesSaving} onClick={() => void saveSeries()}>
+          <button className="btn primary" disabled={seriesSaving} onClick={() => void saveSeries()}>
             {seriesSaving ? t("library.uploading") : t("series.save")}
           </button>
         </div>
@@ -811,7 +811,7 @@ export function BookDetailPage() {
         <ExtMetaForm kind="book" value={extDraft} onChange={setExtDraft} />
         <div className="modal-actions">
           <button onClick={() => setExtOpen(false)}>{t("library.cancel")}</button>
-          <button className="primary" disabled={extSaving} onClick={() => void saveExt()}>
+          <button className="btn primary" disabled={extSaving} onClick={() => void saveExt()}>
             {extSaving ? t("library.uploading") : t("series.save")}
           </button>
         </div>

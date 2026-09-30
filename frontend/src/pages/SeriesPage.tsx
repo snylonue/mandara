@@ -88,7 +88,7 @@ function VolumeCard({
         canManage && (
           <div className="series-card-actions">
             <button
-              className="mini-btn"
+              className="btn sm"
               disabled={orderIndex === 0}
               onClick={() => onMove(orderIndex, orderIndex - 1)}
               title={t("series.moveUp")}
@@ -96,14 +96,14 @@ function VolumeCard({
               ↑
             </button>
             <button
-              className="mini-btn"
+              className="btn sm"
               disabled={orderIndex === total - 1}
               onClick={() => onMove(orderIndex, orderIndex + 1)}
               title={t("series.moveDown")}
             >
               ↓
             </button>
-            <button className="mini-btn danger" onClick={() => onRemove(orderIndex)}>
+            <button className="btn sm danger" onClick={() => onRemove(orderIndex)}>
               {t("series.remove")}
             </button>
           </div>
@@ -247,7 +247,7 @@ export function SeriesPage() {
     return (
       <div>
         <div className="error">{loadError}</div>
-        <Link to="/" className="link-btn">
+        <Link to="/" className="btn link">
           {t("common.backToShelf")}
         </Link>
       </div>
@@ -257,7 +257,7 @@ export function SeriesPage() {
   return (
     <div className="book-detail">
       <div className="page-back">
-        <Link to="/" className="link-btn">
+        <Link to="/" className="btn link">
           <IconArrowLeft size={14} /> {t("common.backToShelf")}
         </Link>
       </div>
@@ -318,28 +318,28 @@ export function SeriesPage() {
           <ExtMetaTable kind="series" value={(series?.ext ?? {}) as ExtRecord} />
           <div className="detail-actions">
             {continueTarget && (
-              <Link className="btn-primary" to={continueTarget.href}>
+              <Link className="btn primary" to={continueTarget.href}>
                 {t("series.continueReading", { volume: continueTarget.volumeNo })}
               </Link>
             )}
             {canManage && (
               <>
                 {!continueTarget && (
-                  <button className="primary" onClick={() => void openAddDialog()}>
+                  <button className="btn primary" onClick={() => void openAddDialog()}>
                     <IconPlus size={14} /> {t("series.addBooks")}
                   </button>
                 )}
-                <button className="ghost" onClick={() => setEditOpen(true)}>
+                <button className="btn ghost" onClick={() => setEditOpen(true)}>
                   <IconEdit size={14} /> {t("series.edit")}
                 </button>
                 {continueTarget && (
-                  <button className="ghost" onClick={() => void openAddDialog()}>
+                  <button className="btn ghost" onClick={() => void openAddDialog()}>
                     <IconPlus size={14} /> {t("series.addBooks")}
                   </button>
                 )}
                 {orderDirty && (
                   <>
-                    <button className="primary" onClick={() => void saveOrder()}>
+                    <button className="btn primary" onClick={() => void saveOrder()}>
                       {t("series.saveOrder")}
                     </button>
                     <button onClick={() => setOrder(null)}>{t("series.cancelOrder")}</button>
@@ -348,7 +348,7 @@ export function SeriesPage() {
                 )}
                 {!orderDirty && (
                   <button
-                    className="ghost danger-text push-end"
+                    className="btn ghost danger-text push-end"
                     onClick={() => void deleteSeries()}
                   >
                     <IconTrash size={14} /> {t("series.delete")}
@@ -479,7 +479,7 @@ function EditSeriesDialog({
       {error && <div className="error">{error}</div>}
       <div className="modal-actions">
         <button onClick={onClose}>{t("library.cancel")}</button>
-        <button className="primary" onClick={() => void submit()} disabled={saving}>
+        <button className="btn primary" onClick={() => void submit()} disabled={saving}>
           {saving ? t("library.uploading") : t("series.save")}
         </button>
       </div>
@@ -558,7 +558,7 @@ function AddMembersDialog({
       <div className="modal-actions">
         <button onClick={onClose}>{t("library.cancel")}</button>
         <button
-          className="primary"
+          className="btn primary"
           disabled={saving || pick.size === 0}
           onClick={() => void submit()}
         >

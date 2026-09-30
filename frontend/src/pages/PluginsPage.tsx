@@ -186,7 +186,7 @@ function ConfigForm({
           {fieldErrors[f.key] && <div className="error">{fieldErrors[f.key]}</div>}
         </div>
       ))}
-      <button className="primary" disabled={saving} onClick={() => void save()}>
+      <button className="btn primary" disabled={saving} onClick={() => void save()}>
         {saving ? t("common.loading") : t("plugin.saveConfig")}
       </button>
     </div>
@@ -306,7 +306,7 @@ export function PluginsPage() {
               value={regId}
               onChange={(e) => setRegId(e.target.value)}
             />
-            <button className="primary" disabled={regBusy} onClick={() => void register()}>
+            <button className="btn primary" disabled={regBusy} onClick={() => void register()}>
               {regBusy ? t("common.loading") : t("plugin.register")}
             </button>
           </div>
@@ -331,18 +331,18 @@ export function PluginsPage() {
               </div>
               <div className="row-actions">
                 <button
-                  className="mini-btn"
+                  className="btn sm"
                   onClick={() => void setEnabled(instance, !instance.enabled)}
                 >
                   {instance.enabled ? t("plugin.disable") : t("plugin.enable")}
                 </button>
-                <button className="mini-btn" onClick={() => void syncInstance(instance)}>
+                <button className="btn sm" onClick={() => void syncInstance(instance)}>
                   {t("plugin.resync")}
                 </button>
-                <button className="mini-btn" onClick={() => setConfigFor(instance.id)}>
+                <button className="btn sm" onClick={() => setConfigFor(instance.id)}>
                   {t("plugin.configure")}
                 </button>
-                <button className="mini-btn danger" onClick={() => void deleteInstance(instance)}>
+                <button className="btn sm danger" onClick={() => void deleteInstance(instance)}>
                   {t("book.delete")}
                 </button>
               </div>

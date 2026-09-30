@@ -529,7 +529,7 @@ export function AddDialog({
                           {i === 0 ? ` · ${t("library.firstCreatesEntry")}` : ` · ${t("library.attachToEntry")}`}
                         </span>
                         <button
-                          className="link-btn danger"
+                          className="btn link danger"
                           onClick={() => setContents((prev) => prev.filter((_, j) => j !== i))}
                         >
                           {t("library.removeFile")}
@@ -596,7 +596,7 @@ export function AddDialog({
       <div className="modal-actions">
         <button onClick={close}>{t("library.cancel")}</button>
         {inBookMode ? (
-          <button className="primary" onClick={() => void submitBook()} disabled={uploading}>
+          <button className="btn primary" onClick={() => void submitBook()} disabled={uploading}>
             {uploading
               ? uploadTotal > 0
                 ? t("library.uploadingProgress", { done: uploadDone, total: uploadTotal })
@@ -606,7 +606,7 @@ export function AddDialog({
                 : t("library.addBook")}
           </button>
         ) : (
-          <button className="primary" onClick={() => void submitSeries()} disabled={uploading}>
+          <button className="btn primary" onClick={() => void submitSeries()} disabled={uploading}>
             {uploading ? t("library.uploading") : t("series.create")}
           </button>
         )}

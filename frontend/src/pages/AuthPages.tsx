@@ -64,7 +64,7 @@ function AuthForm({ mode }: { mode: "login" | "register" }) {
           />
         </label>
         {error && <div className="error">{error}</div>}
-        <button className="primary" disabled={busy}>
+        <button className="btn primary" disabled={busy}>
           {isLogin ? t("auth.submitLogin") : t("auth.submitRegister")}
         </button>
         <p className="hint">

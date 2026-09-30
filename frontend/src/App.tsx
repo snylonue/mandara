@@ -124,7 +124,7 @@ export default function App() {
                 )}
               </div>
             ) : (
-              <Link className="link-btn" to="/login">
+              <Link className="btn link" to="/login">
                 {t("nav.login")}
               </Link>
             )}

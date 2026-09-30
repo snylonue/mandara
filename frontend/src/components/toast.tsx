@@ -55,7 +55,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
           <div key={t.id} className={`toast toast-${t.kind}`}>
             <span>{t.message}</span>
             <button
-              className="ghost sm"
+              className="btn ghost sm"
               onClick={() => setItems((prev) => prev.filter((x) => x.id !== t.id))}
               aria-label="×"
             >
