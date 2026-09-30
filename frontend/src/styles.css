@@ -1164,10 +1164,6 @@ a.btn-primary:hover {
 
 
 /* ---- book & series detail (hero layout) ---- */
-.description {
-  color: var(--text-2);
-}
-
 .page-back {
   margin-bottom: var(--space-4);
 }
@@ -1568,15 +1564,6 @@ a.chip:hover {
 .file-picker:hover {
   border-color: var(--accent);
   color: var(--text-1);
-}
-
-.toc {
-  max-height: 320px;
-  overflow-y: auto;
-  margin: 0;
-  padding-left: 24px;
-  line-height: 2;
-  font-size: var(--fs-md);
 }
 
 /* ---- reader ---- */
@@ -2083,19 +2070,6 @@ a.chip:hover {
   gap: var(--space-3);
   padding: var(--space-2) var(--space-1);
   border-bottom: 1px solid var(--border);
-}
-
-.picker {
-  max-height: 18rem;
-  overflow: auto;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: var(--space-2);
-}
-
-.plugin-instance {
-  border-bottom: 1px solid var(--border);
-  padding: 0.5rem 0;
 }
 
 .config-form {
