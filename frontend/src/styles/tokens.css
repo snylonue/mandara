@@ -53,6 +53,12 @@
   --cover-ring: rgb(255 255 255 / 0.06);
   --shadow-card: 0 10px 26px rgb(0 0 0 / 0.45);
 
+  /* composite cover shadows and the coverless placeholder glyph */
+  --ring-cover: inset 0 0 0 1px var(--cover-ring);
+  --shadow-cover-hover: var(--ring-cover), var(--shadow-card);
+  --shadow-detail-cover: var(--shadow-modal), 0 0 0 1px var(--border);
+  --fs-placeholder: 42cqw;
+
   /* elevated surfaces: menus, modals, toasts, drawers */
   --surface-raised: #1b1f28;
 

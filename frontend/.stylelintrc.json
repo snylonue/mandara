@@ -1,0 +1,44 @@
+{
+  "plugins": [
+    "stylelint-declaration-strict-value"
+  ],
+  "ignoreFiles": [
+    "dist/**"
+  ],
+  "rules": {
+    "declaration-no-important": true,
+    "selector-max-compound-selectors": 3,
+    "scale-unlimited/declaration-strict-value": [
+      [
+        "/color$/",
+        "z-index",
+        "font-size",
+        "border-radius",
+        "box-shadow"
+      ],
+      {
+        "ignoreValues": [
+          "transparent",
+          "inherit",
+          "currentColor",
+          "none",
+          "0",
+          "50%",
+          "1",
+          "2"
+        ]
+      }
+    ]
+  },
+  "overrides": [
+    {
+      "files": [
+        "**/tokens.css",
+        "**/epub-content.css"
+      ],
+      "rules": {
+        "scale-unlimited/declaration-strict-value": null
+      }
+    }
+  ]
+}
