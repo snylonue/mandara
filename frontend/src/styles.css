@@ -32,6 +32,22 @@
   --ok: #98c379;
   --warn: #e5c07b;
 
+  /* status washes and lines */
+  --danger-dim: color-mix(in srgb, var(--danger) 12%, transparent);
+  --danger-dim-hover: color-mix(in srgb, var(--danger) 22%, transparent);
+  --danger-line: color-mix(in srgb, var(--danger) 45%, transparent);
+  --ok-dim: color-mix(in srgb, var(--ok) 10%, transparent);
+  --ok-line: color-mix(in srgb, var(--ok) 40%, transparent);
+  --on-accent: #fff;
+
+  /* scrims and cover overlays */
+  --backdrop: rgb(5 8 14 / 0.65);
+  --overlay: rgb(0 0 0 / 0.6);
+
+  /* shadows */
+  --shadow-pop: 0 8px 24px rgb(0 0 0 / 0.4);
+  --shadow-modal: 0 16px 48px rgb(0 0 0 / 0.5);
+
   /* covers: a ring keeps white covers from melting into the page, the
      shadow is the hover lift */
   --cover-ring: rgb(255 255 255 / 0.06);
@@ -58,9 +74,21 @@
   --fs-lg: 17px;
   --fs-xl: 20px;
   --fs-2xl: 24px;
+  --fs-3xl: 28px;
+
+  /* typography */
+  --font-sans: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-serif: "Noto Serif SC", "Songti SC", "SimSun", serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* chrome metrics */
+  --nav-h: 53px;
+  --dur: 0.15s;
 
   --radius: 10px;
   --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-pill: 999px;
 
   /* z-index scale */
   --z-sticky: 40;
@@ -93,6 +121,15 @@
 
   --cover-ring: rgb(0 0 0 / 0.08);
   --shadow-card: 0 8px 20px rgb(15 23 42 / 0.12);
+  --shadow-pop: 0 8px 24px rgb(15 23 42 / 0.12);
+  --shadow-modal: 0 16px 40px rgb(15 23 42 / 0.16);
+  --backdrop: rgb(15 23 42 / 0.35);
+
+  /* status colors need more contrast on white */
+  --danger: #d14352;
+  --danger-hover: #b23544;
+  --ok: #3a9e5f;
+  --warn: #b7791f;
 
   --glow: rgb(63 111 232 / 0.06);
   --nav-bg: rgb(255 255 255 / 0.85);
@@ -112,7 +149,7 @@ body {
     radial-gradient(1100px 420px at 50% -140px, var(--glow), transparent 70%),
     var(--bg);
   color: var(--text-1);
-  font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  font-family: var(--font-sans);
   line-height: 1.6;
 }
 
@@ -154,7 +191,7 @@ body {
   align-items: center;
   gap: var(--space-2);
   font-weight: 700;
-  font-size: 18px;
+  font-size: var(--fs-lg);
   color: var(--text-1);
   text-decoration: none;
 }
@@ -174,8 +211,8 @@ body {
   text-decoration: none;
   font-size: var(--fs-md);
   padding: var(--space-1) var(--space-3);
-  border-radius: 20px;
-  transition: color 0.15s, background-color 0.15s;
+  border-radius: var(--radius-pill);
+  transition: color var(--dur), background-color var(--dur);
 }
 
 .nav-item:hover {
@@ -225,7 +262,7 @@ body {
   background: var(--surface-raised);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-pop);
   overflow: hidden;
 }
 
@@ -300,8 +337,8 @@ a {
 }
 
 .error {
-  background: rgba(224, 108, 117, 0.12);
-  border: 1px solid rgba(224, 108, 117, 0.4);
+  background: var(--danger-dim);
+  border: 1px solid var(--danger-line);
   color: var(--danger);
   border-radius: var(--radius);
   padding: 10px 14px;
@@ -319,7 +356,7 @@ a {
   position: fixed;
   inset: 0;
   z-index: var(--z-modal);
-  background: rgba(5, 8, 14, 0.7);
+  background: var(--backdrop);
   backdrop-filter: blur(2px);
   display: flex;
   align-items: flex-start;
@@ -332,10 +369,10 @@ a {
   background: var(--surface-raised);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-modal);
   width: 100%;
   max-width: 520px;
-  animation: modal-in 0.15s ease-out;
+  animation: modal-in var(--dur) ease-out;
 }
 
 .modal-panel.modal-wide {
@@ -403,7 +440,7 @@ a {
   border: none;
   color: var(--accent);
   cursor: pointer;
-  font-size: 14px;
+  font-size: var(--fs-md);
   padding: 2px 6px;
   text-decoration: none;
 }
@@ -415,7 +452,7 @@ a {
 /* ---- toasts ---- */
 .toast-stack {
   position: fixed;
-  top: calc(var(--space-4) + 53px);
+  top: calc(var(--space-4) + var(--nav-h));
   right: var(--space-4);
   z-index: var(--z-toast);
   display: flex;
@@ -433,7 +470,7 @@ a {
   border: 1px solid var(--border-strong);
   border-left-width: 3px;
   border-radius: var(--radius-sm);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-pop);
   padding: var(--space-2) var(--space-3);
   font-size: var(--fs-md);
   animation: toast-in 0.18s ease-out;
@@ -467,11 +504,11 @@ button {
   background: var(--surface-2);
   color: var(--text-1);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 7px 14px;
   cursor: pointer;
   font-size: var(--fs-md);
-  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+  transition: background-color var(--dur), border-color var(--dur), color var(--dur);
 }
 
 button:hover:not(:disabled):not(.link-btn) {
@@ -491,14 +528,14 @@ button:disabled {
 button.primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
   font-weight: 600;
 }
 
 button.primary:hover:not(:disabled) {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 button.ghost {
@@ -521,13 +558,13 @@ button.ghost.danger-text:hover:not(:disabled) {
 }
 
 button.danger {
-  background: rgba(224, 108, 117, 0.12);
-  border-color: rgba(224, 108, 117, 0.5);
+  background: var(--danger-dim);
+  border-color: var(--danger-line);
   color: var(--danger);
 }
 
 button.danger:hover:not(:disabled) {
-  background: rgba(224, 108, 117, 0.22);
+  background: var(--danger-dim-hover);
   border-color: var(--danger);
   color: var(--danger-hover);
 }
@@ -555,12 +592,12 @@ textarea {
   background: var(--surface-2);
   color: var(--text-1);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: var(--space-2) var(--space-3);
   font-size: var(--fs-md);
   outline: none;
   font-family: inherit;
-  transition: border-color 0.15s;
+  transition: border-color var(--dur);
 }
 
 textarea {
@@ -609,8 +646,8 @@ a.btn-primary {
   align-self: center;
   background: var(--accent);
   border: 1px solid var(--accent);
-  border-radius: 8px;
-  color: #fff;
+  border-radius: var(--radius-md);
+  color: var(--on-accent);
   font-weight: 600;
   font-size: var(--fs-md);
   padding: 7px 18px;
@@ -626,7 +663,7 @@ a.btn-primary:hover {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  font-size: 14px;
+  font-size: var(--fs-md);
   color: var(--text-2);
 }
 
@@ -648,13 +685,13 @@ a.btn-primary:hover {
 
 .search {
   flex: 1 1 260px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   padding: 9px 18px;
   background: var(--surface-2);
 }
 
 .shelf-toolbar > button {
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   padding: 9px 20px;
   white-space: nowrap;
 }
@@ -667,7 +704,7 @@ a.btn-primary:hover {
 .admin-chip {
   align-self: center;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   padding: 4px 12px;
   font-size: var(--fs-xs);
   color: var(--text-3);
@@ -734,7 +771,7 @@ a.btn-primary:hover {
   padding: 2px;
   background: var(--surface-2);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
 }
 
 .segmented button {
@@ -743,7 +780,7 @@ a.btn-primary:hover {
   justify-content: center;
   padding: 4px 7px;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: none;
   color: var(--text-3);
 }
@@ -867,10 +904,12 @@ a.btn-primary:hover {
   display: flex;
   align-items: center;
   justify-content: center;
+  --ph-l1: 30%;
+  --ph-l2: 17%;
   background: linear-gradient(
     160deg,
-    hsl(var(--ph-h, 220) 30% 30%),
-    hsl(calc(var(--ph-h, 220) + 35) 32% 17%)
+    hsl(var(--ph-h, 220) 30% var(--ph-l1)),
+    hsl(calc(var(--ph-h, 220) + 35) 32% var(--ph-l2))
   );
 }
 
@@ -882,11 +921,8 @@ a.btn-primary:hover {
 }
 
 :root[data-theme="light"] .book-cover-fallback {
-  background: linear-gradient(
-    160deg,
-    hsl(var(--ph-h, 220) 45% 74%),
-    hsl(calc(var(--ph-h, 220) + 35) 42% 60%)
-  );
+  --ph-l1: 74%;
+  --ph-l2: 60%;
 }
 
 :root[data-theme="light"] .book-cover-fallback span {
@@ -909,7 +945,7 @@ a.btn-primary:hover {
   width: 22px;
   height: 22px;
   border-radius: 50%;
-  background: rgba(10, 14, 22, 0.75);
+  background: var(--overlay);
   backdrop-filter: blur(2px);
 }
 
@@ -931,11 +967,11 @@ a.btn-primary:hover {
   top: var(--space-2);
   z-index: 2;
   padding: 1px 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: rgb(0 0 0 / 0.6);
   backdrop-filter: blur(4px);
   -webkit-backdrop-filter: blur(4px);
-  color: #fff;
+  color: var(--on-accent);
   font-size: var(--fs-xs);
   line-height: 1.6;
 }
@@ -1006,7 +1042,7 @@ a.btn-primary:hover {
   border-bottom: 1px solid var(--border);
   color: var(--text-1);
   text-decoration: none;
-  transition: background-color 0.15s;
+  transition: background-color var(--dur);
 }
 
 .shelf-row:hover {
@@ -1031,7 +1067,7 @@ a.btn-primary:hover {
 }
 
 .shelf-row-cover .book-cover-fallback span {
-  font-size: 18px;
+  font-size: var(--fs-lg);
 }
 
 .shelf-row-main {
@@ -1111,8 +1147,8 @@ a.btn-primary:hover {
   background: var(--surface-2);
   border: 1px solid var(--border);
   color: var(--text-2);
-  border-radius: 20px;
-  font-size: 12px;
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-xs);
   padding: 1px 10px;
 }
 
@@ -1183,7 +1219,7 @@ a.btn-primary:hover {
   overflow: hidden;
   background: var(--surface-2);
   box-shadow:
-    0 16px 40px rgba(0, 0, 0, 0.45),
+    var(--shadow-modal),
     0 0 0 1px var(--border);
 }
 
@@ -1203,7 +1239,7 @@ a.btn-primary:hover {
 }
 
 .detail-info h1 {
-  font-size: 28px;
+  font-size: var(--fs-3xl);
   line-height: 1.25;
   margin: 0;
 }
@@ -1225,7 +1261,7 @@ a.btn-primary:hover {
   background: var(--surface-2);
   border: 1px solid var(--border);
   color: var(--text-2);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   font-size: var(--fs-sm);
   padding: 3px 12px;
   text-decoration: none;
@@ -1295,7 +1331,7 @@ a.chip:hover {
   border-radius: var(--radius);
   padding: var(--space-3) var(--space-4);
   margin-bottom: var(--space-3);
-  transition: border-color 0.15s;
+  transition: border-color var(--dur);
 }
 
 .file-card:hover {
@@ -1343,8 +1379,8 @@ a.chip:hover {
 
 .fmt-epub {
   color: var(--ok);
-  border-color: rgba(152, 195, 121, 0.4);
-  background: rgba(152, 195, 121, 0.08);
+  border-color: var(--ok-line);
+  background: var(--ok-dim);
 }
 
 .file-sub {
@@ -1372,7 +1408,7 @@ a.chip:hover {
   color: var(--text-1);
   cursor: pointer;
   text-decoration: none;
-  transition: border-color 0.15s, color 0.15s, background-color 0.15s;
+  transition: border-color var(--dur), color var(--dur), background-color var(--dur);
 }
 
 .mini-btn:hover {
@@ -1383,14 +1419,14 @@ a.chip:hover {
 .mini-btn.primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
   font-weight: 600;
 }
 
 .mini-btn.primary:hover {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .mini-btn.danger {
@@ -1399,7 +1435,7 @@ a.chip:hover {
 
 .mini-btn.danger:hover {
   border-color: var(--danger);
-  background: rgba(224, 108, 117, 0.1);
+  background: var(--danger-dim);
 }
 
 /* attach / share panels under a section heading */
@@ -1459,7 +1495,7 @@ a.chip:hover {
 .sessions {
   width: 100%;
   border-collapse: collapse;
-  font-size: 14px;
+  font-size: var(--fs-md);
 }
 
 .sessions th,
@@ -1516,7 +1552,7 @@ a.chip:hover {
   color: var(--text-2);
   font-size: var(--fs-md);
   cursor: pointer;
-  transition: border-color 0.15s, color 0.15s;
+  transition: border-color var(--dur), color var(--dur);
 }
 
 .file-picker:hover {
@@ -1530,12 +1566,11 @@ a.chip:hover {
   margin: 0;
   padding-left: 24px;
   line-height: 2;
-  font-size: 14px;
+  font-size: var(--fs-md);
 }
 
 /* ---- reader ---- */
 .reader {
-  --nav-h: 53px;
   margin: 0 auto;
 }
 
@@ -1599,7 +1634,7 @@ a.chip:hover {
   position: fixed;
   inset: 0;
   z-index: var(--z-drawer);
-  background: rgba(5, 8, 14, 0.6);
+  background: var(--backdrop);
 }
 
 .toc-drawer {
@@ -1611,7 +1646,7 @@ a.chip:hover {
   width: min(360px, 86vw);
   background: var(--surface-raised);
   border-right: 1px solid var(--border-strong);
-  box-shadow: 8px 0 32px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-modal);
   display: flex;
   flex-direction: column;
   animation: drawer-in 0.18s ease-out;
@@ -1654,7 +1689,7 @@ a.chip:hover {
   background: var(--surface-raised);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--shadow-pop);
   padding: var(--space-3) var(--space-4) var(--space-4);
   display: flex;
   flex-direction: column;
@@ -1707,7 +1742,7 @@ a.chip:hover {
 .seg button.active,
 .reader-topbar .sm.active {
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .toc-list,
@@ -1734,7 +1769,7 @@ a.chip:hover {
 
 .toc-list summary::marker {
   color: var(--text-2);
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 
 .toc-link {
@@ -1744,9 +1779,9 @@ a.chip:hover {
   background: none;
   border: none;
   color: var(--text-1);
-  font-size: 14px;
+  font-size: var(--fs-md);
   padding: 5px 8px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   line-height: 1.5;
   overflow: hidden;
@@ -1766,7 +1801,7 @@ a.chip:hover {
 
 .toc-group {
   display: block;
-  font-size: 13px;
+  font-size: var(--fs-sm);
   font-weight: 600;
   color: var(--text-2);
   padding: 4px 2px;
@@ -1776,14 +1811,14 @@ a.chip:hover {
 .progress-bar {
   height: 3px;
   background: var(--border);
-  border-radius: 2px;
+  border-radius: var(--radius-pill);
   margin: 14px 0;
   overflow: hidden;
 }
 
 .progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, var(--accent), var(--accent));
+  background: var(--accent);
   transition: width 0.3s;
 }
 
@@ -1818,11 +1853,11 @@ a.chip:hover {
 }
 
 .reader-body.font-serif {
-  font-family: "Noto Serif SC", "Songti SC", "SimSun", serif;
+  font-family: var(--font-serif);
 }
 
 .reader-body.font-sans {
-  font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  font-family: var(--font-sans);
 }
 
 /* Canonical chapter HTML (every source; storage unification). */
@@ -1894,7 +1929,7 @@ a.chip:hover {
 .epub-content pre {
   background: rgba(127, 127, 127, 0.08);
   border: 1px solid var(--reader-border);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   padding: 0.8em 1em;
   overflow-x: auto;
   font-size: 0.92em;
@@ -1902,7 +1937,7 @@ a.chip:hover {
 }
 
 .epub-content code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
 }
 
 .epub-content ul,
@@ -2019,7 +2054,7 @@ a.chip:hover {
 .source-search {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: var(--space-2);
 }
 
 .source-results {
@@ -2035,8 +2070,8 @@ a.chip:hover {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 0.75rem;
-  padding: 0.5rem 0.25rem;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-1);
   border-bottom: 1px solid var(--border);
 }
 
@@ -2044,8 +2079,8 @@ a.chip:hover {
   max-height: 18rem;
   overflow: auto;
   border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 0.5rem;
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
 }
 
 .plugin-instance {
@@ -2056,10 +2091,10 @@ a.chip:hover {
 .config-form {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-  padding: 0.75rem;
+  gap: var(--space-2);
+  padding: var(--space-3);
   background: var(--surface);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
 }
 
 /* ---- series page ---------------------------------------------------- */
@@ -2069,9 +2104,9 @@ a.chip:hover {
   background: var(--surface-2);
   border: 1px solid var(--border);
   color: var(--text-2);
-  border-radius: 999px;
-  padding: 0.1rem 0.5rem;
-  font-size: 0.75rem;
+  border-radius: var(--radius-pill);
+  padding: 2px var(--space-2);
+  font-size: var(--fs-xs);
   white-space: nowrap;
 }
 
@@ -2084,7 +2119,7 @@ a.chip:hover {
   display: flex;
   gap: var(--space-1);
   opacity: 0;
-  transition: opacity 0.15s;
+  transition: opacity var(--dur);
 }
 
 .book-card:hover .series-card-actions,
@@ -2109,7 +2144,7 @@ a.chip:hover {
   max-height: 18rem;
   overflow: auto;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
 }
 
 .picker-list li {
@@ -2123,8 +2158,8 @@ a.chip:hover {
 .picker-list label {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
-  padding: 0.5rem 0.6rem;
+  gap: var(--space-2);
+  padding: var(--space-2);
   cursor: pointer;
 }
 
@@ -2133,8 +2168,8 @@ a.chip:hover {
 .file-item-head {
   display: flex;
   align-items: baseline;
-  gap: 0.6rem;
-  padding: 0.5rem 0.6rem 0;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-2) 0;
   flex-wrap: wrap;
 }
 
@@ -2146,7 +2181,7 @@ a.chip:hover {
 }
 
 .item-settings {
-  padding: 0.3rem 0.6rem 0.6rem;
+  padding: var(--space-1) var(--space-2) var(--space-2);
 }
 
 .item-settings select,
@@ -2158,7 +2193,7 @@ a.chip:hover {
 /* ---- extended metadata (docs/metadata-ext-design.md) -------------------- */
 
 .ext-table {
-  margin: 0.35rem 0 0;
+  margin: var(--space-1) 0 0;
   border-collapse: collapse;
   font-size: var(--fs-md);
 }
@@ -2193,11 +2228,11 @@ a.chip:hover {
 }
 
 .tag.ext-status-ongoing {
-  border-color: var(--accent, #4a90d9);
-  color: var(--accent, #4a90d9);
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .tag.ext-status-completed {
-  border-color: #3a9e5f;
-  color: #3a9e5f;
+  border-color: var(--ok);
+  color: var(--ok);
 }
