@@ -3,9 +3,7 @@
  *
  * Three surface levels (page < surface < surface-2) and three text levels
  * (title / secondary / tertiary). Everything below resolves through them —
- * no hardcoded light-theme fallbacks anywhere else. The legacy names at the
- * end are aliases onto this scale so older rules keep working; new rules
- * should use the canonical names.
+ * no hardcoded light-theme fallbacks anywhere else.
  */
 :root {
   color-scheme: dark;
@@ -39,17 +37,10 @@
   --cover-ring: rgb(255 255 255 / 0.06);
   --shadow-card: 0 10px 26px rgb(0 0 0 / 0.45);
 
-  /* legacy aliases */
-  --bg2: var(--surface-2);
-  --card: var(--surface);
-  --panel: var(--surface);
-  --card-bg: var(--surface);
-  --surface-raised: var(--surface);
-  --text: var(--text-1);
-  --text-strong: var(--text-1);
-  --muted: var(--text-2);
-  --text-muted: var(--text-2);
-  --accent2: var(--accent);
+  /* elevated surfaces: menus, modals, toasts, drawers */
+  --surface-raised: #1b1f28;
+
+  /* nav bar and page glow */
   --glow: rgb(77 141 255 / 0.1);
   --nav-bg: rgb(15 17 21 / 0.82);
 
@@ -87,6 +78,7 @@
   --bg: #f4f5f8;
   --surface: #ffffff;
   --surface-2: #eceef4;
+  --surface-raised: #ffffff;
 
   --border: #d9dee8;
   --border-strong: #bcc4d2;
@@ -119,7 +111,7 @@ body {
   background:
     radial-gradient(1100px 420px at 50% -140px, var(--glow), transparent 70%),
     var(--bg);
-  color: var(--text);
+  color: var(--text-1);
   font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
   line-height: 1.6;
 }
@@ -163,7 +155,7 @@ body {
   gap: var(--space-2);
   font-weight: 700;
   font-size: 18px;
-  color: var(--text-strong);
+  color: var(--text-1);
   text-decoration: none;
 }
 
@@ -178,7 +170,7 @@ body {
 }
 
 .nav-item {
-  color: var(--muted);
+  color: var(--text-2);
   text-decoration: none;
   font-size: var(--fs-md);
   padding: var(--space-1) var(--space-3);
@@ -187,7 +179,7 @@ body {
 }
 
 .nav-item:hover {
-  color: var(--text);
+  color: var(--text-1);
 }
 
 .nav-item.active {
@@ -220,7 +212,7 @@ body {
 .user-menu-btn {
   background: none;
   border-color: transparent;
-  color: var(--text);
+  color: var(--text-1);
   font-weight: 600;
 }
 
@@ -249,7 +241,7 @@ body {
 }
 
 .username {
-  color: var(--muted);
+  color: var(--text-2);
   font-size: var(--fs-md);
 }
 
@@ -269,7 +261,7 @@ body {
 
 /* ---- common ---- */
 .card {
-  background: var(--card);
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 20px;
@@ -279,27 +271,27 @@ body {
 h1 {
   font-size: var(--fs-2xl);
   margin: var(--space-2) 0;
-  color: var(--text-strong);
+  color: var(--text-1);
 }
 
 h2 {
   font-size: var(--fs-lg);
   margin: 0 0 var(--space-3);
-  color: var(--text-strong);
+  color: var(--text-1);
 }
 
 h3 {
   font-size: var(--fs-md);
   margin: 0 0 var(--space-2);
-  color: var(--text-strong);
+  color: var(--text-1);
 }
 
 a {
-  color: var(--accent2);
+  color: var(--accent);
 }
 
 .hint {
-  color: var(--muted);
+  color: var(--text-2);
   font-size: var(--fs-sm);
 }
 
@@ -317,7 +309,7 @@ a {
 }
 
 .page-loading {
-  color: var(--muted);
+  color: var(--text-2);
   text-align: center;
   padding: 60px;
 }
@@ -394,7 +386,7 @@ a {
 
 .modal-section h3 {
   margin: 0;
-  color: var(--muted);
+  color: var(--text-2);
   text-transform: uppercase;
   letter-spacing: 0.06em;
   font-size: var(--fs-xs);
@@ -409,7 +401,7 @@ a {
 .link-btn {
   background: none;
   border: none;
-  color: var(--accent2);
+  color: var(--accent);
   cursor: pointer;
   font-size: 14px;
   padding: 2px 6px;
@@ -473,7 +465,7 @@ a {
 /* ---- buttons: primary / default / ghost / danger × md / sm ---- */
 button {
   background: var(--surface-2);
-  color: var(--text);
+  color: var(--text-1);
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 7px 14px;
@@ -484,7 +476,7 @@ button {
 
 button:hover:not(:disabled):not(.link-btn) {
   border-color: var(--accent);
-  color: var(--text-strong);
+  color: var(--text-1);
 }
 
 button:active:not(:disabled):not(.link-btn) {
@@ -512,7 +504,7 @@ button.primary:hover:not(:disabled) {
 button.ghost {
   background: transparent;
   border-color: transparent;
-  color: var(--accent2);
+  color: var(--accent);
 }
 
 button.ghost:hover:not(:disabled) {
@@ -561,7 +553,7 @@ input,
 select,
 textarea {
   background: var(--surface-2);
-  color: var(--text);
+  color: var(--text-1);
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: var(--space-2) var(--space-3);
@@ -635,7 +627,7 @@ a.btn-primary:hover {
   flex-direction: column;
   gap: 6px;
   font-size: 14px;
-  color: var(--muted);
+  color: var(--text-2);
 }
 
 /* ---- library ---- */
@@ -805,7 +797,7 @@ a.btn-primary:hover {
   padding: 0;
   display: flex;
   flex-direction: column;
-  color: var(--text);
+  color: var(--text-1);
   text-decoration: none;
 }
 
@@ -926,11 +918,11 @@ a.btn-primary:hover {
 }
 
 .badge-private {
-  color: var(--muted);
+  color: var(--text-2);
 }
 
 .badge-plugin {
-  color: var(--accent2);
+  color: var(--accent);
 }
 
 /* volume count / 卷 number pills on a cover */
@@ -1012,7 +1004,7 @@ a.btn-primary:hover {
   gap: var(--space-3);
   padding: var(--space-2);
   border-bottom: 1px solid var(--border);
-  color: var(--text);
+  color: var(--text-1);
   text-decoration: none;
   transition: background-color 0.15s;
 }
@@ -1073,9 +1065,9 @@ a.btn-primary:hover {
 .skeleton {
   background: linear-gradient(
     100deg,
-    var(--bg2) 40%,
-    var(--card) 50%,
-    var(--bg2) 60%
+    var(--surface-2) 40%,
+    var(--surface) 50%,
+    var(--surface-2) 60%
   );
   background-size: 200% 100%;
   animation: skeleton-shimmer 1.4s ease infinite;
@@ -1107,7 +1099,7 @@ a.btn-primary:hover {
 .empty-state {
   text-align: center;
   padding: 64px var(--space-4);
-  color: var(--muted);
+  color: var(--text-2);
 }
 
 .empty-state-icon {
@@ -1128,7 +1120,7 @@ a.btn-primary:hover {
 
 /* ---- book & series detail (hero layout) ---- */
 .description {
-  color: var(--muted);
+  color: var(--text-2);
 }
 
 .page-back {
@@ -1189,7 +1181,7 @@ a.btn-primary:hover {
   aspect-ratio: 2 / 3;
   border-radius: var(--radius);
   overflow: hidden;
-  background: var(--bg2);
+  background: var(--surface-2);
   box-shadow:
     0 16px 40px rgba(0, 0, 0, 0.45),
     0 0 0 1px var(--border);
@@ -1221,7 +1213,7 @@ a.btn-primary:hover {
   align-items: center;
   flex-wrap: wrap;
   gap: var(--space-2);
-  color: var(--muted);
+  color: var(--text-2);
   font-size: var(--fs-md);
 }
 
@@ -1245,7 +1237,7 @@ a.chip:hover {
 }
 
 .detail-desc {
-  color: var(--text);
+  color: var(--text-1);
   opacity: 0.82;
   margin: var(--space-1) 0 0;
   font-size: var(--fs-md);
@@ -1264,7 +1256,7 @@ a.chip:hover {
   padding: 0;
   background: none;
   border: none;
-  color: var(--accent2);
+  color: var(--accent);
   font-size: var(--fs-sm);
   cursor: pointer;
 }
@@ -1291,7 +1283,7 @@ a.chip:hover {
 }
 
 .detail-section > h2 .count {
-  color: var(--muted);
+  color: var(--text-2);
   font-size: var(--fs-sm);
   font-weight: 400;
 }
@@ -1328,13 +1320,13 @@ a.chip:hover {
 
 .file-label {
   font-weight: 600;
-  color: var(--text-strong);
+  color: var(--text-1);
   text-decoration: none;
   font-size: var(--fs-lg);
 }
 
 .file-label:hover {
-  color: var(--accent2);
+  color: var(--accent);
 }
 
 .fmt-badge {
@@ -1344,9 +1336,9 @@ a.chip:hover {
   font-weight: 700;
   border-radius: var(--radius-sm);
   padding: 1px 7px;
-  background: var(--bg2);
+  background: var(--surface-2);
   border: 1px solid var(--border);
-  color: var(--muted);
+  color: var(--text-2);
 }
 
 .fmt-epub {
@@ -1377,7 +1369,7 @@ a.chip:hover {
   border-radius: var(--radius-sm);
   background: transparent;
   border: 1px solid var(--border);
-  color: var(--text);
+  color: var(--text-1);
   cursor: pointer;
   text-decoration: none;
   transition: border-color 0.15s, color 0.15s, background-color 0.15s;
@@ -1385,7 +1377,7 @@ a.chip:hover {
 
 .mini-btn:hover {
   border-color: var(--accent);
-  color: var(--text-strong);
+  color: var(--text-1);
 }
 
 .mini-btn.primary {
@@ -1445,7 +1437,7 @@ a.chip:hover {
 .share-box code {
   flex: 1;
   min-width: 200px;
-  color: var(--accent2);
+  color: var(--accent);
   overflow-wrap: anywhere;
   font-size: var(--fs-sm);
 }
@@ -1479,7 +1471,7 @@ a.chip:hover {
 
 .strong {
   font-weight: 600;
-  color: var(--text);
+  color: var(--text-1);
 }
 
 /* generic horizontal field row */
@@ -1521,7 +1513,7 @@ a.chip:hover {
   border: 1px dashed var(--border-strong);
   border-radius: var(--radius-sm);
   padding: var(--space-3);
-  color: var(--muted);
+  color: var(--text-2);
   font-size: var(--fs-md);
   cursor: pointer;
   transition: border-color 0.15s, color 0.15s;
@@ -1529,7 +1521,7 @@ a.chip:hover {
 
 .file-picker:hover {
   border-color: var(--accent);
-  color: var(--text);
+  color: var(--text-1);
 }
 
 .toc {
@@ -1586,7 +1578,7 @@ a.chip:hover {
 
 .reader-topbar-book {
   font-weight: 700;
-  color: var(--text-strong);
+  color: var(--text-1);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1594,7 +1586,7 @@ a.chip:hover {
 }
 
 .reader-topbar-chapter {
-  color: var(--muted);
+  color: var(--text-2);
   font-size: var(--fs-xs);
   white-space: nowrap;
   overflow: hidden;
@@ -1673,7 +1665,7 @@ a.chip:hover {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  color: var(--muted);
+  color: var(--text-2);
   font-size: var(--fs-sm);
 }
 
@@ -1685,7 +1677,7 @@ a.chip:hover {
 }
 
 .reader-setting-label {
-  color: var(--muted);
+  color: var(--text-2);
   font-size: var(--fs-sm);
   white-space: nowrap;
 }
@@ -1737,11 +1729,11 @@ a.chip:hover {
   list-style-position: inside;
   cursor: pointer;
   user-select: none;
-  color: var(--muted);
+  color: var(--text-2);
 }
 
 .toc-list summary::marker {
-  color: var(--muted);
+  color: var(--text-2);
   font-size: 13px;
 }
 
@@ -1751,7 +1743,7 @@ a.chip:hover {
   text-align: left;
   background: none;
   border: none;
-  color: var(--text);
+  color: var(--text-1);
   font-size: 14px;
   padding: 5px 8px;
   border-radius: 6px;
@@ -1763,7 +1755,7 @@ a.chip:hover {
 }
 
 .toc-link:hover {
-  background: var(--bg2);
+  background: var(--surface-2);
 }
 
 .toc-link.current {
@@ -1776,7 +1768,7 @@ a.chip:hover {
   display: block;
   font-size: 13px;
   font-weight: 600;
-  color: var(--muted);
+  color: var(--text-2);
   padding: 4px 2px;
   letter-spacing: 0.05em;
 }
@@ -1791,16 +1783,16 @@ a.chip:hover {
 
 .progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, var(--accent), var(--accent2));
+  background: linear-gradient(90deg, var(--accent), var(--accent));
   transition: width 0.3s;
 }
 
 /* Reading column — theme / font / width come from the settings panel
    (inline style) plus the data-theme attribute on .reader. */
 .reader-body {
-  --fg: var(--text);
+  --fg: var(--text-1);
   --reader-border: var(--border);
-  --reader-muted: var(--muted);
+  --reader-muted: var(--text-2);
   min-height: 40vh;
   margin: 0 auto;
   padding: var(--space-4) var(--space-4) var(--space-5);
@@ -1986,12 +1978,12 @@ a.chip:hover {
 }
 
 .reader-nav-btn small {
-  color: var(--muted);
+  color: var(--text-2);
   font-size: var(--fs-xs);
 }
 
 .reader-nav-btn span {
-  color: var(--text-strong);
+  color: var(--text-1);
   font-size: var(--fs-md);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2000,7 +1992,7 @@ a.chip:hover {
 }
 
 .reader-nav-btn:hover:not(:disabled) small {
-  color: var(--accent2);
+  color: var(--accent);
 }
 
 .reader-session-bar {
@@ -2066,7 +2058,7 @@ a.chip:hover {
   flex-direction: column;
   gap: 0.5rem;
   padding: 0.75rem;
-  background: var(--panel);
+  background: var(--surface);
   border-radius: 6px;
 }
 
@@ -2172,7 +2164,7 @@ a.chip:hover {
 }
 
 .ext-table th {
-  color: var(--muted);
+  color: var(--text-2);
   font-weight: 500;
   text-align: left;
   padding: 2px 12px 2px 0;
@@ -2182,7 +2174,7 @@ a.chip:hover {
 
 .ext-table td {
   padding: 2px 0;
-  color: var(--text);
+  color: var(--text-1);
 }
 
 .detail-info .ext-table th::after {
