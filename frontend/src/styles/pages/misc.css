@@ -154,6 +154,12 @@
 .ext-table td {
   padding: 2px 0;
   color: var(--text-1);
+  vertical-align: top;
+}
+
+/* array-valued ext fields render as chips */
+.ext-table td .tag {
+  margin-right: var(--space-1);
 }
 
 .detail-info .ext-table th::after {

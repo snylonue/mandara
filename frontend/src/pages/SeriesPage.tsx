@@ -167,6 +167,10 @@ export function SeriesPage() {
 
   const volumes = useMemo(() => attachProgress(membersByOrder, byFile), [membersByOrder, byFile]);
   const readVolumes = volumes.filter((v) => hasStarted(v.progress)).length;
+  const totalChapters = membersByOrder.reduce(
+    (n, e) => n + e.files.reduce((m, f) => m + f.chapter_count, 0),
+    0,
+  );
 
   // 继续阅读: the first readable volume that is not finished yet — the
   // button disappears once every volume is read.
@@ -275,15 +279,12 @@ export function SeriesPage() {
           <h1>{series?.title}</h1>
           <div className="detail-meta">
             <span>{t("series.volumes", { count: series?.volume_count ?? 0 })}</span>
-            <span>·</span>
-            <span>
-              {t("common.chaptersTotal", {
-                count: membersByOrder.reduce(
-                  (n, e) => n + e.files.reduce((m, f) => m + f.chapter_count, 0),
-                  0,
-                ),
-              })}
-            </span>
+            {totalChapters > 0 && (
+              <>
+                <span>·</span>
+                <span>{t("common.chaptersTotal", { count: totalChapters })}</span>
+              </>
+            )}
             {readVolumes > 0 && (
               <>
                 <span>·</span>
@@ -313,12 +314,19 @@ export function SeriesPage() {
             )}
             {canManage && (
               <>
+                {!continueTarget && (
+                  <button className="primary" onClick={() => void openAddDialog()}>
+                    <IconPlus size={14} /> {t("series.addBooks")}
+                  </button>
+                )}
                 <button className="ghost" onClick={() => setEditOpen(true)}>
                   <IconEdit size={14} /> {t("series.edit")}
                 </button>
-                <button className="ghost" onClick={() => void openAddDialog()}>
-                  <IconPlus size={14} /> {t("series.addBooks")}
-                </button>
+                {continueTarget && (
+                  <button className="ghost" onClick={() => void openAddDialog()}>
+                    <IconPlus size={14} /> {t("series.addBooks")}
+                  </button>
+                )}
                 {orderDirty && (
                   <>
                     <button className="primary" onClick={() => void saveOrder()}>
@@ -330,7 +338,7 @@ export function SeriesPage() {
                 )}
                 {!orderDirty && (
                   <button
-                    className="ghost danger-text"
+                    className="ghost danger-text push-end"
                     onClick={() => void deleteSeries()}
                   >
                     <IconTrash size={14} /> {t("series.delete")}
@@ -343,6 +351,9 @@ export function SeriesPage() {
         </div>
       </div>
 
+      <div className="shelf-section-title">
+        {t("series.volumes", { count: volumes.length })}
+      </div>
       <div className="book-grid">
         {volumes.map((entry, i) => (
           <VolumeCard

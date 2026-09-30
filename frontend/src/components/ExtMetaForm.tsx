@@ -73,7 +73,15 @@ export function ExtMetaTable({ kind, value }: { kind: "book" | "series"; value: 
         {rows.map((k) => (
           <tr key={k}>
             <th>{t(i18nKey(k))}</th>
-            <td>{toInput(value[k])}</td>
+            <td>
+              {Array.isArray(value[k])
+                ? (value[k] as unknown[]).map((x, i) => (
+                    <span className="tag" key={String(x) + "-" + i}>
+                      {String(x)}
+                    </span>
+                  ))
+                : toInput(value[k])}
+            </td>
           </tr>
         ))}
       </tbody>
