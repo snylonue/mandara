@@ -44,16 +44,6 @@
 /* ---- series page ---------------------------------------------------- */
 
  /* 卷 number / volume-count pills (list rows, detail meta) */
-.tag-volume {
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  color: var(--text-2);
-  border-radius: var(--radius-pill);
-  padding: 2px var(--space-2);
-  font-size: var(--fs-xs);
-  white-space: nowrap;
-}
-
 .series-card-actions {
   /* hover-revealed overlay on top of the cover; the card itself stays a link */
   position: absolute;

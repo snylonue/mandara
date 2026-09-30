@@ -89,7 +89,7 @@ export function ReaderSettingsPanel({
 
       <div className="reader-setting-row">
         <span className="reader-setting-label">{t("reader.lineHeight")}</span>
-        <div className="seg">
+        <div className="seg solid">
           {LINE_HEIGHTS.map((lh) => (
             <button
               key={lh}
@@ -104,7 +104,7 @@ export function ReaderSettingsPanel({
 
       <div className="reader-setting-row">
         <span className="reader-setting-label">{t("reader.fontFamily")}</span>
-        <div className="seg">
+        <div className="seg solid">
           <button
             className={`btn sm${settings.font === "serif" ? " active" : ""}`}
             onClick={() => patch({ font: "serif" })}
@@ -122,7 +122,7 @@ export function ReaderSettingsPanel({
 
       <div className="reader-setting-row">
         <span className="reader-setting-label">{t("reader.width")}</span>
-        <div className="seg">
+        <div className="seg solid">
           {WIDTHS.map((w) => (
             <button
               key={w}
@@ -137,7 +137,7 @@ export function ReaderSettingsPanel({
 
       <div className="reader-setting-row">
         <span className="reader-setting-label">{t("reader.theme")}</span>
-        <div className="seg">
+        <div className="seg solid">
           {(["dark", "sepia", "light"] as const).map((th) => (
             <button
               key={th}

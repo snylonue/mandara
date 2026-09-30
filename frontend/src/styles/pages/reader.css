@@ -152,23 +152,6 @@
   text-align: center;
 }
 
-.seg {
-  display: inline-flex;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-}
-
-.seg button {
-  border: none;
-  border-radius: 0;
-}
-
-.seg button + button {
-  border-left: 1px solid var(--border);
-}
-
-.seg button.active,
 .reader-topbar .sm.active {
   background: var(--accent);
   color: var(--on-accent);

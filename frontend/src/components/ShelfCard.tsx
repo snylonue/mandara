@@ -225,7 +225,7 @@ export function ShelfListRow({
       </div>
       <div className="shelf-row-tags">
         {volumeNo !== undefined && volumeNo > 0 && (
-          <span className="tag tag-volume">
+          <span className="tag">
             {t("series.volumeLabel", { volume: volumeNo })}
           </span>
         )}
@@ -277,7 +277,7 @@ export function ShelfSeriesRow({
         </div>
       </div>
       <div className="shelf-row-tags">
-        <span className="tag tag-volume">×{volumes.length}</span>
+        <span className="tag">×{volumes.length}</span>
       </div>
       {percent > 0 && (
         <span className="shelf-row-progress" aria-hidden>

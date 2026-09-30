@@ -94,39 +94,6 @@
   font-size: var(--fs-sm);
 }
 
-/* segmented control (view switcher) */
-.segmented {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  padding: 2px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-}
-
-.segmented button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 4px 7px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: none;
-  color: var(--text-3);
-}
-
-.segmented button:hover:not(:disabled) {
-  background: none;
-  border: none;
-  color: var(--text-1);
-}
-
-.segmented button.active {
-  background: var(--accent-dim);
-  color: var(--accent);
-}
-
 /* ---- shelf grid ---- */
 .shelf-grid {
   display: grid;
@@ -472,13 +439,4 @@
 .empty-state-icon {
   opacity: 0.5;
   margin-bottom: var(--space-3);
-}
-
-.tag {
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  color: var(--text-2);
-  border-radius: var(--radius-pill);
-  font-size: var(--fs-xs);
-  padding: 1px 10px;
 }

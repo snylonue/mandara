@@ -284,7 +284,7 @@ export function SeriesPage() {
         )}
         <div className="detail-info">
           {series?.authors.length ? (
-            <span className="chip">{series.authors.join(" / ")}</span>
+            <span className="tag lg">{series.authors.join(" / ")}</span>
           ) : null}
           <h1>{series?.title}</h1>
           <div className="detail-meta">

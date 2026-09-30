@@ -316,7 +316,7 @@ export function LibraryPage() {
             <option value="flat">{t("library.groupFlat")}</option>
             <option value="author">{t("library.groupAuthor")}</option>
           </select>
-          <div className="segmented" role="group" aria-label={t("library.view")}>
+          <div className="seg" role="group" aria-label={t("library.view")}>
             {(
               [
                 ["grid", <IconGrid size={15} key="g" />, t("library.viewGrid")],

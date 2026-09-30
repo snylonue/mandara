@@ -524,7 +524,7 @@ export function BookDetailPage() {
           {(detail.series || book.volume_no > 0) && (
             <div>
               {detail.series ? (
-                <Link className="chip" to={`/series/${detail.series.id}`}>
+                <Link className="tag lg" to={`/series/${detail.series.id}`}>
                   <IconLayers size={13} />
                   {t("book.seriesLine", {
                     title: detail.series.title,
@@ -532,7 +532,7 @@ export function BookDetailPage() {
                   })}
                 </Link>
               ) : (
-                <span className="chip">第{book.volume_no}卷</span>
+                <span className="tag lg">第{book.volume_no}卷</span>
               )}
             </div>
           )}
