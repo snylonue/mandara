@@ -235,6 +235,7 @@
   "series": {
     "volumes": "共 {{count}} 卷",
     "chaptersOfVolume": "{{count}} 章",
+    "volumeLabel": "第{{volume}}卷",
     "edit": "编辑系列",
     "editTitle": "编辑系列",
     "addBooks": "添加书籍",

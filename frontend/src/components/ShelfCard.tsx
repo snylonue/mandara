@@ -56,13 +56,14 @@ function CardCover({
   volumeNo?: number;
   percent?: number;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="book-cover">
       <BookCover bookId={bookId} title={title} coverUrl={coverUrl} />
       <CoverBadges entry={entry} />
       {volumeNo !== undefined && volumeNo > 0 && (
         <span className="cover-badge cover-volume">
-          第{volumeNo}卷
+          {t("series.volumeLabel", { volume: volumeNo })}
         </span>
       )}
       {volumeCount !== undefined && volumeCount > 1 && (
@@ -97,6 +98,7 @@ export function ShelfBookCard({
   entry,
   to,
   meta,
+  title,
   volumeNo,
   finished = false,
   muted = false,
@@ -106,6 +108,8 @@ export function ShelfBookCard({
   to?: string | null;
   /** Overrides the default metadata line. */
   meta?: string;
+  /** Overrides the default book title (the series page shows 第 N 卷). */
+  title?: string;
   volumeNo?: number;
   /** Read volumes dim their cover. */
   finished?: boolean;
@@ -131,7 +135,7 @@ export function ShelfBookCard({
         percent={percent}
       />
       <CardBody
-        title={book.title}
+        title={title ?? book.title}
         meta={meta ?? (percent > 0 ? t("library.readPercent", { percent }) : defaultMeta)}
       />
     </>
@@ -221,7 +225,9 @@ export function ShelfListRow({
       </div>
       <div className="shelf-row-tags">
         {volumeNo !== undefined && volumeNo > 0 && (
-          <span className="tag tag-volume">第{volumeNo}卷</span>
+          <span className="tag tag-volume">
+            {t("series.volumeLabel", { volume: volumeNo })}
+          </span>
         )}
         <span
           className={`badge-icon ${anyPublic ? "badge-public" : "badge-private"}`}

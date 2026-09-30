@@ -41,6 +41,7 @@ import type {
 /// readable file, or a metadata-only volume they can attach content to).
 function VolumeCard({
   entry,
+  seriesTitle,
   canManage,
   orderIndex,
   total,
@@ -48,6 +49,7 @@ function VolumeCard({
   onRemove,
 }: {
   entry: WithProgress<BookDetail>;
+  seriesTitle: string;
   canManage: boolean;
   orderIndex: number;
   total: number;
@@ -66,13 +68,21 @@ function VolumeCard({
   const openable =
     readable || book.created_by === user?.id || user?.role === "admin";
   const chapterCount = files.reduce((n, f) => n + f.chapter_count, 0);
+  const volumeNo = book.volume_no || orderIndex + 1;
+  // Bangumi-style series repeat the same title on every volume: lead with
+  // 第 N 卷 there, and keep the real title when a volume has its own.
+  const label =
+    book.title === seriesTitle
+      ? t("series.volumeLabel", { volume: volumeNo })
+      : book.title;
   return (
     <ShelfBookCard
       entry={entry}
       to={openable ? undefined : null}
       muted={!readable}
       finished={isFinished(entry.progress)}
-      volumeNo={book.volume_no || orderIndex + 1}
+      volumeNo={volumeNo}
+      title={label}
       meta={t("series.chaptersOfVolume", { count: chapterCount })}
       actions={
         canManage && (
@@ -359,6 +369,7 @@ export function SeriesPage() {
           <VolumeCard
             key={entry.book.id}
             entry={entry}
+            seriesTitle={series?.title ?? ""}
             canManage={canManage}
             orderIndex={i}
             total={volumes.length}
