@@ -140,20 +140,22 @@ services.nginx.virtualHosts."books.example.com" = {
 };
 ```
 
-The server, frontend and plugins are separate derivations composed by
-`lib.makeScope`, so one can be replaced without touching the others. With
+The server, frontend and plugins are independent derivations composed by
+`lib.makeScope`, so one can be replaced without touching the others and
+building the server never builds a plugin. With
 `nixpkgs.overlays = [ inputs.mandara.overlays.default ]` this is either
 the scope:
 
 ```nix
 services.mandara.package =
   (pkgs.mandaraPackages.overrideScope (final: prev: {
-    server = prev.server.override { plugins = null; };
+    frontend = prev.frontend.override { src = /path/to/frontend; };
   })).mandara;
 ```
 
 or an individual package: `pkgs.mandara.override { frontend = …; }`,
-`pkgs.mandara-server.override { plugins = null; }`.
+`pkgs.mandara-server.override { rustSource = …; }`. Plugins are always
+selected separately through {option}`services.mandara.plugins`.
 
 What the module does:
 

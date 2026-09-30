@@ -1,13 +1,11 @@
-# The backend binary. `plugins` is only staged for the host test suite,
-# which checks that the packaged components introspect against this host;
-# pass `plugins = null` to build the server without that dependency.
+# The backend binary. Plugins are deliberately not an input: the server
+# package builds on its own, and a deployment selects the components it
+# wants through `services.mandara.plugins`.
 {
-  lib,
   rustPlatform,
   version,
   meta,
   rustSource,
-  plugins ? null,
 }:
 
 rustPlatform.buildRustPackage {
@@ -20,15 +18,14 @@ rustPlatform.buildRustPackage {
     "-p"
     "mandara-server"
   ];
-  # A component built from an older WIT version otherwise loads fine but
-  # silently loses every capability, so the tests embed the packaged
-  # components and fail on an export mismatch. Without the wasm toolchain
-  # (plain nixpkgs, no rust-overlay) the suite cannot run and is skipped.
-  doCheck = plugins != null;
-  preCheck = lib.optionalString (plugins != null) ''
-    mkdir -p plugins-built
-    cp ${plugins}/lib/mandara/plugins/*.wasm plugins-built/
-  '';
+  # The workspace suite also runs `mandara-plugin`'s introspection test,
+  # which reads built components from `plugins-built/`; restricting the
+  # check to this crate keeps the server build independent of the plugins
+  # (the VM check loads the packaged components end to end instead).
+  cargoTestFlags = [
+    "-p"
+    "mandara-server"
+  ];
   meta = meta // {
     description = "mandara backend: REST API, auth, library, sessions, shares";
     mainProgram = "mandara-server";

@@ -56,14 +56,11 @@ let
 
       server = callPackage ./server.nix {
         inherit (common) version meta rustSource;
-        # The host tests need the packaged components; plain nixpkgs (no
-        # rust-overlay) has no wasm toolchain, so they are skipped there.
-        plugins = if pkgs ? rust-bin then self.plugins else null;
       };
 
       mandara = callPackage ./mandara.nix {
         inherit (common) version meta;
-        inherit (self) server frontend plugins;
+        inherit (self) server frontend;
       };
 
       inherit pluginPackages;

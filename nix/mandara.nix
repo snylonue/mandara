@@ -8,15 +8,13 @@
   meta,
   server,
   frontend,
-  # The component set the package was built from, exposed for introspection.
-  plugins ? null,
 }:
 
 runCommand "mandara-${version}"
   {
     nativeBuildInputs = [ makeWrapper ];
     passthru = {
-      inherit server frontend plugins;
+      inherit server frontend;
     };
     meta = meta // {
       description = "Self-hosted light-novel reading website";
