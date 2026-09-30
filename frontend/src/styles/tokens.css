@@ -1,0 +1,136 @@
+/*
+ * Design tokens.
+ *
+ * Three surface levels (page < surface < surface-2) and three text levels
+ * (title / secondary / tertiary). Everything below resolves through them —
+ * no hardcoded light-theme fallbacks anywhere else.
+ */
+:root {
+  color-scheme: dark;
+
+  /* surfaces */
+  --bg: #0f1115;
+  --surface: #171a21;
+  --surface-2: #1f232c;
+
+  --border: #2a2f3a;
+  --border-strong: #3a4150;
+
+  /* text */
+  --text-1: #e6e9ef;
+  --text-2: #9ba3b2;
+  --text-3: #6b7280;
+
+  /* accent */
+  --accent: #4d8dff;
+  --accent-hover: #679eff;
+  --accent-dim: rgb(77 141 255 / 0.15);
+
+  /* status */
+  --danger: #e06c75;
+  --danger-hover: #ea838b;
+  --ok: #98c379;
+  --warn: #e5c07b;
+
+  /* status washes and lines */
+  --danger-dim: color-mix(in srgb, var(--danger) 12%, transparent);
+  --danger-dim-hover: color-mix(in srgb, var(--danger) 22%, transparent);
+  --danger-line: color-mix(in srgb, var(--danger) 45%, transparent);
+  --ok-dim: color-mix(in srgb, var(--ok) 10%, transparent);
+  --ok-line: color-mix(in srgb, var(--ok) 40%, transparent);
+  --on-accent: #fff;
+
+  /* scrims and cover overlays */
+  --backdrop: rgb(5 8 14 / 0.65);
+  --overlay: rgb(0 0 0 / 0.6);
+
+  /* shadows */
+  --shadow-pop: 0 8px 24px rgb(0 0 0 / 0.4);
+  --shadow-modal: 0 16px 48px rgb(0 0 0 / 0.5);
+
+  /* covers: a ring keeps white covers from melting into the page, the
+     shadow is the hover lift */
+  --cover-ring: rgb(255 255 255 / 0.06);
+  --shadow-card: 0 10px 26px rgb(0 0 0 / 0.45);
+
+  /* elevated surfaces: menus, modals, toasts, drawers */
+  --surface-raised: #1b1f28;
+
+  /* nav bar and page glow */
+  --glow: rgb(77 141 255 / 0.1);
+  --nav-bg: rgb(15 17 21 / 0.82);
+
+  /* spacing scale */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+
+  /* type scale */
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-md: 14px;
+  --fs-lg: 17px;
+  --fs-xl: 20px;
+  --fs-2xl: 24px;
+  --fs-3xl: 28px;
+
+  /* typography */
+  --font-sans: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-serif: "Noto Serif SC", "Songti SC", "SimSun", serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* chrome metrics */
+  --nav-h: 53px;
+  --dur: 0.15s;
+
+  --radius: 10px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-pill: 999px;
+
+  /* z-index scale */
+  --z-sticky: 40;
+  --z-nav: 50;
+  --z-popover: 60;
+  --z-modal: 100;
+  --z-drawer: 120;
+  --z-toast: 200;
+}
+
+/* Light theme — same token names, different values. */
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --bg: #f4f5f8;
+  --surface: #ffffff;
+  --surface-2: #eceef4;
+  --surface-raised: #ffffff;
+
+  --border: #d9dee8;
+  --border-strong: #bcc4d2;
+
+  --text-1: #1b202a;
+  --text-2: #5d6675;
+  --text-3: #8b93a1;
+
+  --accent: #3f6fe8;
+  --accent-hover: #2f5fd8;
+  --accent-dim: rgb(63 111 232 / 0.12);
+
+  --cover-ring: rgb(0 0 0 / 0.08);
+  --shadow-card: 0 8px 20px rgb(15 23 42 / 0.12);
+  --shadow-pop: 0 8px 24px rgb(15 23 42 / 0.12);
+  --shadow-modal: 0 16px 40px rgb(15 23 42 / 0.16);
+  --backdrop: rgb(15 23 42 / 0.35);
+
+  /* status colors need more contrast on white */
+  --danger: #d14352;
+  --danger-hover: #b23544;
+  --ok: #3a9e5f;
+  --warn: #b7791f;
+
+  --glow: rgb(63 111 232 / 0.06);
+  --nav-bg: rgb(255 255 255 / 0.85);
+}

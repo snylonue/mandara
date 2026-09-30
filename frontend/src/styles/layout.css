@@ -1,0 +1,142 @@
+.app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---- nav ---- */
+.nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-3) var(--space-5);
+  background: var(--nav-bg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: var(--z-nav);
+}
+
+/* subtle lift once the page is scrolled */
+.nav.scrolled {
+  box-shadow: var(--shadow-card);
+}
+
+.nav-left {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: 700;
+  font-size: var(--fs-lg);
+  color: var(--text-1);
+  text-decoration: none;
+}
+
+.brand-mark {
+  color: var(--accent);
+}
+
+.nav-items {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.nav-item {
+  color: var(--text-2);
+  text-decoration: none;
+  font-size: var(--fs-md);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-pill);
+  transition: color var(--dur), background-color var(--dur);
+}
+
+.nav-item:hover {
+  color: var(--text-1);
+}
+
+.nav-item.active {
+  color: var(--accent);
+  background: var(--accent-dim);
+  font-weight: 600;
+}
+
+.nav-right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+/* round icon button (theme toggle) */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 50%;
+}
+
+.user-menu {
+  position: relative;
+}
+
+.user-menu-btn {
+  background: none;
+  border-color: transparent;
+  color: var(--text-1);
+  font-weight: 600;
+}
+
+.user-menu-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + var(--space-2));
+  z-index: var(--z-popover);
+  min-width: 140px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-pop);
+  overflow: hidden;
+}
+
+.user-menu-panel button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  border: none;
+  border-radius: 0;
+  background: none;
+  text-align: left;
+}
+
+.username {
+  color: var(--text-2);
+  font-size: var(--fs-md);
+}
+
+.content {
+  flex: 1;
+  width: 100%;
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 24px 16px 64px;
+}
+
+/* grid pages (library / series) use the full width */
+.content:has(.book-grid),
+.content:has(.shelf-page) {
+  max-width: 1600px;
+}

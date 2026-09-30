@@ -1,0 +1,402 @@
+/* ---- book & series detail (hero layout) ---- */
+.page-back {
+  margin-bottom: var(--space-4);
+}
+
+.detail-hero {
+  position: relative;
+  display: flex;
+  gap: var(--space-5);
+  margin-bottom: var(--space-5);
+}
+
+/* Optional blurred cover backdrop behind a hero (series page). It should
+   read as a glow, so every edge fades out: the block outlines no
+   rectangle against the flat page (its top used to cut a hard line just
+   under the 书架 back link). */
+.detail-hero-bg {
+  position: absolute;
+  inset: -24px -16px 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  mask-image:
+    linear-gradient(to bottom, transparent, #000 var(--space-5), #000 40%, transparent),
+    linear-gradient(
+      to right,
+      transparent,
+      #000 56px,
+      #000 calc(100% - 56px),
+      transparent
+    );
+  mask-composite: intersect;
+}
+
+.detail-hero-bg img,
+.detail-hero-bg .book-cover-fallback {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: blur(40px) saturate(1.2);
+  opacity: 0.35;
+  transform: scale(1.1);
+}
+
+.detail-hero-inner {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  gap: var(--space-5);
+  width: 100%;
+  min-width: 0;
+}
+
+.detail-cover {
+  width: 176px;
+  flex-shrink: 0;
+  aspect-ratio: 2 / 3;
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--surface-2);
+  box-shadow:
+    var(--shadow-modal),
+    0 0 0 1px var(--border);
+}
+
+.detail-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.detail-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.detail-info h1 {
+  font-size: var(--fs-3xl);
+  line-height: 1.25;
+  margin: 0;
+}
+
+.detail-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  color: var(--text-2);
+  font-size: var(--fs-md);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-sm);
+  padding: 3px 12px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+a.chip:hover {
+  border-color: var(--accent);
+}
+
+.detail-desc {
+  color: var(--text-1);
+  opacity: 0.82;
+  margin: var(--space-1) 0 0;
+  font-size: var(--fs-md);
+  display: -webkit-box;
+  -webkit-line-clamp: 5;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.detail-desc.expanded {
+  display: block;
+}
+
+.detail-desc-toggle {
+  align-self: flex-start;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  transform: none;
+}
+
+.detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: auto;
+  padding-top: var(--space-3);
+}
+
+.detail-section {
+  margin-bottom: var(--space-5);
+}
+
+.detail-section > h2 {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: var(--space-3);
+}
+
+.detail-section > h2 .count {
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  font-weight: 400;
+}
+
+/* one file edition row */
+.file-card {
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-3);
+  transition: border-color var(--dur);
+}
+
+.file-card:hover {
+  border-color: var(--border-strong);
+}
+
+.file-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.file-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.file-label {
+  font-weight: 600;
+  color: var(--text-1);
+  text-decoration: none;
+  font-size: var(--fs-lg);
+}
+
+.file-label:hover {
+  color: var(--accent);
+}
+
+.fmt-badge {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  border-radius: var(--radius-sm);
+  padding: 1px 7px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-2);
+}
+
+.fmt-epub {
+  color: var(--ok);
+  border-color: var(--ok-line);
+  background: var(--ok-dim);
+}
+
+.file-sub {
+  margin-top: var(--space-1);
+}
+
+.row-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  white-space: nowrap;
+}
+
+/* compact action buttons usable on <button> and <a> */
+.mini-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 11px;
+  font-size: var(--fs-sm);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-1);
+  cursor: pointer;
+  text-decoration: none;
+  transition: border-color var(--dur), color var(--dur), background-color var(--dur);
+}
+
+.mini-btn:hover {
+  border-color: var(--accent);
+  color: var(--text-1);
+}
+
+.mini-btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+}
+
+.mini-btn.primary:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+  color: var(--on-accent);
+}
+
+.mini-btn.danger {
+  color: var(--danger);
+}
+
+.mini-btn.danger:hover {
+  border-color: var(--danger);
+  background: var(--danger-dim);
+}
+
+/* attach / share panels under a section heading */
+.panel-box {
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-3) var(--space-4);
+}
+
+.inline-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.inline-form > input[type="text"],
+.inline-form > input:not([type]) {
+  flex: 1;
+  min-width: 180px;
+}
+
+.share-box {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  background: var(--bg);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-3);
+  margin-top: var(--space-3);
+}
+
+.share-box code {
+  flex: 1;
+  min-width: 200px;
+  color: var(--accent);
+  overflow-wrap: anywhere;
+  font-size: var(--fs-sm);
+}
+
+@media (max-width: 640px) {
+  .detail-hero {
+    flex-direction: column;
+  }
+
+  .detail-hero-inner {
+    flex-direction: column;
+  }
+
+  .detail-cover {
+    width: 144px;
+  }
+}
+
+.sessions {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-md);
+}
+
+.sessions th,
+.sessions td {
+  text-align: left;
+  padding: 8px 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.strong {
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+/* generic horizontal field row */
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.row > select,
+.row > input {
+  min-width: 0;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.radio {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--fs-md);
+  cursor: pointer;
+}
+
+.radio input {
+  accent-color: var(--accent);
+}
+
+.file-picker {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  color: var(--text-2);
+  font-size: var(--fs-md);
+  cursor: pointer;
+  transition: border-color var(--dur), color var(--dur);
+}
+
+.file-picker:hover {
+  border-color: var(--accent);
+  color: var(--text-1);
+}

@@ -1,0 +1,182 @@
+/* ---- share ---- */
+.share-snapshot {
+  border-color: var(--accent);
+}
+
+.share-snapshot h2 {
+  margin-bottom: 6px;
+}
+/* ---- plugin source browser / admin ---- */
+
+.source-search {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.source-results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 22rem;
+  overflow: auto;
+  border-top: 1px solid var(--border);
+}
+
+.source-result {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-1);
+  border-bottom: 1px solid var(--border);
+}
+
+.config-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+}
+
+/* ---- series page ---------------------------------------------------- */
+
+ /* 卷 number / volume-count pills (list rows, detail meta) */
+.tag-volume {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  border-radius: var(--radius-pill);
+  padding: 2px var(--space-2);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.series-card-actions {
+  /* hover-revealed overlay on top of the cover; the card itself stays a link */
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  z-index: 2;
+  display: flex;
+  gap: var(--space-1);
+  opacity: 0;
+  transition: opacity var(--dur);
+}
+
+.book-card:hover .series-card-actions,
+.book-card:focus-within .series-card-actions {
+  opacity: 1;
+}
+
+/* read volume: dimmed cover, the progress bar stays at full strength */
+.book-card--finished .book-cover {
+  opacity: 0.55;
+}
+
+/* volume with no readable file */
+.book-card-muted {
+  opacity: 0.6;
+}
+
+.picker-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 18rem;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.picker-list li {
+  border-bottom: 1px solid var(--border);
+}
+
+.picker-list li:last-child {
+  border-bottom: none;
+}
+
+.picker-list label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  cursor: pointer;
+}
+
+/* Per-content-item rows in the add dialog: name/source + per-item file
+   settings (visibility + label). */
+.file-item-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-2) 0;
+  flex-wrap: wrap;
+}
+
+.file-item-head .strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.item-settings {
+  padding: var(--space-1) var(--space-2) var(--space-2);
+}
+
+.item-settings select,
+.item-settings input {
+  min-width: 0;
+  flex: 1;
+}
+
+/* ---- extended metadata (docs/metadata-ext-design.md) -------------------- */
+
+.ext-table {
+  margin: var(--space-1) 0 0;
+  border-collapse: collapse;
+  font-size: var(--fs-md);
+}
+
+.ext-table th {
+  color: var(--text-2);
+  font-weight: 500;
+  text-align: left;
+  padding: 2px 12px 2px 0;
+  white-space: nowrap;
+  vertical-align: top;
+}
+
+.ext-table td {
+  padding: 2px 0;
+  color: var(--text-1);
+}
+
+.detail-info .ext-table th::after {
+  content: "：";
+}
+
+/* compact two-column grid of ext inputs inside dialogs */
+.ext-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: var(--space-2);
+}
+
+.ext-form-grid input {
+  width: 100%;
+}
+
+.tag.ext-status-ongoing {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.tag.ext-status-completed {
+  border-color: var(--ok);
+  color: var(--ok);
+}

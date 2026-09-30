@@ -1,0 +1,236 @@
+/* ---- common ---- */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  margin: 12px 0;
+}
+
+
+
+.hint {
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}
+
+.center {
+  text-align: center;
+}
+
+.error {
+  background: var(--danger-dim);
+  border: 1px solid var(--danger-line);
+  color: var(--danger);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  margin: 10px 0;
+}
+
+.page-loading {
+  color: var(--text-2);
+  text-align: center;
+  padding: 60px;
+}
+
+/* ---- modal ---- */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  background: var(--backdrop);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 6vh var(--space-4) var(--space-5);
+  overflow-y: auto;
+}
+
+.modal-panel {
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-modal);
+  width: 100%;
+  max-width: 520px;
+  animation: modal-in var(--dur) ease-out;
+}
+
+.modal-panel.modal-wide {
+  max-width: 720px;
+}
+
+@keyframes modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-4) 0;
+}
+
+.modal-head h2 {
+  margin: 0;
+}
+
+.modal-body {
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.modal-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-section:last-of-type {
+  border-bottom: none;
+}
+
+.modal-section h3 {
+  margin: 0;
+  color: var(--text-2);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: var(--fs-xs);
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: var(--fs-md);
+  padding: 2px 6px;
+  text-decoration: none;
+  transform: none;
+}
+
+.link-btn.danger {
+  color: var(--danger);
+}
+
+/* ---- toasts ---- */
+.toast-stack {
+  position: fixed;
+  top: calc(var(--space-4) + var(--nav-h));
+  right: var(--space-4);
+  z-index: var(--z-toast);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-width: min(360px, calc(100vw - 32px));
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-left-width: 3px;
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-pop);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--fs-md);
+  animation: toast-in 0.18s ease-out;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.toast-success {
+  border-left-color: var(--ok);
+}
+
+.toast-error {
+  border-left-color: var(--danger);
+}
+
+.toast-warning {
+  border-left-color: var(--warn);
+}
+
+/* ---- buttons: primary / default / ghost / danger × md / sm ---- */
+
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+}
+
+button.primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+  color: var(--on-accent);
+}
+
+button.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--accent);
+}
+
+button.ghost:hover:not(:disabled) {
+  border-color: var(--border);
+}
+
+/* ghost button that reads as destructive (text-only danger) */
+button.ghost.danger-text {
+  color: var(--danger);
+}
+
+button.ghost.danger-text:hover:not(:disabled) {
+  border-color: var(--danger);
+}
+
+button.danger {
+  background: var(--danger-dim);
+  border-color: var(--danger-line);
+  color: var(--danger);
+}
+
+button.danger:hover:not(:disabled) {
+  background: var(--danger-dim-hover);
+  border-color: var(--danger);
+  color: var(--danger-hover);
+}
+
+button.sm {
+  padding: 4px 10px;
+  font-size: var(--fs-sm);
+  border-radius: var(--radius-sm);
+}
