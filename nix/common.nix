@@ -5,11 +5,11 @@
 {
   lib,
   # Repository root.
-  src,
+  repoRoot,
 }:
 
 let
-  workspace = builtins.fromTOML (builtins.readFile (src + "/Cargo.toml"));
+  workspace = builtins.fromTOML (builtins.readFile (repoRoot + "/Cargo.toml"));
 in
 {
   version = workspace.workspace.package.version;
@@ -48,13 +48,13 @@ in
   # Source of the Rust builds: only the cargo workspace (the manifests plus
   # the member crates), so touching docs, the frontend or these nix
   # expressions never invalidates a Rust build.
-  rustSource = lib.fileset.toSource {
-    root = src;
+  src = lib.fileset.toSource {
+    root = repoRoot;
     fileset = lib.fileset.unions [
-      (src + "/Cargo.toml")
-      (src + "/Cargo.lock")
-      (src + "/crates")
-      (src + "/plugins")
+      (repoRoot + "/Cargo.toml")
+      (repoRoot + "/Cargo.lock")
+      (repoRoot + "/crates")
+      (repoRoot + "/plugins")
     ];
   };
 
@@ -62,7 +62,7 @@ in
   # here (each is a cdylib built for wasm32-unknown-unknown).
   pluginCrates = lib.mapAttrsToList (name: _: name) (
     lib.filterAttrs (name: type: type == "directory" && lib.hasSuffix "-plugin" name) (
-      builtins.readDir (src + "/plugins")
+      builtins.readDir (repoRoot + "/plugins")
     )
   );
 }

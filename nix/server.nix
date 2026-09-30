@@ -5,14 +5,13 @@
   rustPlatform,
   version,
   meta,
-  rustSource,
+  src,
 }:
 
 rustPlatform.buildRustPackage {
   pname = "mandara-server";
-  inherit version;
-  src = rustSource;
-  cargoLock.lockFile = rustSource + "/Cargo.lock";
+  inherit version src;
+  cargoLock.lockFile = src + "/Cargo.lock";
   # Only the server: the other workspace members are wasm plugin guests.
   cargoBuildFlags = [
     "-p"

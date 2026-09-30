@@ -8,7 +8,7 @@
   wasmTools,
   version,
   meta,
-  rustSource,
+  src,
   # Crate name, e.g. `hello-plugin`.
   crate,
 }:
@@ -20,9 +20,8 @@ let
 in
 buildRustPackage {
   pname = "mandara-plugin-${name}";
-  inherit version;
-  src = rustSource;
-  cargoLock.lockFile = rustSource + "/Cargo.lock";
+  inherit version src;
+  cargoLock.lockFile = src + "/Cargo.lock";
   nativeBuildInputs = [ wasmTools ];
   doCheck = false;
 

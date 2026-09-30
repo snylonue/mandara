@@ -154,7 +154,7 @@ services.mandara.package =
 ```
 
 or an individual package: `pkgs.mandara.override { frontend = …; }`,
-`pkgs.mandara-server.override { rustSource = …; }`. Plugins are always
+`pkgs.mandara-server.override { src = …; }`. Plugins are always
 selected separately through {option}`services.mandara.plugins`.
 
 What the module does:

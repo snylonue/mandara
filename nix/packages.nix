@@ -8,7 +8,10 @@
 }:
 
 let
-  common = import ./common.nix { inherit lib src; };
+  common = import ./common.nix {
+    inherit lib;
+    repoRoot = src;
+  };
 
   scope = lib.makeScope pkgs.newScope (
     self:
@@ -19,7 +22,7 @@ let
         crate:
         callPackage ./plugin.nix {
           inherit crate;
-          inherit (common) version meta rustSource;
+          inherit (common) version meta src;
           inherit (self.wasmRustPlatform) buildRustPackage;
           wasmTools = pkgs.wasm-tools;
         };
@@ -55,7 +58,7 @@ let
       };
 
       server = callPackage ./server.nix {
-        inherit (common) version meta rustSource;
+        inherit (common) version meta src;
       };
 
       mandara = callPackage ./mandara.nix {
