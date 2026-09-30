@@ -70,6 +70,14 @@
 
   --radius: 10px;
   --radius-sm: 6px;
+
+  /* z-index scale */
+  --z-sticky: 40;
+  --z-nav: 50;
+  --z-popover: 60;
+  --z-modal: 100;
+  --z-drawer: 120;
+  --z-toast: 200;
 }
 
 /* Light theme — same token names, different values. */
@@ -134,7 +142,7 @@ body {
   border-bottom: 1px solid var(--border);
   position: sticky;
   top: 0;
-  z-index: 10;
+  z-index: var(--z-nav);
 }
 
 /* subtle lift once the page is scrolled */
@@ -220,7 +228,7 @@ body {
   position: absolute;
   right: 0;
   top: calc(100% + var(--space-2));
-  z-index: 60;
+  z-index: var(--z-popover);
   min-width: 140px;
   background: var(--surface-raised);
   border: 1px solid var(--border-strong);
@@ -318,7 +326,7 @@ a {
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 100;
+  z-index: var(--z-modal);
   background: rgba(5, 8, 14, 0.7);
   backdrop-filter: blur(2px);
   display: flex;
@@ -417,7 +425,7 @@ a {
   position: fixed;
   top: calc(var(--space-4) + 53px);
   right: var(--space-4);
-  z-index: 200;
+  z-index: var(--z-toast);
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
@@ -1544,7 +1552,7 @@ a.chip:hover {
 .reader-topbar {
   position: sticky;
   top: var(--nav-h);
-  z-index: 40;
+  z-index: var(--z-sticky);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1598,7 +1606,7 @@ a.chip:hover {
 .toc-drawer-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 120;
+  z-index: var(--z-drawer);
   background: rgba(5, 8, 14, 0.6);
 }
 
@@ -1607,7 +1615,7 @@ a.chip:hover {
   top: 0;
   left: 0;
   bottom: 0;
-  z-index: 121;
+  z-index: calc(var(--z-drawer) + 1);
   width: min(360px, 86vw);
   background: var(--surface-raised);
   border-right: 1px solid var(--border-strong);
@@ -1649,7 +1657,7 @@ a.chip:hover {
   position: absolute;
   top: calc(100% + var(--space-2));
   right: 0;
-  z-index: 50;
+  z-index: var(--z-popover);
   width: min(320px, 92vw);
   background: var(--surface-raised);
   border: 1px solid var(--border-strong);
@@ -1705,7 +1713,7 @@ a.chip:hover {
 }
 
 .seg button.active,
-button.active {
+.reader-topbar .sm.active {
   background: var(--accent);
   color: #fff;
 }
@@ -1761,7 +1769,7 @@ button.active {
 .toc-link.current {
   color: var(--accent);
   font-weight: 700;
-  background: rgba(91, 140, 255, 0.12);
+  background: var(--accent-dim);
 }
 
 .toc-group {
