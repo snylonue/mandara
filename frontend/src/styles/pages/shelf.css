@@ -188,13 +188,6 @@
   box-shadow: var(--shadow-cover-hover);
 }
 
-.book-cover img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-}
-
 /* coverless placeholder: same title → same hue, never an empty box */
 .book-cover-fallback {
   width: 100%;
@@ -289,13 +282,7 @@
   right: 0;
   bottom: 0;
   height: 3px;
-  background: rgb(0 0 0 / 0.4);
-}
-
-.cover-progress i {
-  display: block;
-  height: 100%;
-  background: var(--accent);
+  background: var(--overlay);
 }
 
 .book-card-body {
@@ -357,13 +344,6 @@
   box-shadow: var(--ring-cover);
 }
 
-.shelf-row-cover img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-}
-
 .shelf-row-cover .book-cover-fallback span {
   font-size: var(--fs-lg);
 }
@@ -387,12 +367,6 @@
   left: 0;
   bottom: -1px;
   height: 2px;
-}
-
-.shelf-row-progress i {
-  display: block;
-  height: 100%;
-  background: var(--accent);
 }
 
 /* skeleton loaders */

@@ -1,13 +1,31 @@
-/* ---- common ---- */
-.card {
+/* ---- surfaces: .card, .panel-box and .file-card share one shell ---- */
+.card,
+.panel-box,
+.file-card {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
+}
+
+.card {
   padding: 20px;
   margin: 12px 0;
 }
 
+.panel-box,
+.file-card {
+  background: var(--surface-raised);
+  padding: var(--space-3) var(--space-4);
+}
 
+.file-card {
+  margin-bottom: var(--space-3);
+  transition: border-color var(--dur);
+}
+
+.file-card:hover {
+  border-color: var(--border-strong);
+}
 
 .hint {
   color: var(--text-2);
@@ -47,9 +65,14 @@
   overflow-y: auto;
 }
 
-.modal-panel {
+/* shared surface for floating layers (menus, popovers, toasts, drawers) */
+.popover {
   background: var(--surface-raised);
   border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-pop);
+}
+
+.modal-panel {
   border-radius: var(--radius);
   box-shadow: var(--shadow-modal);
   width: 100%;
@@ -134,11 +157,8 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
-  background: var(--surface-raised);
-  border: 1px solid var(--border-strong);
   border-left-width: 3px;
   border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-pop);
   padding: var(--space-2) var(--space-3);
   font-size: var(--fs-md);
   animation: toast-in 0.18s ease-out;
@@ -351,5 +371,22 @@ a.tag:hover {
 .seg.solid > button.active {
   background: var(--accent);
   color: var(--on-accent);
+}
+
+/* cover images share one fill rule */
+:is(.book-cover, .shelf-row-cover, .detail-cover) img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* progress fills share one rule; the track and position stay per component */
+.cover-progress i,
+.shelf-row-progress i,
+.progress-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
 }
 

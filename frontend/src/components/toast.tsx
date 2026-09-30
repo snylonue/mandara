@@ -52,7 +52,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       {children}
       <div className="toast-stack" role="status" aria-live="polite">
         {items.map((t) => (
-          <div key={t.id} className={`toast toast-${t.kind}`}>
+          <div key={t.id} className={`popover toast toast-${t.kind}`}>
             <span>{t.message}</span>
             <button
               className="btn ghost sm"

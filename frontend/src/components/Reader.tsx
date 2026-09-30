@@ -199,7 +199,7 @@ export function Reader({
       {tocOpen && (
         <>
           <div className="toc-drawer-backdrop" onClick={() => setTocOpen(false)} />
-          <nav className="toc-drawer" aria-label={t("reader.toc")}>
+          <nav className="popover toc-drawer" aria-label={t("reader.toc")}>
             <div className="toc-drawer-head">
               <h2>{t("reader.toc")}</h2>
               <button className="btn ghost sm" onClick={() => setTocOpen(false)} aria-label={t("common.close")}>

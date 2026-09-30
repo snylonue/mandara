@@ -75,7 +75,7 @@ export function Modal({
     >
       <div
         ref={panelRef}
-        className={`modal-panel${wide ? " modal-wide" : ""}`}
+        className={`popover modal-panel${wide ? " modal-wide" : ""}`}
         role="dialog"
         aria-modal="true"
         aria-label={title}

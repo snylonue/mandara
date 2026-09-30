@@ -110,7 +110,7 @@ export default function App() {
                   {user.username}
                 </button>
                 {menuOpen && (
-                  <div className="user-menu-panel">
+                  <div className="popover user-menu-panel">
                     <button
                       onClick={() => {
                         setMenuOpen(false);

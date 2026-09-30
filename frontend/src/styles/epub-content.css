@@ -5,11 +5,6 @@
   overflow-wrap: anywhere;
 }
 
-.epub-content figure {
-  margin: 1em 0;
-  text-align: center;
-}
-
 .epub-content p,
 .epub-content div {
   margin: 0 0 0.8em;

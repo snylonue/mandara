@@ -60,7 +60,7 @@ export function ReaderSettingsPanel({
   const patch = (p: Partial<ReaderSettings>) => onChange({ ...settings, ...p });
 
   return (
-    <div className="reader-settings" onClick={(e) => e.stopPropagation()}>
+    <div className="popover reader-settings" onClick={(e) => e.stopPropagation()}>
       <div className="reader-settings-head">
         <span>{t("reader.settings")}</span>
         <button className="btn ghost sm" onClick={onClose} aria-label={t("common.close")}>
