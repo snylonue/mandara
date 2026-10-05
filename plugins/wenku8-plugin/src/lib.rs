@@ -18,14 +18,17 @@
 //!   original position** by default (`end`), or moves them to the
 //!   volume front like the physical book / [linovelib2epub's
 //!   Wenku8Spider] (`front`), or drops them (`skip`) — configurable.
-//! - Search, listings and the txt/epub downloads are all **login-walled**
-//!   (guests get redirects to login.php / Cloudflare); only `book/` and
-//!   `reader.php` work anonymously. So this plugin does **not** declare
-//!   `search` — books are looked up by their numeric id (the number in
-//!   the wenku8 URL, e.g. `3617` for `/book/3617.htm`) via the library
-//!   source browser's manual-id entry.
+//! - Search and listings are login-walled. The official whole-book endpoint
+//!   is `modules/article/packshow.php?id={id}&type=txtfull`; it can be used
+//!   when the instance has a browser-verified `Cookie`. Without that cookie
+//!   the endpoint returns a login/Cloudflare HTML page, which is rejected
+//!   rather than stored as a book file. This plugin does **not** declare
+//!   `search` — books are looked up by their numeric id (the number in the
+//!   wenku8 URL, e.g. `3617` for `/book/3617.htm`) via the library source
+//!   browser's manual-id entry.
 //!
-//! Capabilities: `["lookup", "content"]` (metadata + chapter mode).
+//! Capabilities: `["lookup", "content", "book-file"]` (metadata, chapter
+//! fallback, and official full-TXT acquisition).
 //! `get-chapter` re-fetches the (small) TOC to map the host's index to a
 //! concrete `cid` — the guest is stateless, so the map can't be cached;
 //! the host's DB is the cache, so this happens once per chapter at most.
@@ -52,7 +55,7 @@ const DEFAULT_BASE_URL: &str = "https://www.wenku8.net";
 const DEFAULT_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 
 /// Config schema field order — the host injects values in this order.
-const FIELDS: [&str; 3] = ["base-url", "referer", "illustration-placement"];
+const FIELDS: [&str; 4] = ["base-url", "referer", "cookie", "illustration-placement"];
 
 /// fn values() reads the injected config once per call.
 fn values() -> Vec<ConfigValue> {
@@ -95,8 +98,8 @@ fn log_error(context: &str, url: &str, err: &str) {
 // HTTP + decoding
 // ---------------------------------------------------------------------------
 
-/// One remote `http.fetch` with a browser UA and an optional same-host
-/// `Referer` (wenku8's reader.php returns 403 without one).
+/// One remote `http.fetch` with a browser UA, optional same-host `Referer`,
+/// and the configured browser `Cookie` for authenticated official downloads.
 ///
 /// Transient problems (transport errors, 5xx, anti-bot 403 spikes) are
 /// retried once — see the retry guidance in docs/plugin-http-api-design.md
@@ -113,6 +116,13 @@ fn http_get(url: &str, referer: &str) -> Result<(u16, Vec<u8>), String> {
             headers.push(mandara::plugin::http::Header {
                 name: "Referer".into(),
                 value: referer.into(),
+            });
+        }
+        let cookie = config_string("cookie", "");
+        if !cookie.is_empty() {
+            headers.push(mandara::plugin::http::Header {
+                name: "Cookie".into(),
+                value: cookie,
             });
         }
         let request = mandara::plugin::http::Request {
@@ -523,6 +533,19 @@ fn toc_url(base: &str, book: &str) -> String {
 
 fn chapter_url(base: &str, book: &str, cid: u32) -> String {
     format!("{base}/modules/article/reader.php?aid={book}&cid={cid}")
+}
+
+fn download_url(base: &str, book: &str) -> String {
+    format!(
+        "{}/modules/article/packshow.php?id={book}&type=txtfull",
+        base.trim_end_matches('/')
+    )
+}
+
+fn looks_like_html(bytes: &[u8]) -> bool {
+    let prefix = String::from_utf8_lossy(&bytes[..bytes.len().min(4096)]).to_ascii_lowercase();
+    let prefix = prefix.trim_start();
+    prefix.starts_with("<!doctype html") || prefix.starts_with("<html") || prefix.contains("<html")
 }
 
 /// Referer to send with wenku8 requests: the configured override, or a
@@ -966,6 +989,14 @@ impl Guest for Wenku8Plugin {
                 hint: Some("留空 = 自动用同站点书页当 Referer（wenku8 校验，缺失会 403）".into()),
             },
             ConfigField {
+                key: "cookie".into(),
+                label: "登录 Cookie".into(),
+                kind: mandara::plugin::config::ConfigKind::Text,
+                default: None,
+                required: false,
+                hint: Some("可选：浏览器通过验证后复制 www.wenku8.net 的完整 Cookie；官方 TXT 下载需要登录态".into()),
+            },
+            ConfigField {
                 key: "illustration-placement".into(),
                 label: "插画章节位置".into(),
                 kind: mandara::plugin::config::ConfigKind::EnumOptions(vec![
@@ -983,9 +1014,9 @@ impl Guest for Wenku8Plugin {
     }
 
     fn capabilities() -> Vec<String> {
-        // lookup + chapter-mode content. No `search`: wenku8's search and
-        // listings are login-walled; books are materialized by id.
-        vec!["lookup".into(), "content".into()]
+        // The official full-TXT endpoint is available when the instance has
+        // a browser-verified cookie; chapter mode remains the fallback.
+        vec!["lookup".into(), "content".into(), "book-file".into()]
     }
 
     fn declare() -> Option<Vec<DeclaredBook>> {
@@ -1089,8 +1120,37 @@ impl Guest for Wenku8Plugin {
         None
     }
 
-    fn get_book_file(_book_id: String) -> Option<BookFile> {
-        None // wenku8 txt/epub downloads require login; chapter mode only
+    fn get_book_file(book_id: String) -> Option<BookFile> {
+        if book_id.is_empty() || !book_id.bytes().all(|byte| byte.is_ascii_digit()) {
+            mandara::plugin::store::log("wenku8 book-file requires a numeric book id");
+            return None;
+        }
+
+        let base = config_string("base-url", DEFAULT_BASE_URL);
+        let url = download_url(&base, &book_id);
+        match http_get(&url, &referer_for(&base, &book_id)) {
+            Ok((200, bytes)) if !bytes.is_empty() && !looks_like_html(&bytes) => Some(BookFile {
+                filename: format!("wenku8-{book_id}.txt"),
+                mime: "text/plain".into(),
+                bytes,
+            }),
+            Ok((200, _)) => {
+                log_error(
+                    "book file",
+                    &url,
+                    "received HTML instead of TXT; configure a browser-verified Cookie",
+                );
+                None
+            }
+            Ok((status, _)) => {
+                log_error("book file", &url, &format!("status {status}"));
+                None
+            }
+            Err(error) => {
+                log_error("book file", &url, &error);
+                None
+            }
+        }
     }
 }
 
@@ -1107,6 +1167,27 @@ mod tests {
         assert_eq!(sniff_mime(b"GIF89a"), Some("image/gif"));
         assert_eq!(sniff_mime(b"<html>"), None);
         assert_eq!(sniff_mime(&[]), None);
+    }
+
+    #[test]
+    fn builds_official_full_txt_url() {
+        assert_eq!(
+            download_url("https://www.wenku8.net/", "3617"),
+            "https://www.wenku8.net/modules/article/packshow.php?id=3617&type=txtfull"
+        );
+    }
+
+    #[test]
+    fn rejects_html_download_responses() {
+        assert!(looks_like_html(b"  <!DOCTYPE html><html>"));
+        assert!(looks_like_html(b"<html><body>login</body></html>"));
+        assert!(!looks_like_html("第一卷\n第一章".as_bytes()));
+    }
+
+    #[test]
+    fn accepts_binary_or_text_download_responses() {
+        assert!(!looks_like_html(&[0xFF, 0xFE, b'a', 0]));
+        assert!(!looks_like_html(b"\xEF\xBB\xBFtitle\nchapter"));
     }
 
     #[test]
