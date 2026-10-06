@@ -59,6 +59,7 @@ fn router() -> Box<common::HttpHandler> {
                 "/status/404" => (404, vec![], b"not found".to_vec()),
                 "/status/500" => (500, vec![], b"boom".to_vec()),
                 "/redirect" => (302, vec![("Location".into(), "/hello".into())], Vec::new()),
+                "/redirect-cookie" => (302, vec![("Location".into(), "/echo".into())], Vec::new()),
                 "/loop" => (302, vec![("Location".into(), "/loop".into())], Vec::new()),
                 "/echo" => {
                     // Reflect method + received headers as JSON, so tests
@@ -178,6 +179,21 @@ fn redirect_chains_are_followed_and_reported() {
     let resp = get(&server.url("/redirect")).expect("redirects followed");
     assert_eq!(resp.body, b"hello world");
     assert!(resp.final_url.ends_with("/hello"));
+}
+
+#[test]
+fn explicit_cookie_survives_same_host_redirect() {
+    let server = common::MockServer::start(router());
+    let resp = request(
+        "GET",
+        &server.url("/redirect-cookie"),
+        &[("Cookie", "PHPSESSID=verified")],
+        None,
+    )
+    .expect("redirect with explicit cookie follows");
+    let body = String::from_utf8_lossy(&resp.body);
+    assert!(body.contains("\"cookie\": \"PHPSESSID=verified\""));
+    assert!(resp.final_url.ends_with("/echo"));
 }
 
 #[test]

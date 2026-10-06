@@ -10,8 +10,9 @@
 //! - **Size**: response bodies are capped
 //!   (`MANDARA_PLUGIN_FETCH_MAX_BYTES`, default 64 MiB); oversized
 //!   responses abort with `size-limit` and no partial data.
-//! - **Redirects**: at most 5 hops, curl-style method downgrade on
-//!   301–303 (handled by ureq).
+//! - **Redirects**: at most 5 hops, with curl-style method downgrade on
+//!   301–303. Explicit Cookie/authorization headers are retained only for
+//!   same-origin redirects.
 //! - **Proxy**: outbound requests honor the standard environment
 //!   variables (`ALL_PROXY` / `HTTPS_PROXY` / `HTTP_PROXY`; `NO_PROXY`
 //!   exempts hosts) — ureq 3's default `proxy-from-env` behavior. Useful
@@ -26,6 +27,7 @@ use std::time::Duration;
 
 use tracing::{info, warn};
 use ureq::http::{HeaderName, HeaderValue};
+use url::Url;
 
 /// Maximum number of redirect hops per `fetch` call.
 pub const MAX_REDIRECTS: u32 = 5;
@@ -143,6 +145,28 @@ fn log_url(url: &str) -> String {
     url.split(['?', '#']).next().unwrap_or(url).to_string()
 }
 
+fn resolve_redirect(from: &str, location: &str) -> Result<(String, bool), FetchError> {
+    let base = Url::parse(from).map_err(|e| FetchError::InvalidUrl(e.to_string()))?;
+    let next = base
+        .join(location)
+        .map_err(|e| FetchError::InvalidUrl(e.to_string()))?;
+    let same_origin = base.scheme() == next.scheme()
+        && base.host_str() == next.host_str()
+        && base.port_or_known_default() == next.port_or_known_default();
+    Ok((next.into(), same_origin))
+}
+
+fn is_redirect(status: u16) -> bool {
+    matches!(status, 301 | 302 | 303 | 307 | 308)
+}
+
+fn keep_redirect_header(name: &str) -> bool {
+    !matches!(
+        name.to_ascii_lowercase().as_str(),
+        "cookie" | "authorization" | "proxy-authorization" | "referer"
+    )
+}
+
 /// Blocking `fetch`. Runs inline on the calling thread; the server calls
 /// plugins inside `spawn_blocking`, so a slow source never stalls a tokio
 /// worker.
@@ -161,9 +185,9 @@ pub fn fetch(policy: &FetchPolicy, request: FetchRequest) -> Result<FetchRespons
     // HTTP_PROXY + NO_PROXY) is ureq 3's default agent behavior.
     let agent = ureq::Agent::new_with_config(
         ureq::Agent::config_builder()
-            .max_redirects(MAX_REDIRECTS)
-            // Exceeding the hop cap is an error, not "last response".
-            .max_redirects_will_error(true)
+            // Redirects are followed below so explicit same-origin Cookie headers
+            // survive the hop; ureq intentionally strips them automatically.
+            .max_redirects(0)
             .timeout_global(Some(Duration::from_millis(capped_timeout)))
             // 4xx/5xx are plain responses for plugins, never errors.
             .http_status_as_error(false)
@@ -193,20 +217,66 @@ pub fn fetch(policy: &FetchPolicy, request: FetchRequest) -> Result<FetchRespons
     }
 
     let send = |with_bytes: bool| -> Result<FetchResponse, FetchError> {
-        let mut builder = ureq::http::Request::builder()
-            .method(method.as_str())
-            .uri(&request.url);
-        for (name, value) in &headers {
-            builder = builder.header(name, value);
-        }
-        // Each branch keeps its own concrete body type (`()` vs `&[u8]`).
-        let result = if with_bytes {
-            let bytes = request.body.as_deref().unwrap_or_default();
-            agent.run(builder.body(bytes).map_err(invalid_request)?)
+        let mut current_url = request.url.clone();
+        let mut current_method = method.clone();
+        let mut current_body = if with_bytes {
+            request.body.clone()
         } else {
-            agent.run(builder.body(()).map_err(invalid_request)?)
+            None
         };
-        finish(result, policy, &request.url)
+        let mut current_headers = headers.clone();
+
+        for hop in 0..=MAX_REDIRECTS {
+            let mut builder = ureq::http::Request::builder()
+                .method(current_method.as_str())
+                .uri(&current_url);
+            for (name, value) in &current_headers {
+                builder = builder.header(name, value);
+            }
+            // Each branch keeps its own concrete body type (unit vs byte slice).
+            let result = match current_body.as_deref() {
+                Some(bytes) if !bytes.is_empty() => {
+                    agent.run(builder.body(bytes).map_err(invalid_request)?)
+                }
+                _ => agent.run(builder.body(()).map_err(invalid_request)?),
+            };
+            let response = match result {
+                Ok(response) => response,
+                Err(error) => return finish(Err(error), policy, &current_url),
+            };
+
+            let status = response.status().as_u16();
+            let location = response
+                .headers()
+                .get("Location")
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned);
+            if !is_redirect(status) || location.is_none() {
+                return finish(Ok(response), policy, &current_url);
+            }
+            if hop == MAX_REDIRECTS {
+                return Err(FetchError::RedirectLimit(MAX_REDIRECTS));
+            }
+
+            let (next_url, same_origin) =
+                resolve_redirect(&current_url, location.as_deref().unwrap())?;
+            // Consume redirect bodies before issuing the next request.
+            read_body(response, policy.max_bytes)?;
+            if !same_origin {
+                current_headers.retain(|(name, _)| keep_redirect_header(name));
+            }
+            if status == 303
+                || ((status == 301 || status == 302)
+                    && current_method != "GET"
+                    && current_method != "HEAD")
+            {
+                current_method = "GET".into();
+                current_body = None;
+            }
+            current_url = next_url;
+        }
+
+        unreachable!("redirect loop returns or errors within the hop bound")
     };
 
     match &request.body {

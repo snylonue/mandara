@@ -360,13 +360,15 @@ and, when it has `lookup`, the book id).
   `get-book-file` returning the epub the source serves (file mode wins,
   chapter mode is the fallback).
 - `plugins/wenku8-plugin/` — a **real-world** source: 轻小说文库
-  (`https://www.wenku8.net/`, GBK-encoded pages). `lookup` + `content`
-  only: wenku8's search and listings are login-walled, so books are
-  materialized by their numeric id (the number in the book URL, e.g.
-  `3617`) — the library source browser's manual-id entry, and the
-  rebind dialog, support lookup-only sources. Config: `base-url`
-  (mirror-switchable), optional `referer` override, and
-  `illustration-placement` — wenku8 appends an `插图` (color plates)
+  (`https://www.wenku8.net/`, GBK-encoded pages). `lookup` + `content` +
+  `book-file`: books are materialized by their numeric id (the number in
+  the book URL, e.g. `3947`) — the library source browser's manual-id entry
+  and rebind dialog support this source. The official full-TXT endpoint may
+  require a browser-verified Cloudflare session; configure the matching
+  `user-agent` and explicit `cookie` without automating the challenge.
+  Config: `base-url` (mirror-switchable), optional `referer` override,
+  `user-agent`, `cookie`, and `illustration-placement` — wenku8 appends
+  an `插图` (color plates)
   chapter at the *end of every volume*; the plugin keeps it **in that
   original position** by default (`end`), or moves it to the volume
   front like the physical book / linovelib2epub (`front`), or drops it

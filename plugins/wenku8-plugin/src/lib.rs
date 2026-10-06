@@ -20,15 +20,17 @@
 //!   Wenku8Spider] (`front`), or drops them (`skip`) — configurable.
 //! - Search and listings are login-walled. The official whole-book endpoint
 //!   is `modules/article/packshow.php?id={id}&type=txtfull`; it can be used
-//!   when the instance has a browser-verified `Cookie`. Without that cookie
-//!   the endpoint returns a login/Cloudflare HTML page, which is rejected
+//!   when the instance has a browser-verified `Cookie` and matching browser
+//!   `User-Agent`. Without that session the endpoint returns a
+//!   login/Cloudflare HTML page, which is rejected
 //!   rather than stored as a book file. This plugin does **not** declare
 //!   `search` — books are looked up by their numeric id (the number in the
-//!   wenku8 URL, e.g. `3617` for `/book/3617.htm`) via the library source
+//!   wenku8 URL, e.g. `3947` for `/book/3947.htm`) via the library source
 //!   browser's manual-id entry.
 //!
 //! Capabilities: `["lookup", "content", "book-file"]` (metadata, chapter
-//! fallback, and official full-TXT acquisition).
+//! fallback, and official full-TXT acquisition). The optional browser UA and
+//! Cookie settings must come from the same verified browser session.
 //! `get-chapter` re-fetches the (small) TOC to map the host's index to a
 //! concrete `cid` — the guest is stateless, so the map can't be cached;
 //! the host's DB is the cache, so this happens once per chapter at most.
@@ -55,7 +57,13 @@ const DEFAULT_BASE_URL: &str = "https://www.wenku8.net";
 const DEFAULT_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 
 /// Config schema field order — the host injects values in this order.
-const FIELDS: [&str; 4] = ["base-url", "referer", "cookie", "illustration-placement"];
+const FIELDS: [&str; 5] = [
+    "base-url",
+    "referer",
+    "user-agent",
+    "cookie",
+    "illustration-placement",
+];
 
 /// fn values() reads the injected config once per call.
 fn values() -> Vec<ConfigValue> {
@@ -102,15 +110,15 @@ fn log_error(context: &str, url: &str, err: &str) {
 /// and the configured browser `Cookie` for authenticated official downloads.
 ///
 /// Transient problems (transport errors, 5xx, anti-bot 403 spikes) are
-/// retried once — see the retry guidance in docs/plugin-http-api-design.md
-/// §4.3; the call budget covers two attempts.
+/// retried up to two times — see the retry guidance in
+/// docs/plugin-http-api-design.md §4.3; the call budget covers three attempts.
 fn http_get(url: &str, referer: &str) -> Result<(u16, Vec<u8>), String> {
     let mut attempt = 0;
     loop {
         attempt += 1;
         let mut headers = vec![mandara::plugin::http::Header {
             name: "User-Agent".into(),
-            value: DEFAULT_UA.into(),
+            value: config_string("user-agent", DEFAULT_UA),
         }];
         if !referer.is_empty() {
             headers.push(mandara::plugin::http::Header {
@@ -935,14 +943,14 @@ fn parse_book_page(book: &str, html: &str) -> Option<BookEntry> {
     })
 }
 
-/// Accept only plain numeric wenku8 book ids ("3617").
+/// Accept only plain numeric wenku8 book ids (for example, "3947").
 fn normalize_book_id(id: &str) -> Option<String> {
     let t = id.trim();
     if !t.is_empty() && t.chars().all(|c| c.is_ascii_digit()) && t.len() <= 9 {
         Some(t.to_string())
     } else {
         mandara::plugin::store::log(&format!(
-            "invalid wenku8 book id `{id}` (expected the numeric id from the book URL, e.g. 3617)"
+            "invalid wenku8 book id `{id}` (expected the numeric id from the book URL, e.g. 3947)"
         ));
         None
     }
@@ -965,7 +973,7 @@ impl Guest for Wenku8Plugin {
         SourceInfo {
             kind: "manual-id".into(),
             id_kind: "numeric".into(),
-            id_hint: Some("wenku8 数字书号（如 3617）".into()),
+            id_hint: Some("wenku8 数字书号（如 3947）".into()),
             search_hint: None,
         }
     }
@@ -989,12 +997,20 @@ impl Guest for Wenku8Plugin {
                 hint: Some("留空 = 自动用同站点书页当 Referer（wenku8 校验，缺失会 403）".into()),
             },
             ConfigField {
+                key: "user-agent".into(),
+                label: "浏览器 User-Agent".into(),
+                kind: mandara::plugin::config::ConfigKind::Text,
+                default: Some(DEFAULT_UA.into()),
+                required: false,
+                hint: Some("可选：填写完成验证的浏览器 User-Agent；必须与 cf_clearance 来源浏览器一致".into()),
+            },
+            ConfigField {
                 key: "cookie".into(),
-                label: "登录 Cookie".into(),
+                label: "浏览器 Cookie".into(),
                 kind: mandara::plugin::config::ConfigKind::Text,
                 default: None,
                 required: false,
-                hint: Some("可选：浏览器通过验证后复制 www.wenku8.net 的完整 Cookie；官方 TXT 下载需要登录态".into()),
+                hint: Some("可选：浏览器通过验证后复制 www.wenku8.net 的完整 Cookie；与上面的 User-Agent 配对".into()),
             },
             ConfigField {
                 key: "illustration-placement".into(),
@@ -1172,8 +1188,8 @@ mod tests {
     #[test]
     fn builds_official_full_txt_url() {
         assert_eq!(
-            download_url("https://www.wenku8.net/", "3617"),
-            "https://www.wenku8.net/modules/article/packshow.php?id=3617&type=txtfull"
+            download_url("https://www.wenku8.net/", "3947"),
+            "https://www.wenku8.net/modules/article/packshow.php?id=3947&type=txtfull"
         );
     }
 
