@@ -37,6 +37,15 @@ const XHTML_MIMES: [&str; 2] = ["application/xhtml+xml", "text/html"];
 /// Manifest media type of an EPUB 2 NCX TOC document.
 const NCX_MIME: &str = "application/x-dtbncx+xml";
 
+struct SpineDocument {
+    spine_idx: usize,
+    resource_path: PathBuf,
+    content: String,
+    heading: Option<String>,
+    in_toc: bool,
+    text_len: usize,
+}
+
 /// Parse epub bytes into a normalized book.
 pub fn parse(bytes: &[u8]) -> Result<ParsedBook> {
     let mut doc = epub::doc::EpubDoc::from_reader(std::io::Cursor::new(bytes))
@@ -83,13 +92,12 @@ pub fn parse(bytes: &[u8]) -> Result<ParsedBook> {
         .map(|(i, (_, _, p))| (path_key(p), i))
         .collect();
 
-    let mut chapters = Vec::new();
-    let mut kept_spine = Vec::new(); // spine positions that became chapters
     // Embedded images, in first-reference order; the same container
     // resource referenced from several documents becomes one entry.
     let mut images: Vec<ParsedImage> = Vec::new();
     let mut seen_images: HashMap<String, usize> = HashMap::new();
-    for (chapter_idx, (id, mime, resource_path)) in spine.into_iter().enumerate() {
+    let mut documents = Vec::new();
+    for (spine_idx, (id, mime, resource_path)) in spine.into_iter().enumerate() {
         if !XHTML_MIMES.contains(&mime.as_str()) {
             continue;
         }
@@ -97,16 +105,6 @@ pub fn parse(bytes: &[u8]) -> Result<ParsedBook> {
             continue;
         };
         let normalized = path_key(&resource_path);
-        let in_toc = title_by_path.contains_key(&normalized);
-        let heading = extract_heading(&html);
-        // Front matter / auxiliary pages (title page, book TOC, blank
-        // sheets) are not part of the reading order: per EPUB semantics the
-        // TOC determines the chapter set. Docs without a TOC entry are
-        // kept only when they carry a real heading of their own (some
-        // sloppy books omit TOC entries for real chapters).
-        if !in_toc && heading.is_none() {
-            continue;
-        }
         let content = clean_xhtml(
             &mut doc,
             &html,
@@ -117,15 +115,47 @@ pub fn parse(bytes: &[u8]) -> Result<ParsedBook> {
         if !has_readable_content(&content) {
             continue;
         }
+        let text_len = readable_text_len(&content);
+        documents.push(SpineDocument {
+            spine_idx,
+            resource_path,
+            content,
+            heading: extract_heading(&html),
+            in_toc: title_by_path.contains_key(&normalized),
+            text_len,
+        });
+    }
 
+    // Some EPUB producers generate an NCX from footnote links instead of
+    // chapters. If those targets account for almost none of the readable
+    // text, recover the actual reading order from the OPF spine while still
+    // ignoring tiny auxiliary documents.
+    let fallback_to_spine = should_fallback_to_spine(&documents);
+    let fallback_threshold = spine_fallback_threshold(&documents);
+    let mut chapters = Vec::new();
+    let mut kept_spine = Vec::new(); // spine positions that became chapters
+    for document in documents {
+        let keep = if fallback_to_spine {
+            document.text_len >= fallback_threshold
+        } else {
+            document.in_toc || document.heading.is_some()
+        };
+        if !keep {
+            continue;
+        }
+
+        let normalized = path_key(&document.resource_path);
         let title = title_by_path
             .get(&normalized)
             .cloned()
-            .or(heading)
-            .unwrap_or_else(|| format!("第 {} 章", chapter_idx + 1));
+            .or(document.heading)
+            .unwrap_or_else(|| format!("第 {} 章", document.spine_idx + 1));
 
-        chapters.push(ParsedChapter { title, content });
-        kept_spine.push(chapter_idx);
+        chapters.push(ParsedChapter {
+            title,
+            content: document.content,
+        });
+        kept_spine.push(document.spine_idx);
     }
 
     if chapters.is_empty() {
@@ -627,14 +657,42 @@ fn extract_image<R: Read + Seek>(
     Some(format!("image:{n}"))
 }
 
+/// Count non-whitespace characters in the sanitized fragment.
+fn readable_text_len(html: &str) -> usize {
+    let frag = Html::parse_document(html);
+    frag.root_element()
+        .text()
+        .flat_map(str::chars)
+        .filter(|c| !c.is_whitespace())
+        .count()
+}
+
 /// Does the sanitized fragment carry meaningful content? Image-only pages
 /// (illustration plates — 插图/扉页) are auxiliary material, not chapters:
 /// a chapter must contain readable text.
 fn has_readable_content(html: &str) -> bool {
-    let frag = Html::parse_document(html);
-    let root = frag.root_element();
-    let text: String = root.text().collect();
-    !text.trim().is_empty()
+    readable_text_len(html) > 0
+}
+
+/// Detect an NCX that indexes only a small auxiliary section such as
+/// footnotes, leaving the real spine documents unlisted.
+fn should_fallback_to_spine(documents: &[SpineDocument]) -> bool {
+    let total_text = documents.iter().map(|d| d.text_len).sum::<usize>();
+    let toc_text = documents
+        .iter()
+        .filter(|d| d.in_toc)
+        .map(|d| d.text_len)
+        .sum::<usize>();
+    total_text > 0
+        && toc_text > 0
+        && toc_text.saturating_mul(10) < total_text
+        && documents.iter().any(|d| !d.in_toc)
+}
+
+/// Ignore tiny spine documents when recovering from an auxiliary-only TOC.
+fn spine_fallback_threshold(documents: &[SpineDocument]) -> usize {
+    let largest = documents.iter().map(|d| d.text_len).max().unwrap_or(0);
+    largest.saturating_div(100).max(64)
 }
 
 /// Best-effort chapter heading extraction: the first non-empty heading in
@@ -862,6 +920,13 @@ mod tests {
                     // Front matter page: linked in the spine but not in the
                     // TOC, no heading of its own.
                     r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><title>书名页</title></head><body><p>测试书</p><p>测试作者 著</p></body></html>"#
+                } else if file.starts_with("main") {
+                    // Main-content page without a heading, as produced by the
+                    // affected EPUB.
+                    r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><title>未知</title></head><body><p>正文内容正文内容正文内容正文内容正文内容正文内容正文内容正文内容正文内容正文内容正文内容正文内容正文内容正文内容正文内容正文内容正文内容正文内容正文内容正文内容</p></body></html>"#
+                } else if file.starts_with("note") {
+                    // Auxiliary footnote page incorrectly listed in the NCX.
+                    r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><title>未知</title></head><body><dl><dt>[<a>←</a>]</dt><dd><p>注</p></dd></dl></body></html>"#
                 } else {
                     &format!(
                         r###"<html xmlns="http://www.w3.org/1999/xhtml"><head><title>章节</title></head>{chapter_body}"###
@@ -1039,6 +1104,40 @@ mod tests {
                 ),
             ],
         }
+    }
+
+    #[test]
+    fn recovers_spine_when_ncx_only_lists_footnotes() {
+        let bytes = build_epub(&Fixture {
+            version: "2.0",
+            spine: vec![
+                ("title.xhtml".into(), true),
+                ("main-1.xhtml".into(), true),
+                ("main-2.xhtml".into(), true),
+                ("note-1.xhtml".into(), true),
+                ("note-2.xhtml".into(), true),
+            ],
+            metadata_extra: "",
+            toc: vec![
+                e("1", "note-1.xhtml", vec![]),
+                e("2", "note-2.xhtml", vec![]),
+            ],
+        });
+        let book = parse(&bytes).unwrap();
+
+        assert_eq!(book.chapters.len(), 2);
+        assert!(
+            book.chapters
+                .iter()
+                .all(|chapter| chapter.content.contains("正文内容"))
+        );
+        assert_eq!(
+            book.toc
+                .iter()
+                .map(|node| node.title.as_str())
+                .collect::<Vec<_>>(),
+            ["第 2 章", "第 3 章"]
+        );
     }
 
     #[test]
