@@ -43,8 +43,6 @@ struct SpineDocument {
     resource_path: PathBuf,
     content: String,
     heading: Option<String>,
-    in_toc: bool,
-    text_len: usize,
 }
 
 /// Parse epub bytes into a normalized book.
@@ -80,11 +78,16 @@ pub fn parse(bytes: &[u8]) -> Result<ParsedBook> {
     let branches = extract_toc_tree(&mut doc);
     let mut flat = Vec::new();
     flatten_branches(&branches, &mut flat);
-    let title_by_path: HashMap<String, String> = flat
-        .into_iter()
+    let mut title_by_path: HashMap<String, String> = flat
+        .iter()
         .filter(|(p, _)| p.fragment.is_none())
-        .map(|(p, l)| (p.path, l))
+        .map(|(p, l)| (p.path.clone(), l.clone()))
         .collect();
+    // Fragment-only TOCs still name their containing document. Prefer the
+    // first section only when no document-level label is available.
+    for (reference, label) in flat {
+        title_by_path.entry(reference.path).or_insert(label);
+    }
 
     // Spine order is the reading order; `linear="no"` items (cover, nav,
     // acknowledgements, …) are auxiliary and must not become chapters.
@@ -116,7 +119,6 @@ pub fn parse(bytes: &[u8]) -> Result<ParsedBook> {
         let Some((html, _mime)) = doc.get_resource_str(&id) else {
             continue;
         };
-        let normalized = path_key(&resource_path);
         let content = clean_xhtml(
             &mut doc,
             &html,
@@ -124,38 +126,19 @@ pub fn parse(bytes: &[u8]) -> Result<ParsedBook> {
             &mut images,
             &mut seen_images,
         );
-        if !has_readable_content(&content) {
-            continue;
-        }
-        let text_len = readable_text_len(&content);
         documents.push(SpineDocument {
             spine_idx,
             resource_path,
             content,
             heading: extract_heading(&html),
-            in_toc: title_by_path.contains_key(&normalized),
-            text_len,
         });
     }
 
-    // Some EPUB producers generate an NCX from footnote links instead of
-    // chapters. If those targets account for almost none of the readable
-    // text, recover the actual reading order from the OPF spine while still
-    // ignoring tiny auxiliary documents.
-    let fallback_to_spine = should_fallback_to_spine(&documents);
-    let fallback_threshold = spine_fallback_threshold(&documents);
+    // Navigation is not a content filter. Keep every supported linear
+    // document, including blank pages, front matter and illustration plates.
     let mut chapters = Vec::new();
     let mut kept_spine = Vec::new(); // spine positions that became chapters
     for document in documents {
-        let keep = if fallback_to_spine {
-            document.text_len >= fallback_threshold
-        } else {
-            document.in_toc || document.heading.is_some()
-        };
-        if !keep {
-            continue;
-        }
-
         let normalized = path_key(&document.resource_path);
         let title = title_by_path
             .get(&normalized)
@@ -645,44 +628,6 @@ fn extract_image<R: Read + Seek>(
     Some(format!("image:{n}"))
 }
 
-/// Count non-whitespace characters in the sanitized fragment.
-fn readable_text_len(html: &str) -> usize {
-    let frag = Html::parse_document(html);
-    frag.root_element()
-        .text()
-        .flat_map(str::chars)
-        .filter(|c| !c.is_whitespace())
-        .count()
-}
-
-/// Does the sanitized fragment carry meaningful content? Image-only pages
-/// (illustration plates — 插图/扉页) are auxiliary material, not chapters:
-/// a chapter must contain readable text.
-fn has_readable_content(html: &str) -> bool {
-    readable_text_len(html) > 0
-}
-
-/// Detect an NCX that indexes only a small auxiliary section such as
-/// footnotes, leaving the real spine documents unlisted.
-fn should_fallback_to_spine(documents: &[SpineDocument]) -> bool {
-    let total_text = documents.iter().map(|d| d.text_len).sum::<usize>();
-    let toc_text = documents
-        .iter()
-        .filter(|d| d.in_toc)
-        .map(|d| d.text_len)
-        .sum::<usize>();
-    total_text > 0
-        && toc_text > 0
-        && toc_text.saturating_mul(10) < total_text
-        && documents.iter().any(|d| !d.in_toc)
-}
-
-/// Ignore tiny spine documents when recovering from an auxiliary-only TOC.
-fn spine_fallback_threshold(documents: &[SpineDocument]) -> usize {
-    let largest = documents.iter().map(|d| d.text_len).max().unwrap_or(0);
-    largest.saturating_div(100).max(64)
-}
-
 /// Best-effort chapter heading extraction: the first non-empty heading in
 /// document order (per EPUB semantics the chapter title is the first
 /// heading element of the document).
@@ -730,6 +675,41 @@ mod tests {
             }
         }
         writer.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn preserves_headingless_short_blank_and_image_only_linear_documents() {
+        for version in ["2.0", "3.0"] {
+            let bytes = build_epub(&Fixture {
+                version,
+                metadata_extra: "",
+                toc: vec![],
+                spine: vec![
+                    ("title.xhtml".into(), true),
+                    ("short.xhtml".into(), true),
+                    ("blank.xhtml".into(), true),
+                    ("pic.xhtml".into(), true),
+                    ("cover.xhtml".into(), false),
+                ],
+            });
+            let bytes = patch_epub(
+                &bytes,
+                &[
+                    (
+                        "OEBPS/short.xhtml",
+                        "<html><body><p>短篇。</p></body></html>".as_bytes(),
+                    ),
+                    ("OEBPS/blank.xhtml", b"<html><body></body></html>"),
+                ],
+            );
+            let book = parse(&bytes).unwrap();
+            assert_eq!(book.chapters.len(), 4);
+            assert!(book.chapters[0].content.contains("测试作者"));
+            assert!(book.chapters[1].content.contains("短篇。"));
+            assert!(book.chapters[2].content.trim().is_empty());
+            assert!(book.chapters[3].content.contains("image:0"));
+            assert_eq!(book.toc.len(), 4);
+        }
     }
 
     #[test]
@@ -1020,27 +1000,26 @@ mod tests {
                 .collect::<Vec<_>>()
         );
 
-        // Cover (linear="no") and unlinked front matter must not become
-        // chapters; spine order kept.
-        assert_eq!(book.chapters.len(), 3);
-        assert_eq!(book.chapters[0].title, "第一章 起点");
-        assert_eq!(book.chapters[1].title, "第二章 风起");
-        assert_eq!(book.chapters[2].title, "第二章之二");
+        // Only the non-linear cover is excluded; front matter remains in order.
+        assert_eq!(book.chapters.len(), 4);
+        assert_eq!(book.chapters[0].title, "第 1 章");
+        assert_eq!(book.chapters[1].title, "第一章 起点");
+        assert_eq!(book.chapters[2].title, "第二章 风起");
 
         // TOC stays a tree: 第二章 风起 groups its 第二章之二 child; the
         // same-document fragment entry is deduped against its parent.
         assert_eq!(book.toc.len(), 2);
         assert_eq!(book.toc[0].title, "第一章 起点");
-        assert_eq!(book.toc[0].idx, Some(0));
+        assert_eq!(book.toc[0].idx, Some(1));
         assert!(book.toc[0].children.is_empty());
         assert_eq!(book.toc[1].title, "第二章 风起");
-        assert_eq!(book.toc[1].idx, Some(1));
+        assert_eq!(book.toc[1].idx, Some(2));
         assert_eq!(book.toc[1].children.len(), 1);
         assert_eq!(book.toc[1].children[0].title, "第二章之二");
-        assert_eq!(book.toc[1].children[0].idx, Some(2));
+        assert_eq!(book.toc[1].children[0].idx, Some(3));
 
         // HTML structure preserved, junk stripped.
-        let c0 = &book.chapters[0];
+        let c0 = &book.chapters[1];
         assert!(c0.content.contains("<p>第一段"));
         assert!(c0.content.contains("<ruby>注音<rt>zhùyīn</rt></ruby>"));
         assert!(c0.content.contains("<strong>强调</strong>"));
@@ -1085,22 +1064,22 @@ mod tests {
             ],
         });
         let book = parse(&bytes).unwrap();
-        // Image-only pages never become chapters, nor TOC entries.
-        assert_eq!(book.chapters.len(), 3);
-        assert_eq!(book.chapters[0].title, "序章");
-        assert_eq!(book.chapters[1].title, "第二卷");
-        assert_eq!(book.chapters[2].title, "终章");
+        // Image-only linear pages are content, not auxiliary material.
+        assert_eq!(book.chapters.len(), 4);
+        assert_eq!(book.chapters[0].title, "插图");
+        assert_eq!(book.chapters[1].title, "序章");
+        assert_eq!(book.chapters[2].title, "第二卷");
         // Nested nav items keep their hierarchy.
-        assert_eq!(book.toc.len(), 2);
-        assert_eq!(book.toc[0].title, "序章");
+        assert_eq!(book.toc.len(), 3);
+        assert_eq!(book.toc[0].title, "插图");
         assert_eq!(book.toc[0].idx, Some(0));
-        assert_eq!(book.toc[1].title, "第二卷");
-        assert_eq!(book.toc[1].idx, Some(1));
-        assert_eq!(book.toc[1].children.len(), 1);
-        assert_eq!(book.toc[1].children[0].title, "终章");
-        assert_eq!(book.toc[1].children[0].idx, Some(2));
-        assert!(book.chapters[0].content.contains("<h1>正文标题 1</h1>"));
-        assert!(book.chapters[0].content.contains("src=\"image:0\""));
+        assert_eq!(book.toc[2].title, "第二卷");
+        assert_eq!(book.toc[2].idx, Some(2));
+        assert_eq!(book.toc[2].children.len(), 1);
+        assert_eq!(book.toc[2].children[0].title, "终章");
+        assert_eq!(book.toc[2].children[0].idx, Some(3));
+        assert!(book.chapters[1].content.contains("<h1>正文标题 1</h1>"));
+        assert!(book.chapters[1].content.contains("src=\"image:0\""));
         assert!(!book.images.is_empty());
     }
 
@@ -1167,19 +1146,13 @@ mod tests {
         });
         let book = parse(&bytes).unwrap();
 
-        assert_eq!(book.chapters.len(), 2);
-        assert!(
-            book.chapters
-                .iter()
-                .all(|chapter| chapter.content.contains("正文内容"))
-        );
-        assert_eq!(
-            book.toc
-                .iter()
-                .map(|node| node.title.as_str())
-                .collect::<Vec<_>>(),
-            ["第 2 章", "第 3 章"]
-        );
+        assert_eq!(book.chapters.len(), 5);
+        assert!(book.chapters[0].content.contains("测试作者"));
+        assert!(book.chapters[1].content.contains("正文内容"));
+        assert!(book.chapters[2].content.contains("正文内容"));
+        assert!(book.chapters[3].content.contains("注"));
+        assert_eq!(book.toc[0].idx, Some(3));
+        assert_eq!(book.toc[1].idx, Some(4));
     }
 
     #[test]
@@ -1250,8 +1223,7 @@ mod tests {
         // absent from the spine; the nav entries that point at them must
         // survive as structure groups (this is the shape of books whose
         // parts have no own chapter, e.g. the 汪晖 epub that triggered
-        // the fix). Image-only/front-matter leaves without children still
-        // disappear.
+        // the fix). Linear image-only leaves remain navigable.
         let bytes = build_epub(&Fixture {
             version: "3.0",
             spine: vec![
@@ -1260,7 +1232,7 @@ mod tests {
                 ("e2.xhtml".into(), true),
                 ("part2.xhtml".into(), false), // 第二编 divider, auxiliary
                 ("e3.xhtml".into(), true),
-                ("pic.xhtml".into(), true), // image-only leaf: dropped
+                ("pic.xhtml".into(), true), // linear illustration plate
             ],
             metadata_extra: "",
             toc: vec![
@@ -1282,11 +1254,10 @@ mod tests {
             ],
         });
         let book = parse(&bytes).unwrap();
-        // Divider pages and the image plate never become chapters.
-        assert_eq!(book.chapters.len(), 3);
-        // Parts survive as groups with the right nesting; the stray 插图
-        // leaf is gone.
-        assert_eq!(book.toc.len(), 3);
+        // Only auxiliary divider pages are excluded.
+        assert_eq!(book.chapters.len(), 4);
+        // Parts remain groups, and the illustration retains its target.
+        assert_eq!(book.toc.len(), 4);
         assert_eq!(book.toc[0].title, "序言");
         assert_eq!(book.toc[0].idx, Some(0));
         let part1 = &book.toc[1];
