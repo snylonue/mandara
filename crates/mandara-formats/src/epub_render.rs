@@ -26,6 +26,7 @@ pub(crate) struct Renderer<'a, R: Read + Seek> {
     pub images: &'a mut Vec<ParsedImage>,
     pub seen: &'a mut HashMap<String, usize>,
     pub diagnostics: &'a mut Vec<Diagnostic>,
+    targets: Option<&'a HashMap<String, u32>>,
     styles: HashSet<String>,
     resources: HashSet<String>,
 }
@@ -42,9 +43,45 @@ impl<'a, R: Read + Seek> Renderer<'a, R> {
             images,
             seen,
             diagnostics,
+            targets: None,
             styles: HashSet::new(),
             resources: HashSet::new(),
         }
+    }
+
+    pub fn with_targets(mut self, targets: &'a HashMap<String, u32>) -> Self {
+        self.targets = Some(targets);
+        self
+    }
+
+    fn link(&mut self, base: &Path, href: &str) -> Option<String> {
+        let trimmed = href.trim();
+        if keep_link(trimmed) && !trimmed.starts_with('#') {
+            return Some(trimmed.to_owned());
+        }
+        let reference = resolve(base, trimmed)?;
+        let idx = self
+            .targets
+            .and_then(|targets| targets.get(&reference.path))
+            .copied();
+        let fragment = reference
+            .fragment
+            .as_ref()
+            .map(|f| {
+                format!(
+                    "#{}",
+                    percent_encoding::utf8_percent_encode(f, percent_encoding::NON_ALPHANUMERIC)
+                )
+            })
+            .unwrap_or_default();
+        if reference.path == base.to_string_lossy() && reference.fragment.is_some() {
+            return Some(fragment);
+        }
+        if let Some(idx) = idx {
+            return Some(format!("epub:chapter/{idx}{fragment}"));
+        }
+        self.note(base, Some(href), "unreachable-internal-link");
+        None
     }
 
     fn note(&mut self, base: &Path, reference: Option<&str>, reason: &'static str) {
@@ -229,9 +266,7 @@ impl<'a, R: Read + Seek> Renderer<'a, R> {
                         let rewritten = match name_lower.as_str() {
                             "style" => Some(self.css(value, base, 0)),
                             "src" if tag == "img" => self.image(base, value),
-                            "href" if tag == "a" && !svg => {
-                                keep_link(value).then(|| value.to_owned())
-                            }
+                            "href" if tag == "a" && !svg => self.link(base, value),
                             "href" if svg && tag == "image" => self.passive_url(base, value, 0),
                             "href" if svg => value.starts_with('#').then(|| value.to_owned()),
                             _ if global

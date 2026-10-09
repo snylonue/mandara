@@ -4,7 +4,7 @@
 //!
 //! - **Reading order = OPF spine** ([EPUB 3.3 § 3.17](https://www.w3.org/TR/epub-33/#sec-spine));
 //!   items with `linear="no"` (cover pages, nav docs, …) are auxiliary and
-//!   never become chapters.
+//!   remain addressable auxiliary documents outside the default reading order.
 //! - **Chapter titles come from the table of contents**: the EPUB 3 nav
 //!   document (`<nav epub:type="toc">`) or, for EPUB 2, the NCX `navMap`.
 //!   Entries map to spine documents by resource path; documents without a
@@ -44,6 +44,8 @@ struct SpineDocument {
     resource_path: PathBuf,
     content: String,
     heading: Option<String>,
+    linear: bool,
+    layout: String,
 }
 
 /// Parse EPUB bytes using the safe passive-presentation policy.
@@ -116,11 +118,10 @@ pub fn parse_with_diagnostics(bytes: &[u8]) -> Result<(ParsedBook, Vec<Diagnosti
     }
 
     // Spine order is the reading order; `linear="no"` items (cover, nav,
-    // acknowledgements, …) are auxiliary and must not become chapters.
-    let spine: Vec<(String, String, PathBuf, String)> = doc
+    // acknowledgements, …) remain addressable outside the default order.
+    let spine: Vec<(String, String, PathBuf, String, bool)> = doc
         .spine
         .iter()
-        .filter(|s| s.linear)
         .filter_map(|s| {
             doc.resources.get(&s.idref).map(|r| {
                 let override_layout = s
@@ -133,14 +134,20 @@ pub fn parse_with_diagnostics(bytes: &[u8]) -> Result<(ParsedBook, Vec<Diagnosti
                     .or_else(|| doc.mdata("rendition:layout").map(|m| m.value.as_str()))
                     .unwrap_or("reflowable")
                     .to_owned();
-                (s.idref.clone(), r.mime.clone(), r.path.clone(), layout)
+                (
+                    s.idref.clone(),
+                    r.mime.clone(),
+                    r.path.clone(),
+                    layout,
+                    s.linear,
+                )
             })
         })
         .collect();
-    let spine_pos: HashMap<String, usize> = spine
+    let mut spine_pos: HashMap<String, usize> = spine
         .iter()
         .enumerate()
-        .map(|(i, (_, _, p, _))| (path_key(p), i))
+        .map(|(i, (_, _, p, _, _))| (path_key(p), i))
         .collect();
 
     // Embedded images, in first-reference order; the same container
@@ -148,7 +155,8 @@ pub fn parse_with_diagnostics(bytes: &[u8]) -> Result<(ParsedBook, Vec<Diagnosti
     let mut images: Vec<ParsedImage> = Vec::new();
     let mut seen_images: HashMap<String, usize> = HashMap::new();
     let mut documents = Vec::new();
-    for (spine_idx, (id, mime, resource_path, layout)) in spine.into_iter().enumerate() {
+    for (spine_idx, (id, mime, resource_path, layout, linear)) in spine.iter().cloned().enumerate()
+    {
         if !XHTML_MIMES.contains(&mime.as_str()) && mime != "image/svg+xml" {
             diagnostics.push(Diagnostic {
                 document: path_key(&resource_path),
@@ -165,18 +173,82 @@ pub fn parse_with_diagnostics(bytes: &[u8]) -> Result<(ParsedBook, Vec<Diagnosti
             });
             continue;
         };
-        let content = Renderer::new(&mut doc, &mut images, &mut seen_images, &mut diagnostics)
-            .document(&html, &resource_path, &layout);
+        let content = html.clone();
         documents.push(SpineDocument {
             spine_idx,
             resource_path,
             content,
             heading: extract_heading(&html),
+            linear,
+            layout,
         });
     }
 
-    // Navigation is not a content filter. Keep every supported linear
-    // document, including blank pages, front matter and illustration plates.
+    // Preserve explicitly linked publication documents outside the spine as
+    // auxiliary resources. Navigation documents can legally live there.
+    let mut queue: Vec<Reference> = title_by_path
+        .keys()
+        .map(|path| Reference {
+            path: path.clone(),
+            query: None,
+            fragment: None,
+        })
+        .collect();
+    let selector = Selector::parse("a[href]").expect("static selector");
+    let mut scanned = 0;
+    let mut known: std::collections::HashSet<String> = documents
+        .iter()
+        .map(|d| path_key(&d.resource_path))
+        .collect();
+    loop {
+        while scanned < documents.len() {
+            let d = &documents[scanned];
+            let parsed = Html::parse_document(&d.content);
+            queue.extend(parsed.select(&selector).filter_map(|a| {
+                a.value()
+                    .attr("href")
+                    .and_then(|h| resolve(&d.resource_path, h))
+            }));
+            scanned += 1;
+        }
+        if queue.is_empty() {
+            break;
+        }
+        queue.sort_by(|a, b| a.path.cmp(&b.path));
+        let references = std::mem::take(&mut queue);
+        for reference in references {
+            if known.contains(&reference.path) {
+                continue;
+            }
+            let Some(mime) = doc.get_resource_mime_by_path(&reference.path) else {
+                continue;
+            };
+            if !XHTML_MIMES.contains(&mime.as_str()) && mime != "image/svg+xml" {
+                continue;
+            }
+            known.insert(reference.path.clone());
+            let Some(html) = doc.get_resource_str_by_path(&reference.path) else {
+                continue;
+            };
+            let pos = spine.len() + documents.len();
+            spine_pos.insert(reference.path.clone(), pos);
+            documents.push(SpineDocument {
+                spine_idx: pos,
+                resource_path: PathBuf::from(reference.path),
+                heading: extract_heading(&html),
+                content: html,
+                linear: false,
+                layout: "reflowable".into(),
+            });
+        }
+    }
+    // Auxiliary resources remain addressable but never join the default order.
+    documents.sort_by_key(|d| !d.linear);
+    let chapter_by_path: HashMap<String, u32> = documents
+        .iter()
+        .enumerate()
+        .map(|(idx, d)| (path_key(&d.resource_path), idx as u32))
+        .collect();
     let mut chapters = Vec::new();
     let mut kept_spine = Vec::new(); // spine positions that became chapters
     for document in documents {
@@ -185,11 +257,14 @@ pub fn parse_with_diagnostics(bytes: &[u8]) -> Result<(ParsedBook, Vec<Diagnosti
             .get(&normalized)
             .cloned()
             .or(document.heading)
-            .unwrap_or_else(|| format!("第 {} 章", document.spine_idx + 1));
+            .unwrap_or_else(|| format!("第 {} 章", chapters.len() + 1));
 
         chapters.push(ParsedChapter {
             title,
-            content: document.content,
+            linear: document.linear,
+            content: Renderer::new(&mut doc, &mut images, &mut seen_images, &mut diagnostics)
+                .with_targets(&chapter_by_path)
+                .document(&document.content, &document.resource_path, &document.layout),
         });
         kept_spine.push(document.spine_idx);
     }
@@ -207,6 +282,7 @@ pub fn parse_with_diagnostics(bytes: &[u8]) -> Result<(ParsedBook, Vec<Diagnosti
         toc = chapters
             .iter()
             .enumerate()
+            .filter(|(_, c)| c.linear)
             .map(|(i, c)| TocNode {
                 title: c.title.clone(),
                 idx: Some(i as u32),
@@ -684,7 +760,7 @@ fn remap_branches(
         let key = b.path.as_ref();
         let this_idx: Option<u32> = key.and_then(|k| {
             let pos = spine_pos.get(&k.path)?;
-            kept.binary_search(pos).ok().map(|i| i as u32)
+            kept.iter().position(|kept| kept == pos).map(|i| i as u32)
         });
         match this_idx {
             None => {
@@ -704,6 +780,7 @@ fn remap_branches(
                 // Exact duplicate of an ancestor entry (same target):
                 // already reachable, drop it.
                 if key == parent_key {
+                    out.extend(remap_branches(&b.children, spine_pos, kept, parent_key));
                     continue;
                 }
                 let frag = key.and_then(|k| k.fragment.clone());
@@ -767,6 +844,63 @@ mod tests {
             }
         }
         writer.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn links_across_documents_and_auxiliary_footnotes_without_changing_linear_order() {
+        for version in ["2.0", "3.0"] {
+            let bytes = build_epub(&Fixture {
+                version,
+                metadata_extra: "",
+                spine: vec![
+                    ("Notes/foot.xhtml".into(), false),
+                    ("Text/main.xhtml".into(), true),
+                    ("Text/end.xhtml".into(), true),
+                ],
+                toc: vec![e(
+                    "正文",
+                    "Text/main.xhtml",
+                    vec![e("注释", "Notes/foot.xhtml#note%20one", vec![])],
+                )],
+            });
+            let mut doc = EpubDoc::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+            let opf = doc.get_resource_str_by_path("OEBPS/content.opf").unwrap()
+                .replace("</manifest>", r#"<item id="extra" href="Notes/extra.xhtml" media-type="application/xhtml+xml"/></manifest>"#);
+            let main = r##"<html><body><p id="back">正文<a href="../Notes/foot.xhtml?reader=1#note%20one">注释</a><a href="../Notes/extra.xhtml">附录</a><a href="#back">本页</a><a href="missing.xhtml">不存在</a></p></body></html>"##;
+            let foot = r#"<html><body><p id="note one">注释<a href="../Text/main.xhtml#back">返回</a></p></body></html>"#;
+            let bytes = patch_epub(
+                &bytes,
+                &[
+                    ("OEBPS/content.opf", opf.as_bytes()),
+                    ("OEBPS/Text/main.xhtml", main.as_bytes()),
+                    ("OEBPS/Notes/foot.xhtml", foot.as_bytes()),
+                    (
+                        "OEBPS/Notes/extra.xhtml",
+                        "<html><body>附录</body></html>".as_bytes(),
+                    ),
+                ],
+            );
+            let (book, diagnostics) = parse_with_diagnostics(&bytes).unwrap();
+            assert_eq!(
+                book.chapters.iter().map(|c| c.linear).collect::<Vec<_>>(),
+                vec![true, true, false, false]
+            );
+            assert!(
+                book.chapters[0]
+                    .content
+                    .contains("epub:chapter/2#note%20one")
+            );
+            assert!(book.chapters[0].content.contains("epub:chapter/3"));
+            assert!(book.chapters[0].content.contains("href=\"#back\""));
+            assert!(book.chapters[2].content.contains("epub:chapter/0#back"));
+            assert_eq!(book.toc[0].children[0].idx, Some(2));
+            assert_eq!(book.toc[0].children[0].frag.as_deref(), Some("note one"));
+            assert!(
+                diagnostics
+                    .iter()
+                    .any(|d| d.reason == "unreachable-internal-link")
+            );
+        }
     }
 
     #[test]
@@ -930,7 +1064,7 @@ mod tests {
                 ],
             );
             let book = parse(&bytes).unwrap();
-            assert_eq!(book.chapters.len(), 4);
+            assert_eq!(book.chapters.len(), 5);
             assert!(book.chapters[0].content.contains("测试作者"));
             assert!(book.chapters[1].content.contains("短篇。"));
             assert!(book.chapters[2].content.contains("<body></body>"));
@@ -1228,7 +1362,7 @@ mod tests {
         );
 
         // Only the non-linear cover is excluded; front matter remains in order.
-        assert_eq!(book.chapters.len(), 4);
+        assert_eq!(book.chapters.len(), 5);
         assert_eq!(book.chapters[0].title, "第 1 章");
         assert_eq!(book.chapters[1].title, "第一章 起点");
         assert_eq!(book.chapters[2].title, "第二章 风起");
@@ -1270,7 +1404,10 @@ mod tests {
             c0.content
                 .contains(r#"<a href="https://example.com">外部</a>"#)
         );
-        assert!(c0.content.contains("<a>跨章链接</a>"));
+        assert!(
+            c0.content
+                .contains("<a href=\"epub:chapter/2\">跨章链接</a>")
+        );
     }
 
     #[test]
@@ -1482,14 +1619,14 @@ mod tests {
         });
         let book = parse(&bytes).unwrap();
         // Only auxiliary divider pages are excluded.
-        assert_eq!(book.chapters.len(), 4);
+        assert_eq!(book.chapters.len(), 6);
         // Parts remain groups, and the illustration retains its target.
         assert_eq!(book.toc.len(), 4);
         assert_eq!(book.toc[0].title, "序言");
         assert_eq!(book.toc[0].idx, Some(0));
         let part1 = &book.toc[1];
         assert_eq!(part1.title, "第一编 去政治化的政治");
-        assert_eq!(part1.idx, None);
+        assert_eq!(part1.idx, Some(4));
         assert_eq!(
             part1
                 .children
@@ -1500,7 +1637,7 @@ mod tests {
         );
         let part2 = &book.toc[2];
         assert_eq!(part2.title, "第二编");
-        assert_eq!(part2.idx, None);
+        assert_eq!(part2.idx, Some(5));
         assert_eq!(part2.children[0].title, "韦伯与中国的现代性");
         assert_eq!(part2.children[0].idx, Some(2));
     }

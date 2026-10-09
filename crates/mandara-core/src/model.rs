@@ -229,6 +229,16 @@ mod tests {
     /// `in_chapter` is `{"fraction": 0.5}` or `{"offset": 120}`, never a
     /// bare number (which cannot tell the two channels apart).
     #[test]
+    fn legacy_chapter_metadata_defaults_to_linear() {
+        let meta: ChapterMeta = serde_json::from_str(r#"{"idx":0,"title":"正文"}"#).unwrap();
+        assert!(meta.linear);
+        let aux: ChapterMeta =
+            serde_json::from_str(r#"{"idx":1,"title":"注释","linear":false}"#).unwrap();
+        assert!(!aux.linear);
+        assert_eq!(serde_json::to_value(aux).unwrap()["linear"], false);
+    }
+
+    #[test]
     fn in_chapter_wire_format() {
         let fraction: InChapter =
             serde_json::from_str(r#"{"fraction":0.5}"#).expect("fraction accepted");
@@ -303,6 +313,13 @@ impl std::str::FromStr for FileFormat {
 pub struct ChapterMeta {
     pub idx: u32,
     pub title: String,
+    /// Auxiliary EPUB documents are addressable, but excluded from default navigation.
+    #[serde(default = "default_linear")]
+    pub linear: bool,
+}
+
+fn default_linear() -> bool {
+    true
 }
 
 /// One node of a hierarchical table of contents.

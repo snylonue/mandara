@@ -7,19 +7,20 @@ export interface EpubDocumentHandle {
 }
 
 /** Never insert publisher CSS into the application DOM. */
-export function EpubDocument({ content, title, settings, onFraction, onReady, ref }: {
+export function EpubDocument({ content, title, settings, onFraction, onReady, onNavigate, ref }: {
   content: string;
   title: string;
   settings: ReaderSettings;
   onFraction: (fraction: number) => void;
   onReady: () => void;
+  onNavigate: (idx: number, fragment?: string) => void;
   ref?: Ref<EpubDocumentHandle>;
 }) {
   const frame = useRef<HTMLIFrameElement>(null);
   const cleanup = useRef<(() => void) | null>(null);
   const defaultsRef = useRef<HTMLStyleElement | null>(null);
-  const callbacks = useRef({ onFraction, onReady });
-  callbacks.current = { onFraction, onReady };
+  const callbacks = useRef({ onFraction, onReady, onNavigate });
+  callbacks.current = { onFraction, onReady, onNavigate };
   const source = useMemo(() => {
     const csp = "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data: " + location.origin + "/api/images/; font-src data:; base-uri 'none'; form-action 'none'";
     // CSP precedes all source markup, including when stored HTML is malformed.
@@ -102,7 +103,10 @@ export function EpubDocument({ content, title, settings, onFraction, onReady, re
       const href = anchor?.getAttribute("href");
       if (!href) return;
       event.preventDefault();
-      if (href.startsWith("#")) {
+      const internal = href.match(/^epub:chapter\/(\d+)(?:#(.*))?$/);
+      if (internal) {
+        try { callbacks.current.onNavigate(Number(internal[1]), internal[2] ? decodeURIComponent(internal[2]) : undefined); } catch { /* Invalid source fragment. */ }
+      } else if (href.startsWith("#")) {
         try { doc?.getElementById(decodeURIComponent(href.slice(1)))?.scrollIntoView({ block: "start" }); } catch { /* Invalid source fragment. */ }
       } else if (/^(https?:|mailto:)/i.test(href)) {
         window.open(href, "_blank", "noopener,noreferrer");

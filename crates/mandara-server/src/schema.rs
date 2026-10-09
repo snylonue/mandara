@@ -56,6 +56,7 @@ diesel::table! {
         idx -> BigInt,
         title -> Text,
         content -> Text,
+        linear -> BigInt,
     }
 }
 

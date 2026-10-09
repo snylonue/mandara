@@ -17,7 +17,7 @@ interface ReaderProps {
   /** Initial position to restore. */
   initialPosition?: Position;
   /** Called (debounced) with the reader's current scroll fraction. */
-  onProgress?: (fraction: number) => void;
+  onProgress?: (fraction: number, chapterIdx: number) => void;
   /** Hierarchical table of contents (per the ebook's nav/NCX). */
   toc?: TocNode[];
   /** Disable prev/next persistence and session UI (public share view). */
@@ -114,18 +114,30 @@ export function Reader({
       if (clamped === idx) {
         // Same chapter: the content is already rendered — scroll directly.
         if (frag) scrollToFragId(frag);
+        else {
+          if (epubRef.current) epubRef.current.restoreFraction(0);
+          else restoreScroll(0);
+          setFraction(0);
+          lastFractionRef.current = 0;
+          if (onProgress && !readOnly) onProgress(0, clamped);
+        }
         return;
       }
+      window.clearTimeout(debounceRef.current);
+      lastChapterRef.current = clamped;
+      lastFractionRef.current = 0;
+      if (onProgress && !readOnly) onProgress(0, clamped);
       setIdx(clamped);
       setFraction(0);
       pendingFragRef.current = frag ?? null;
     },
-    [chapters.length, idx],
+    [chapters.length, idx, onProgress, readOnly],
   );
 
   // Debounced scroll tracking → progress callback.
   const debounceRef = useRef<number | undefined>(undefined);
-  const lastFractionRef = useRef(0);
+  const lastFractionRef = useRef(fraction);
+  const lastChapterRef = useRef(idx);
   useEffect(() => {
     function onScroll() {
       if (isDocument) return;
@@ -135,7 +147,7 @@ export function Reader({
       lastFractionRef.current = f;
       if (!onProgress || readOnly) return;
       window.clearTimeout(debounceRef.current);
-      debounceRef.current = window.setTimeout(() => onProgress(f), 600);
+      debounceRef.current = window.setTimeout(() => onProgress(f, idx), 600);
     }
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => {
@@ -144,18 +156,21 @@ export function Reader({
       // Flush the pending fraction on unmount (leaving the reader must
       // not lose the last 600 ms of scroll).
       if (onProgress && !readOnly && lastFractionRef.current > 0) {
-        onProgress(lastFractionRef.current);
+        onProgress(lastFractionRef.current, lastChapterRef.current);
       }
     };
-  }, [onProgress, readOnly, isDocument]);
+  }, [onProgress, readOnly, isDocument, idx]);
 
   useEffect(() => {
     return () => window.scrollTo(0, 0);
   }, []);
 
   const cur = chapters.find((c) => c.idx === idx);
-  const next = chapters.find((c) => c.idx === idx + 1);
-  const progress = chapters.length > 0 ? ((idx + fraction) / chapters.length) * 100 : 0;
+  const linearChapters = chapters.filter(c => c.linear !== false);
+  const linearRank = linearChapters.findIndex(c => c.idx === idx);
+  const prev = linearChapters.filter(c => c.idx < idx).at(-1) ?? null;
+  const next = linearChapters.find(c => c.idx > idx) ?? null;
+  const progress = linearChapters.length > 0 && linearRank >= 0 ? ((linearRank + fraction) / linearChapters.length) * 100 : 0;
 
   // Keep the highlighted chapter visible when the drawer opens or the
   // chapter changes while it is open.
@@ -246,6 +261,7 @@ export function Reader({
           content={chapter.content}
           title={chapter.title}
           settings={settings}
+          onNavigate={goto}
           onReady={() => {
             const target = renderTarget.current;
             epubRef.current?.restoreFraction(target.fraction);
@@ -256,7 +272,7 @@ export function Reader({
             lastFractionRef.current = f;
             if (!onProgress || readOnly) return;
             window.clearTimeout(debounceRef.current);
-            debounceRef.current = window.setTimeout(() => onProgress(f), 600);
+            debounceRef.current = window.setTimeout(() => onProgress(f, idx), 600);
           }}
         /> : <div className="epub-content" dangerouslySetInnerHTML={{ __html: chapter.content }} />)}
       </article>
@@ -265,18 +281,18 @@ export function Reader({
       <div className="reader-bottom">
         <button
           className="reader-nav-btn"
-          onClick={() => goto(idx - 1)}
-          disabled={idx <= 0}
+          onClick={() => prev && goto(prev.idx)}
+          disabled={!prev}
         >
           <small>
             <IconChevronLeft size={13} /> {t("reader.prev")}
           </small>
-          <span>{chapters.find((c) => c.idx === idx - 1)?.title ?? ""}</span>
+          <span>{prev?.title ?? ""}</span>
         </button>
         <button
           className="reader-nav-btn next"
-          onClick={() => goto(idx + 1)}
-          disabled={idx >= chapters.length - 1 || readOnly}
+          onClick={() => next && goto(next.idx)}
+          disabled={!next || readOnly}
         >
           <small>
             {t("reader.next")} <IconChevronRight size={13} />

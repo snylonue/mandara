@@ -90,6 +90,7 @@ fn split_chapters(text: &str, filename: &str) -> (String, Vec<ParsedChapter>) {
             if heading_seen {
                 let content = std::mem::take(&mut cur);
                 chapters.push(ParsedChapter {
+                    linear: true,
                     title: std::mem::take(&mut cur_title),
                     content: htmlize::text_to_html(&content),
                 });
@@ -104,6 +105,7 @@ fn split_chapters(text: &str, filename: &str) -> (String, Vec<ParsedChapter>) {
     if heading_seen {
         let content = std::mem::take(&mut cur);
         chapters.push(ParsedChapter {
+            linear: true,
             title: std::mem::take(&mut cur_title),
             content: htmlize::text_to_html(&content),
         });
@@ -117,6 +119,7 @@ fn split_chapters(text: &str, filename: &str) -> (String, Vec<ParsedChapter>) {
 
     if chapters.is_empty() {
         chapters.push(ParsedChapter {
+            linear: true,
             title: title.clone(),
             content: htmlize::text_to_html(text),
         });

@@ -911,6 +911,11 @@ export interface components {
         ChapterMeta: {
             idx: number;
             title: string;
+            /**
+             * @description False for auxiliary EPUB documents. They remain addressable by TOC/internal links but are excluded from default previous/next navigation and reading-progress denominators. Missing means true for older servers. Linear documents come first in spine order.
+             * @default true
+             */
+            linear: boolean;
         };
         /** @description One node of the hierarchical table of contents. `idx` is the chapter index this entry points to (`null` for pure group nodes); leaf entries reference entries of the `chapters` list. */
         TocNode: {
@@ -933,6 +938,11 @@ export interface components {
              *     embedded data images/fonts. Never insert publication CSS in the
              *     application DOM. html[data-epub-layout] retains the resolved OPF
              *     rendition layout (reflowable or pre-paginated).
+             *     Internal document links use epub:chapter/{idx} with an optional
+             *     percent-encoded fragment. Dispatch these to the matching chapter
+             *     from the same file; local fragments stay #fragment. External
+             *     HTTP(S)/mailto links require an explicit user click and must not
+             *     navigate the application or publication frame.
              */
             content: string;
         };

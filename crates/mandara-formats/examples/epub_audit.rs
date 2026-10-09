@@ -25,7 +25,7 @@ fn main() {
                         for (n, image) in book.images.iter().enumerate() {
                             content = content.replace(&format!("src=\"image:{n}\""), &format!("src=\"data:{};base64,{}\"", image.mime, STANDARD.encode(&image.bytes)));
                         }
-                        serde_json::json!({ "idx": idx, "title": chapter.title, "content": content })
+                        serde_json::json!({ "idx": idx, "title": chapter.title, "content": content, "linear": chapter.linear })
                     }).collect();
                     let issues: Vec<_> = diagnostics.iter().map(|d| serde_json::json!({ "document": d.document, "reference": d.reference, "reason": d.reason })).collect();
                     let name = std::path::Path::new(&path).file_stem().expect("file stem");

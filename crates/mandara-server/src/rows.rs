@@ -179,6 +179,7 @@ impl ChapterRow {
 pub struct ChapterTitleRow {
     pub idx: i64,
     pub title: String,
+    pub linear: i64,
 }
 
 impl ChapterTitleRow {
@@ -186,6 +187,7 @@ impl ChapterTitleRow {
         ChapterMeta {
             idx: self.idx.max(0) as u32,
             title: self.title,
+            linear: self.linear != 0,
         }
     }
 }

@@ -461,6 +461,7 @@ impl Library {
                         schema::chapters::idx.eq(idx as i64),
                         schema::chapters::title.eq(&chapter.title),
                         schema::chapters::content.eq(&chapter.content),
+                        schema::chapters::linear.eq(i64::from(chapter.linear)),
                     ))
                     .execute(&mut conn)
                     .await?;
@@ -679,6 +680,7 @@ impl Library {
                 .do_update()
                 .set((
                     schema::chapters::title.eq(diesel::upsert::excluded(schema::chapters::title)),
+                    schema::chapters::linear.eq(diesel::upsert::excluded(schema::chapters::linear)),
                     schema::chapters::content.eq(coalesce_nn(
                         nullif(diesel::upsert::excluded(schema::chapters::content), ""),
                         schema::chapters::content,
@@ -1748,6 +1750,7 @@ impl Library {
                     schema::chapters::idx.eq(idx as i64),
                     schema::chapters::title.eq(&chapter.title),
                     schema::chapters::content.eq(&chapter.content),
+                    schema::chapters::linear.eq(i64::from(chapter.linear)),
                 ))
                 .execute(&mut tx)
                 .await?;
@@ -2689,7 +2692,11 @@ impl Library {
         let rows: Vec<ChapterTitleRow> = schema::chapters::table
             .filter(schema::chapters::file_id.eq(file_id))
             .order(schema::chapters::idx.asc())
-            .select((schema::chapters::idx, schema::chapters::title))
+            .select((
+                schema::chapters::idx,
+                schema::chapters::title,
+                schema::chapters::linear,
+            ))
             .load(&mut self.diesel_db.get().await?)
             .await?;
         Ok(rows.into_iter().map(|r| r.into_model()).collect())
@@ -2712,7 +2719,11 @@ impl Library {
         let rows: Vec<ChapterTitleRow> = schema::chapters::table
             .filter(schema::chapters::file_id.eq(file_id))
             .order(schema::chapters::idx.asc())
-            .select((schema::chapters::idx, schema::chapters::title))
+            .select((
+                schema::chapters::idx,
+                schema::chapters::title,
+                schema::chapters::linear,
+            ))
             .load(&mut self.diesel_db.get().await?)
             .await?;
         Ok(rows
@@ -2835,6 +2846,7 @@ impl Library {
                                 schema::chapters::idx.eq(i as i64),
                                 schema::chapters::title.eq(&chapter.title),
                                 schema::chapters::content.eq(&chapter.content),
+                                schema::chapters::linear.eq(i64::from(chapter.linear)),
                             ))
                             .on_conflict((schema::chapters::file_id, schema::chapters::idx))
                             .do_update()
@@ -2843,6 +2855,8 @@ impl Library {
                                     .eq(diesel::upsert::excluded(schema::chapters::title)),
                                 schema::chapters::content
                                     .eq(diesel::upsert::excluded(schema::chapters::content)),
+                                schema::chapters::linear
+                                    .eq(diesel::upsert::excluded(schema::chapters::linear)),
                             ))
                             .execute(&mut conn)
                             .await?;
@@ -2944,6 +2958,7 @@ impl Library {
             .do_update()
             .set((
                 schema::chapters::title.eq(diesel::upsert::excluded(schema::chapters::title)),
+                schema::chapters::linear.eq(diesel::upsert::excluded(schema::chapters::linear)),
                 schema::chapters::content.eq(diesel::upsert::excluded(schema::chapters::content)),
             ))
             .execute(&mut self.diesel_db.get().await?)
@@ -3487,6 +3502,7 @@ pub async fn reparse_originals(db: &DieselDb, files_dir: &Path) -> anyhow::Resul
                     schema::chapters::idx.eq(idx as i64),
                     schema::chapters::title.eq(&chapter.title),
                     schema::chapters::content.eq(&chapter.content),
+                    schema::chapters::linear.eq(i64::from(chapter.linear)),
                 ))
                 .execute(&mut conn)
                 .await?;
@@ -3815,6 +3831,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn chapter_linear_migration_preserves_legacy_rows_and_auxiliary_flags() {
+        use diesel_async::SimpleAsyncConnection as _;
+        let dir =
+            std::env::temp_dir().join(format!("mandara-linear-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = crate::db::connect_diesel(&dir.join("test.db")).unwrap();
+        let mut conn = db.get().await.unwrap();
+        conn.batch_execute("CREATE TABLE chapters (file_id TEXT NOT NULL, idx INTEGER NOT NULL, title TEXT NOT NULL, content TEXT NOT NULL, PRIMARY KEY(file_id,idx)); INSERT INTO chapters VALUES ('f',0,'正文','<p>正文</p>');").await.unwrap();
+        conn.batch_execute(include_str!("../../migrations/0015_chapter_linear.sql"))
+            .await
+            .unwrap();
+        diesel::insert_into(schema::chapters::table)
+            .values((
+                schema::chapters::file_id.eq("f"),
+                schema::chapters::idx.eq(1_i64),
+                schema::chapters::title.eq("注释"),
+                schema::chapters::content.eq("<p>注释</p>"),
+                schema::chapters::linear.eq(0_i64),
+            ))
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        let rows: Vec<ChapterTitleRow> = schema::chapters::table
+            .order(schema::chapters::idx.asc())
+            .select(ChapterTitleRow::as_select())
+            .load(&mut conn)
+            .await
+            .unwrap();
+        let metas: Vec<_> = rows.into_iter().map(ChapterTitleRow::into_model).collect();
+        assert!(metas[0].linear);
+        assert!(!metas[1].linear);
+        assert_eq!(metas[0].title, "正文");
+        assert!(
+            conn.batch_execute("UPDATE chapters SET linear=2 WHERE idx=1")
+                .await
+                .is_err()
+        );
+        drop(conn);
+        drop(db);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
     async fn ingest_stores_images_and_rewrites_placeholders() {
         let dir = std::env::temp_dir().join(format!(
             "mandara-ingest-test-{}-{}",
@@ -3859,6 +3918,7 @@ mod tests {
             ],
             ext: Default::default(),
             chapters: vec![mandara_formats::ParsedChapter {
+                linear: true,
                 title: "c0".into(),
                 content: "<p><img src=\"image:1\"/></p><figure><img src=\"image:0\"/></figure>\
                      <p><img src=\"image:0\"/></p>"

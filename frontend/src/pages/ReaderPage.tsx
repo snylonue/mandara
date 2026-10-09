@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
@@ -66,13 +66,15 @@ export function ReaderPage() {
     setParams({ session: nextId });
   }
 
+  const saveQueue = useRef<Promise<unknown>>(Promise.resolve());
   const save = useCallback(
-    (fraction: number) => {
-      if (!active || fraction < 0.001) return;
-      void api<ReadingSession>(`/sessions/${active.id}`, {
+    (fraction: number, chapterIdx: number) => {
+      if (!active) return;
+      // Keep position writes ordered across chapter/footnote navigation.
+      saveQueue.current = saveQueue.current.catch(() => undefined).then(() => api<ReadingSession>(`/sessions/${active.id}`, {
         method: "PUT",
-        body: JSON.stringify({ in_chapter: { fraction } }),
-      });
+        body: JSON.stringify({ chapter_idx: chapterIdx, in_chapter: { fraction } }),
+      })).catch(() => undefined);
     },
     [active],
   );

@@ -25,7 +25,7 @@ try {
     if (url.pathname === "/api/health") return json({ status: "ok" });
     if (url.pathname === "/api/auth/me") return json({ id: "audit", username: "audit", role: "user" });
     if (url.pathname === "/api/files/fixture/sessions") return json({ sessions: [] });
-    if (url.pathname === "/api/files/fixture") return json({ book: { id: "test", title: book.title }, file: { id: "fixture", format: "epub", label: "", chapter_count: book.chapters.length }, chapters: book.chapters.map(({ idx, title }) => ({ idx, title })), toc: book.toc });
+    if (url.pathname === "/api/files/fixture") return json({ book: { id: "test", title: book.title }, file: { id: "fixture", format: "epub", label: "", chapter_count: book.chapters.length }, chapters: book.chapters.map(({ idx, title, linear }) => ({ idx, title, linear })), toc: book.toc });
     const chapter = url.pathname.match(/^\/api\/files\/fixture\/chapters\/(\d+)$/);
     if (chapter) return json(book.chapters[Number(chapter[1])]);
     if (url.pathname.startsWith("/assets/")) return route.fulfill({ path: path.resolve("frontend/dist", url.pathname.slice(1)) });
@@ -62,6 +62,25 @@ try {
   await page.setViewportSize({ width: 600, height: 850 });
   await frame.waitForFunction(() => document.documentElement.getBoundingClientRect().width <= innerWidth + 1);
   console.log("PASS: CSS isolation, CSP, semantics, fragment navigation, vertical scrolling, fixed viewport scaling");
+  book = {
+    title: "内部链接测试",
+    chapters: [
+      { idx: 0, title: "第一章", linear: true, content: '<!doctype html><html><body><a href="epub:chapter/2#note%20one">注释</a></body></html>' },
+      { idx: 1, title: "第二章", linear: true, content: '<!doctype html><html><body>第二章</body></html>' },
+      { idx: 2, title: "注释", linear: false, content: '<!doctype html><html><body><div style="height:2000px"></div><p id="note one">注释正文<a href="epub:chapter/0">返回</a></p></body></html>' },
+    ], toc: [{ title: "注释目录", idx: 2, frag: "note one", children: [] }],
+  };
+  frame = await open();
+  await frame.locator("a").click();
+  await page.locator('iframe[title="注释"]').waitFor();
+  frame = await (await page.locator("iframe.epub-document").elementHandle()).contentFrame();
+  await frame.waitForFunction(() => document.getElementById("note one")?.getBoundingClientRect().top < innerHeight);
+  await frame.getByText("返回", { exact: true }).click();
+  await page.locator('iframe[title="第一章"]').waitFor();
+  await page.locator(".reader-nav-btn.next").click();
+  await page.locator('iframe[title="第二章"]').waitFor();
+  assert.ok(await page.locator(".reader-nav-btn.next").isDisabled());
+  console.log("PASS: cross-document footnote/backlink, decoded fragments and linear-only next order");
   for (const file of process.argv.slice(2)) {
     book = JSON.parse(await fs.readFile(file, "utf8"));
     frame = await open();

@@ -60,6 +60,7 @@ pub struct ParsedImage {
 /// [`htmlize`]).
 #[derive(Debug, Clone)]
 pub struct ParsedChapter {
+    pub linear: bool,
     pub title: String,
     pub content: String,
 }
