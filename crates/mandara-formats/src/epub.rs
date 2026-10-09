@@ -135,8 +135,58 @@ pub fn parse_with_diagnostics(bytes: &[u8]) -> Result<(ParsedBook, Vec<Diagnosti
 
     // Spine order is the reading order; `linear="no"` items (cover, nav,
     // acknowledgements, …) remain addressable outside the default order.
-    let spine: Vec<(String, String, PathBuf, String, bool)> = doc
-        .spine
+    let package = doc.get_resource_str_by_path(doc.root_file.clone());
+    let fallback_ids: HashMap<String, String> = package
+        .as_deref()
+        .and_then(|s| roxmltree::Document::parse(s).ok())
+        .map(|xml| {
+            xml.descendants()
+                .filter(|n| n.has_tag_name("item"))
+                .filter_map(|n| {
+                    Some((
+                        n.attribute("id")?.to_owned(),
+                        n.attribute("fallback")?.to_owned(),
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut aliases = HashMap::new();
+    let mut fallback_spine = Vec::new();
+    for item in &doc.spine {
+        let mut id = item.idref.clone();
+        let mut visited = std::collections::HashSet::new();
+        while let Some(resource) = doc.resources.get(&id) {
+            if XHTML_MIMES.contains(&resource.mime.as_str()) || resource.mime == "image/svg+xml" {
+                break;
+            }
+            if !visited.insert(id.clone()) {
+                diagnostics.push(Diagnostic {
+                    document: path_key(&doc.root_file),
+                    reference: Some(item.idref.clone()),
+                    reason: "cyclic-manifest-fallback",
+                });
+                break;
+            }
+            let Some(fallback) = fallback_ids.get(&id) else {
+                break;
+            };
+            let Some(target) = doc.resources.get(fallback) else {
+                diagnostics.push(Diagnostic {
+                    document: path_key(&doc.root_file),
+                    reference: Some(fallback.clone()),
+                    reason: "missing-manifest-fallback",
+                });
+                break;
+            };
+            aliases.insert(path_key(&resource.path), path_key(&target.path));
+            id = fallback.clone();
+        }
+        let mut resolved = item.clone();
+        resolved.idref = id;
+        fallback_spine.push(resolved);
+    }
+    let spine: Vec<(String, String, PathBuf, String, bool)> = fallback_spine
         .iter()
         .filter_map(|s| {
             doc.resources.get(&s.idref).map(|r| {
@@ -260,11 +310,28 @@ pub fn parse_with_diagnostics(bytes: &[u8]) -> Result<(ParsedBook, Vec<Diagnosti
     }
     // Auxiliary resources remain addressable but never join the default order.
     documents.sort_by_key(|d| !d.linear);
-    let chapter_by_path: HashMap<String, u32> = documents
+    let mut chapter_by_path: HashMap<String, u32> = documents
         .iter()
         .enumerate()
         .map(|(idx, d)| (path_key(&d.resource_path), idx as u32))
         .collect();
+    // Repeatedly propagate chained foreign-resource aliases onto the final
+    // supported document; unresolved/cyclic chains stay diagnostic failures.
+    for _ in 0..aliases.len() {
+        let mut ordered: Vec<_> = aliases.iter().collect();
+        ordered.sort_by(|a, b| a.0.cmp(b.0));
+        for (source, target) in ordered {
+            if let Some(title) = title_by_path.get(source).cloned() {
+                title_by_path.entry(target.clone()).or_insert(title);
+            }
+            if let Some(idx) = chapter_by_path.get(target).copied() {
+                chapter_by_path.insert(source.clone(), idx);
+            }
+            if let Some(pos) = spine_pos.get(target).copied() {
+                spine_pos.insert(source.clone(), pos);
+            }
+        }
+    }
     let mut chapters = Vec::new();
     let mut kept_spine = Vec::new(); // spine positions that became chapters
     for document in documents {
@@ -894,6 +961,47 @@ mod tests {
             }
         }
         writer.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn resolves_foreign_spine_fallback_chains_and_navigation_aliases() {
+        let bytes = build_epub(&Fixture {
+            version: "3.0",
+            metadata_extra: "",
+            spine: vec![("foreign.bin".into(), true)],
+            toc: vec![e("正文", "foreign.bin", vec![])],
+        });
+        let mut doc = EpubDoc::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+        let opf = doc.get_resource_str_by_path("OEBPS/content.opf").unwrap()
+            .replace(r#"href="foreign.bin" media-type="application/xhtml+xml""#, r#"href="foreign.bin" media-type="application/octet-stream" fallback="mid""#)
+            .replace("</manifest>", r#"<item id="mid" href="middle.bin" media-type="application/octet-stream" fallback="final"/><item id="final" href="fallback.xhtml" media-type="application/xhtml+xml"/></manifest>"#);
+        let bytes = patch_epub(
+            &bytes,
+            &[
+                ("OEBPS/content.opf", opf.as_bytes()),
+                ("OEBPS/middle.bin", b"foreign resource"),
+                (
+                    "OEBPS/fallback.xhtml",
+                    "<html><body><p>备用正文</p><a href=\"foreign.bin\">回到正文</a></body></html>"
+                        .as_bytes(),
+                ),
+            ],
+        );
+        let book = parse(&bytes).unwrap();
+        assert_eq!(book.chapters.len(), 1);
+        assert!(book.chapters[0].linear);
+        assert!(book.chapters[0].content.contains("备用正文"));
+        assert!(book.chapters[0].content.contains("epub:chapter/0"));
+        assert_eq!(book.toc[0].idx, Some(0));
+        let cycle = patch_epub(
+            &bytes,
+            &[(
+                "OEBPS/content.opf",
+                opf.replace(r#"fallback="final""#, r#"fallback="c0""#)
+                    .as_bytes(),
+            )],
+        );
+        assert!(parse(&cycle).is_err());
     }
 
     #[test]
