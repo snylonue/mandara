@@ -70,10 +70,26 @@ pub fn parse_with_diagnostics(bytes: &[u8]) -> Result<(ParsedBook, Vec<Diagnosti
 
     let title = doc.get_title().unwrap_or_else(|| "Untitled".into());
 
-    let authors = doc
-        .mdata("creator")
-        .map(|m| vec![m.value.trim().to_string()])
-        .unwrap_or_default();
+    let mut authors = Vec::new();
+    for creator in doc
+        .metadata
+        .iter()
+        .filter(|m| m.property.eq_ignore_ascii_case("creator"))
+    {
+        let roles: Vec<_> = creator
+            .refined
+            .iter()
+            .filter(|r| r.property.eq_ignore_ascii_case("role"))
+            .collect();
+        let name = creator.value.trim();
+        let author = roles.is_empty()
+            || roles
+                .iter()
+                .any(|r| matches!(r.value.to_ascii_lowercase().as_str(), "aut" | "author"));
+        if author && !name.is_empty() && !authors.iter().any(|a| a == name) {
+            authors.push(name.to_owned());
+        }
+    }
 
     let description = doc.mdata("description").map(|m| m.value.trim().to_string());
 
@@ -346,7 +362,10 @@ fn extract_opf_ext<R: Read + Seek>(doc: &epub::doc::EpubDoc<R>) -> BookExt {
     }
     let translators: Vec<String> = md
         .iter()
-        .filter(|d| d.property.eq_ignore_ascii_case("creator"))
+        .filter(|d| {
+            d.property.eq_ignore_ascii_case("creator")
+                || d.property.eq_ignore_ascii_case("contributor")
+        })
         .filter(|d| {
             d.refined.iter().any(|r| {
                 r.property.eq_ignore_ascii_case("role")
@@ -357,6 +376,37 @@ fn extract_opf_ext<R: Read + Seek>(doc: &epub::doc::EpubDoc<R>) -> BookExt {
         .filter(|t| !t.is_empty())
         .collect();
     ext.translators = (!translators.is_empty()).then_some(translators);
+    let mut illustrators = Vec::new();
+    let mut contributors = Vec::new();
+    for item in md.iter().filter(|d| {
+        d.property.eq_ignore_ascii_case("creator") || d.property.eq_ignore_ascii_case("contributor")
+    }) {
+        let name = item.value.trim();
+        if name.is_empty() {
+            continue;
+        }
+        let roles: Vec<_> = item
+            .refined
+            .iter()
+            .filter(|r| r.property.eq_ignore_ascii_case("role"))
+            .collect();
+        if roles
+            .iter()
+            .any(|r| matches!(r.value.to_ascii_lowercase().as_str(), "ill" | "illustrator"))
+            && !illustrators.iter().any(|i| i == name)
+        {
+            illustrators.push(name.to_owned());
+        }
+        contributors.push(serde_json::json!({ "name": name, "kind": item.property,
+            "language": item.lang, "roles": roles.iter().map(|r| serde_json::json!({ "value": r.value, "scheme": r.scheme })).collect::<Vec<_>>() }));
+    }
+    ext.illustrators = (!illustrators.is_empty()).then_some(illustrators);
+    if !contributors.is_empty() {
+        ext.extra.insert(
+            "epub_contributors".into(),
+            serde_json::Value::Array(contributors),
+        );
+    }
     let _ = ext.sanitize();
     ext
 }
@@ -844,6 +894,36 @@ mod tests {
             }
         }
         writer.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn preserves_multiple_creators_and_contributor_roles_in_package_order() {
+        for version in ["2.0", "3.0"] {
+            let extra = if version == "2.0" {
+                r#"<dc:creator opf:role="aut">第二作者</dc:creator><dc:creator opf:role="aut">测试作者</dc:creator><dc:contributor opf:role="trl">译者</dc:contributor><dc:contributor opf:role="ill">画师</dc:contributor>"#
+            } else {
+                r##"<dc:creator id="author2">第二作者</dc:creator><meta refines="#author2" property="role" scheme="marc:relators">aut</meta><dc:contributor id="translator">译者</dc:contributor><meta refines="#translator" property="role" scheme="marc:relators">trl</meta><dc:creator id="illustrator">画师</dc:creator><meta refines="#illustrator" property="role" scheme="marc:relators">ill</meta>"##
+            };
+            let bytes = build_epub(&Fixture {
+                version,
+                metadata_extra: extra,
+                toc: vec![],
+                spine: vec![("ch.xhtml".into(), true)],
+            });
+            let book = parse(&bytes).unwrap();
+            assert_eq!(book.authors, vec!["测试作者", "第二作者"]);
+            assert_eq!(book.ext.translators, Some(vec!["译者".into()]));
+            assert_eq!(book.ext.illustrators, Some(vec!["画师".into()]));
+            let contributors = book.ext.extra["epub_contributors"].as_array().unwrap();
+            assert_eq!(contributors[0]["name"], "测试作者");
+            assert!(contributors.iter().any(|c| {
+                c["roles"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|r| r["value"] == "ill")
+            }));
+        }
     }
 
     #[test]
