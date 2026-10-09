@@ -310,7 +310,7 @@ pub fn parse_with_policy(
             fragment: None,
         })
         .collect();
-    let selector = Selector::parse("a[href]").expect("static selector");
+    let selector = Selector::parse("a").expect("static selector");
     let mut scanned = 0;
     let mut known: std::collections::HashSet<String> = documents
         .iter()
@@ -321,9 +321,13 @@ pub fn parse_with_policy(
             let d = &documents[scanned];
             let parsed = Html::parse_document(&d.content);
             queue.extend(parsed.select(&selector).filter_map(|a| {
-                a.value().attr("href").and_then(|h| {
-                    references.resolve(&container, &d.resource_path, h, &mut diagnostics)
-                })
+                a.value()
+                    .attrs()
+                    .find(|(name, _)| matches!(*name, "href" | "xlink:href"))
+                    .map(|(_, value)| value)
+                    .and_then(|h| {
+                        references.resolve(&container, &d.resource_path, h, &mut diagnostics)
+                    })
             }));
             scanned += 1;
         }
@@ -1068,6 +1072,51 @@ mod tests {
             }
         }
         writer.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn bridges_native_passive_html_semantics_and_reports_unsupported_presentation() {
+        let bytes = build_epub(&Fixture {
+            version: "3.0",
+            metadata_extra: "",
+            spine: vec![("ch.xhtml".into(), true), ("end.xhtml".into(), true)],
+            toc: vec![],
+        });
+        let html = r#"<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="zh-CN"><body><hr/><p hidden="">隐藏内容</p><ol reversed="" type="A" start="3"><li tabindex="0">第三项</li></ol><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><a xlink:href="end.xhtml#end"><text>下一章</text></a></svg><a href="HTTPS://example.test/">外部链接</a><wbr/><abbr title="全称">缩写</abbr><video><p>备用说明</p></video><img src="images/pic.png" srcset="images/pic.png 1x, images/pic.png 2x" onerror="alert(1)"/></body></html>"#;
+        let bytes = patch_epub(&bytes, &[("OEBPS/ch.xhtml", html.as_bytes())]);
+        let (book, diagnostics) = parse_with_diagnostics(&bytes).unwrap();
+        let content = &book.chapters[0].content;
+        for expected in [
+            "lang=\"zh-CN\"",
+            "<hr",
+            "<wbr",
+            "hidden=\"\"",
+            "reversed=\"\"",
+            "type=\"A\"",
+            "tabindex=\"0\"",
+            "备用说明",
+            "epub:chapter/1#end",
+            "HTTPS://example.test/",
+        ] {
+            assert!(content.contains(expected), "{expected}");
+        }
+        assert!(!content.contains("onerror"));
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.reason == "unsupported-media"
+                    && d.reference.as_deref() == Some("video"))
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.reason == "unsupported-responsive-image-set")
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.reason == "blocked-active-attribute")
+        );
     }
 
     #[test]

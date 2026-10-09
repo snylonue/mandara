@@ -247,6 +247,11 @@ impl<'a, R: Read + Seek> Renderer<'a, R> {
                             | "head"
                             | "body"
                             | "title"
+                            | "hr"
+                            | "dfn"
+                            | "cite"
+                            | "mark"
+                            | "small"
                             | "section"
                             | "article"
                             | "aside"
@@ -274,6 +279,9 @@ impl<'a, R: Read + Seek> Renderer<'a, R> {
                     )
                     || (svg && SVG_TAGS.contains(&tag))
                     || el.name.ns.as_ref() == "http://www.w3.org/1998/Math/MathML";
+                if !allowed {
+                    self.note(base, Some(tag), "unsupported-presentation-element");
+                }
                 if allowed {
                     out.push('<');
                     out.push_str(tag);
@@ -282,6 +290,12 @@ impl<'a, R: Read + Seek> Renderer<'a, R> {
                     }
                     for (name, value) in el.attrs() {
                         let name_lower = name.to_ascii_lowercase();
+                        if name_lower == "srcset" {
+                            self.note(base, Some("srcset"), "unsupported-responsive-image-set");
+                        }
+                        if name_lower.starts_with("on") {
+                            self.note(base, Some(name), "blocked-active-attribute");
+                        }
                         if name_lower.starts_with("on")
                             || matches!(
                                 name_lower.as_str(),
@@ -296,6 +310,9 @@ impl<'a, R: Read + Seek> Renderer<'a, R> {
                                 | "lang"
                                 | "xml:lang"
                                 | "dir"
+                                | "hidden"
+                                | "tabindex"
+                                | "translate"
                                 | "title"
                                 | "role"
                                 | "epub:type"
@@ -309,6 +326,8 @@ impl<'a, R: Read + Seek> Renderer<'a, R> {
                                 | "rowspan"
                                 | "align"
                                 | "start"
+                                | "type"
+                                | "reversed"
                                 | "value"
                                 | "scope"
                                 | "headers"
@@ -318,7 +337,7 @@ impl<'a, R: Read + Seek> Renderer<'a, R> {
                         let rewritten = match name_lower.as_str() {
                             "style" => Some(self.css(value, base, 0)),
                             "src" if tag == "img" => self.image(base, value),
-                            "href" if tag == "a" && !svg => self.link(base, value),
+                            "href" if tag == "a" => self.link(base, value),
                             "href" if svg && tag == "image" => self.passive_url(base, value, 0),
                             "href" if svg => value.starts_with('#').then(|| value.to_owned()),
                             _ if global

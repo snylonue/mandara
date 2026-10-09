@@ -101,7 +101,7 @@ pub fn allowed_attrs(tag: &str) -> &'static [&'static str] {
 /// Which `href` values survive sanitization: in-page anchors and
 /// http(s)/mailto links (opened by the reader in a new tab).
 pub fn keep_link(href: &str) -> bool {
-    let h = href.trim();
+    let h = href.trim().to_ascii_lowercase();
     h.starts_with('#')
         || h.starts_with("http://")
         || h.starts_with("https://")
