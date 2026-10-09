@@ -59,7 +59,16 @@ pub async fn get_image(
         .unwrap_or_else(|| "image/jpeg".into());
     Ok((
         [(CONTENT_TYPE, mime)],
-        [(header::CACHE_CONTROL, "public, max-age=31536000, immutable")],
+        [
+            (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            // SVG remains a passive image even when its capability URL is
+            // opened as a document instead of embedded in the reader.
+            (
+                header::CONTENT_SECURITY_POLICY,
+                "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:",
+            ),
+        ],
         bytes,
     ))
 }

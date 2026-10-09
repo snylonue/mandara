@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { IconArrowLeft, IconChevronLeft, IconChevronRight } from "./icons";
+import { EpubDocument, type EpubDocumentHandle } from "./EpubDocument";
 import {
   ReaderSettingsPanel,
   useReaderSettings,
@@ -51,12 +52,17 @@ export function Reader({
   );
   const loadedRef = useRef<Map<number, Chapter>>(new Map());
   const pendingFragRef = useRef<string | null>(null);
+  const epubRef = useRef<EpubDocumentHandle>(null);
+  const articleRef = useRef<HTMLElement>(null);
+  const renderTarget = useRef<{ fragment: string | null; fraction: number }>({ fragment: null, fraction: 0 });
+  const isDocument = chapter?.content.startsWith("<!doctype html>") ?? false;
 
   function scrollToFragId(frag: string | null) {
     // The chapter content carries the original element ids, so a TOC
     // fragment entry (`file.html#section`) can scroll into its section.
     requestAnimationFrame(() => {
-      const el = frag ? document.getElementById(frag) : null;
+      if (frag && epubRef.current) { epubRef.current.scrollToFragment(frag); return; }
+      const el = frag ? Array.from(articleRef.current?.querySelectorAll("[id]") ?? []).find((el) => el.id === frag) : null;
       if (el) el.scrollIntoView({ block: "start" });
     });
   }
@@ -66,21 +72,28 @@ export function Reader({
     const cached = loadedRef.current.get(idx);
     const frag = pendingFragRef.current;
     pendingFragRef.current = null;
-    if (cached) {
-      setChapter(cached);
-      restoreScroll(fraction);
-      scrollToFragId(frag);
-      return;
-    }
-    setLoading(true);
-    void loadChapter(idx).then((c) => {
-      loadedRef.current.set(idx, c);
+    let cancelled = false;
+    renderTarget.current = { fragment: frag, fraction };
+    setChapter(null);
+    function display(c: Chapter) {
+      if (cancelled) return;
       setChapter(c);
       setLoading(false);
-      restoreScroll(fraction);
-      scrollToFragId(frag);
-    });
+      if (!c.content.startsWith("<!doctype html>")) {
+        restoreScroll(fraction);
+        scrollToFragId(frag);
+      }
+    }
+    if (cached) display(cached);
+    else {
+      setLoading(true);
+      void loadChapter(idx).then((c) => {
+        loadedRef.current.set(idx, c);
+        display(c);
+      });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => { cancelled = true; };
   }, [idx]);
 
   function restoreScroll(frac: number) {
@@ -115,6 +128,7 @@ export function Reader({
   const lastFractionRef = useRef(0);
   useEffect(() => {
     function onScroll() {
+      if (isDocument) return;
       const max = document.documentElement.scrollHeight - window.innerHeight;
       const f = max > 0 ? Math.min(1, Math.max(0, window.scrollY / max)) : 0;
       setFraction(f);
@@ -133,7 +147,7 @@ export function Reader({
         onProgress(lastFractionRef.current);
       }
     };
-  }, [onProgress, readOnly]);
+  }, [onProgress, readOnly, isDocument]);
 
   useEffect(() => {
     return () => window.scrollTo(0, 0);
@@ -218,6 +232,7 @@ export function Reader({
       </div>
 
       <article
+        ref={articleRef}
         className={`reader-body font-${settings.font}`}
         style={{
           fontSize: `${settings.fontSize}px`,
@@ -226,14 +241,24 @@ export function Reader({
         }}
       >
         {loading && <p className="hint">{t("common.loading")}</p>}
-        {chapter &&
-          // Canonical sanitized HTML for every source (storage
-          // unification): epub chapters, txt paragraphs, plugin text with
-          // illustration conventions expanded at the ingest boundary.
-          <div
-            className="epub-content"
-            dangerouslySetInnerHTML={{ __html: chapter.content }}
-          />}
+        {chapter && (isDocument ? <EpubDocument
+          ref={epubRef}
+          content={chapter.content}
+          title={chapter.title}
+          settings={settings}
+          onReady={() => {
+            const target = renderTarget.current;
+            epubRef.current?.restoreFraction(target.fraction);
+            if (target.fragment) epubRef.current?.scrollToFragment(target.fragment);
+          }}
+          onFraction={(f) => {
+            setFraction(f);
+            lastFractionRef.current = f;
+            if (!onProgress || readOnly) return;
+            window.clearTimeout(debounceRef.current);
+            debounceRef.current = window.setTimeout(() => onProgress(f), 600);
+          }}
+        /> : <div className="epub-content" dangerouslySetInnerHTML={{ __html: chapter.content }} />)}
       </article>
 
       {/* single prev/next control set — large buttons with chapter preview */}

@@ -14,6 +14,9 @@ ego-tree = "0.11"
 url = { workspace = true }
 percent-encoding = "2.3"
 roxmltree = "0.21"
+cssparser = "0.37"
+base64 = "0.22"
 
 [dev-dependencies]
+serde_json = { workspace = true }
 zip = { workspace = true }

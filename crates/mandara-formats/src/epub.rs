@@ -9,13 +9,13 @@
 //!   document (`<nav epub:type="toc">`) or, for EPUB 2, the NCX `navMap`.
 //!   Entries map to spine documents by resource path; documents without a
 //!   TOC entry fall back to their first heading, then to a numbered title.
-//! - **Content stays XHTML**: chapters are stored as sanitized HTML
-//!   fragments so the reading UI can render paragraphs, headings, ruby,
-//!   tables and images the way the EPUB author intended. Internal image
-//!   resources are inlined as `data:` URIs (resources live inside the OCF
-//!   container per [EPUB 3.3 § 3.2](https://www.w3.org/TR/epub-33/#sec-ocf)).
-//! - Output is a safe whitelist: scripts, styles, event handlers and
-//!   foreign-content tags are stripped; only reachable link targets are kept.
+//! - **Passive presentation is preserved**: chapters are full sanitized
+//!   documents for isolated script-free frames. CSS imports and resource URLs
+//!   are resolved against their containing documents; extracted images use
+//!   ingest placeholders and CSS resources are embedded passive data URLs.
+//! - Scripts, forms, event handlers and remote resources are blocked. SVG,
+//!   MathML, document semantics and publication styles remain supported.
+//!   The audit entry point reports blocked and unsupported behavior.
 
 use crate::epub_uri::{Reference, resolve};
 use std::collections::HashMap;
@@ -30,7 +30,8 @@ use mandara_core::model::TocNode;
 use scraper::node::Node;
 use scraper::{ElementRef, Html, Selector};
 
-use crate::htmlize::{keep_link, sanitize_html_fragment};
+pub use crate::epub_render::Diagnostic;
+use crate::epub_render::Renderer;
 use crate::{CoverImage, ParsedBook, ParsedChapter};
 
 /// XHTML / HTML content types accepted as spine documents.
@@ -45,8 +46,15 @@ struct SpineDocument {
     heading: Option<String>,
 }
 
-/// Parse epub bytes into a normalized book.
+/// Parse EPUB bytes using the safe passive-presentation policy.
 pub fn parse(bytes: &[u8]) -> Result<ParsedBook> {
+    parse_with_diagnostics(bytes).map(|(book, _)| book)
+}
+
+/// Read-only audit entry point: distinguish broken references, unsupported
+/// media and blocked active content from publication content that is retained.
+pub fn parse_with_diagnostics(bytes: &[u8]) -> Result<(ParsedBook, Vec<Diagnostic>)> {
+    let mut diagnostics = Vec::new();
     let mut doc = epub::doc::EpubDoc::from_reader(std::io::Cursor::new(bytes))
         .map_err(|e| Error::InvalidArgument(format!("{e}")))?;
 
@@ -78,6 +86,24 @@ pub fn parse(bytes: &[u8]) -> Result<ParsedBook> {
     let branches = extract_toc_tree(&mut doc);
     let mut flat = Vec::new();
     flatten_branches(&branches, &mut flat);
+    for (reference, _) in &flat {
+        if doc.get_resource_mime_by_path(&reference.path).is_none() {
+            diagnostics.push(Diagnostic {
+                document: path_key(&doc.root_file),
+                reference: Some(reference.path.clone()),
+                reason: "missing-navigation-resource",
+            });
+        }
+    }
+    for item in &doc.spine {
+        if !doc.resources.contains_key(&item.idref) {
+            diagnostics.push(Diagnostic {
+                document: path_key(&doc.root_file),
+                reference: Some(item.idref.clone()),
+                reason: "undefined-spine-idref",
+            });
+        }
+    }
     let mut title_by_path: HashMap<String, String> = flat
         .iter()
         .filter(|(p, _)| p.fragment.is_none())
@@ -91,20 +117,30 @@ pub fn parse(bytes: &[u8]) -> Result<ParsedBook> {
 
     // Spine order is the reading order; `linear="no"` items (cover, nav,
     // acknowledgements, …) are auxiliary and must not become chapters.
-    let spine: Vec<(String, String, PathBuf)> = doc
+    let spine: Vec<(String, String, PathBuf, String)> = doc
         .spine
         .iter()
         .filter(|s| s.linear)
         .filter_map(|s| {
-            doc.resources
-                .get(&s.idref)
-                .map(|r| (s.idref.clone(), r.mime.clone(), r.path.clone()))
+            doc.resources.get(&s.idref).map(|r| {
+                let override_layout = s
+                    .properties
+                    .as_deref()
+                    .unwrap_or("")
+                    .split_ascii_whitespace()
+                    .find_map(|p| p.strip_prefix("rendition:layout-"));
+                let layout = override_layout
+                    .or_else(|| doc.mdata("rendition:layout").map(|m| m.value.as_str()))
+                    .unwrap_or("reflowable")
+                    .to_owned();
+                (s.idref.clone(), r.mime.clone(), r.path.clone(), layout)
+            })
         })
         .collect();
     let spine_pos: HashMap<String, usize> = spine
         .iter()
         .enumerate()
-        .map(|(i, (_, _, p))| (path_key(p), i))
+        .map(|(i, (_, _, p, _))| (path_key(p), i))
         .collect();
 
     // Embedded images, in first-reference order; the same container
@@ -112,20 +148,25 @@ pub fn parse(bytes: &[u8]) -> Result<ParsedBook> {
     let mut images: Vec<ParsedImage> = Vec::new();
     let mut seen_images: HashMap<String, usize> = HashMap::new();
     let mut documents = Vec::new();
-    for (spine_idx, (id, mime, resource_path)) in spine.into_iter().enumerate() {
-        if !XHTML_MIMES.contains(&mime.as_str()) {
+    for (spine_idx, (id, mime, resource_path, layout)) in spine.into_iter().enumerate() {
+        if !XHTML_MIMES.contains(&mime.as_str()) && mime != "image/svg+xml" {
+            diagnostics.push(Diagnostic {
+                document: path_key(&resource_path),
+                reference: Some(mime),
+                reason: "unsupported-spine-media-type",
+            });
             continue;
         }
         let Some((html, _mime)) = doc.get_resource_str(&id) else {
+            diagnostics.push(Diagnostic {
+                document: path_key(&resource_path),
+                reference: None,
+                reason: "missing-spine-resource",
+            });
             continue;
         };
-        let content = clean_xhtml(
-            &mut doc,
-            &html,
-            &resource_path,
-            &mut images,
-            &mut seen_images,
-        );
+        let content = Renderer::new(&mut doc, &mut images, &mut seen_images, &mut diagnostics)
+            .document(&html, &resource_path, &layout);
         documents.push(SpineDocument {
             spine_idx,
             resource_path,
@@ -181,17 +222,20 @@ pub fn parse(bytes: &[u8]) -> Result<ParsedBook> {
         .filter(|(bytes, _)| !bytes.is_empty())
         .map(|(bytes, mime)| CoverImage { bytes, mime });
 
-    Ok(ParsedBook {
-        title,
-        authors,
-        description,
-        cover_url: None,
-        cover,
-        images,
-        chapters,
-        toc,
-        ext,
-    })
+    Ok((
+        ParsedBook {
+            title,
+            authors,
+            description,
+            cover_url: None,
+            cover,
+            images,
+            chapters,
+            toc,
+            ext,
+        },
+        diagnostics,
+    ))
 }
 
 /// Extended metadata from the OPF's Dublin Core elements: ISBN (first
@@ -676,80 +720,6 @@ fn remap_branches(
     out
 }
 
-// ---- XHTML sanitization -----------------------------------------------
-
-/// Normalize a spine XHTML document into a safe HTML fragment by walking
-/// the parsed tree and re-serializing it from scratch:
-///
-/// - keeps structure (paragraphs, headings, lists, tables, ruby, …);
-/// - drops scripts, styles, forms, foreign content and any event handler /
-///   `style` attribute (whitelist approach);
-/// - unknown tags are unwrapped (their text content survives);
-/// - extracts referenced container images into `images` and rewrites their
-///   `src` to an ingest placeholder (`image:{n}`, n = index in `images`);
-/// - drops cross-document links (chapter-local anchors and http(s)/mailto
-///   links survive).
-///
-/// The whitelist walker/serializer itself lives in [`crate::htmlize`]
-/// ([`sanitize_html_fragment`]); the epub-specific parts are the image
-/// extraction and the base-dir link resolution, provided by the rewriter
-/// callback.
-fn clean_xhtml<R: Read + Seek>(
-    doc: &mut EpubDoc<R>,
-    html: &str,
-    doc_path: &Path,
-    images: &mut Vec<ParsedImage>,
-    seen: &mut HashMap<String, usize>,
-) -> String {
-    let base = doc_path;
-    // The epub-specific attribute rules: extract container images (rewriting
-    // their src to an ingest placeholder) and drop cross-document links.
-    let mut rewriter = |tag: &str, name: &str, value: &str| match (tag, name) {
-        ("img", "src") => extract_image(doc, base, value, images, seen),
-        ("a", "href") if !keep_link(value) => None,
-        _ => Some(value.to_string()),
-    };
-    sanitize_html_fragment(html, &mut rewriter)
-}
-
-/// Resolve a (possibly relative) epub image reference against the current
-/// document's directory, extract the bytes into `images` (deduplicated by
-/// container path) and return an ingest placeholder reference. Non-container
-/// schemes are left untouched (`data:`) or dropped (remote URLs — the
-/// reader must not leak its IP to third-party hosts).
-fn extract_image<R: Read + Seek>(
-    doc: &mut EpubDoc<R>,
-    base: &Path,
-    src: &str,
-    images: &mut Vec<ParsedImage>,
-    seen: &mut HashMap<String, usize>,
-) -> Option<String> {
-    if src.starts_with("data:") {
-        return Some(src.to_string());
-    }
-    if src.starts_with("http://") || src.starts_with("https://") {
-        return None;
-    }
-    let key = resolve(base, src)?.path;
-    if let Some(n) = seen.get(&key) {
-        return Some(format!("image:{n}"));
-    }
-    let Some(bytes) = doc.get_resource_by_path(&key) else {
-        return None; // broken reference: drop the image rather than a 404 icon
-    };
-    let mime = doc
-        .get_resource_mime_by_path(&key)
-        .unwrap_or_else(|| "image/png".to_string());
-    // Restrict to raster images.
-    if !(mime.starts_with("image/") && !mime.contains("svg")) {
-        return None;
-    }
-    let n = images.len();
-    images.push(ParsedImage { bytes, mime });
-    seen.insert(key, n);
-    Some(format!("image:{n}"))
-}
-
 /// Best-effort chapter heading extraction: the first non-empty heading in
 /// document order (per EPUB semantics the chapter title is the first
 /// heading element of the document).
@@ -797,6 +767,74 @@ mod tests {
             }
         }
         writer.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn preserves_css_semantics_svg_math_and_blocks_active_resources() {
+        let bytes = build_epub(&Fixture {
+            version: "3.0",
+            metadata_extra: "",
+            toc: vec![],
+            spine: vec![("Text/ch.xhtml".into(), true), ("art.svg".into(), true)],
+        });
+        let mut doc = EpubDoc::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+        let opf = doc.get_resource_str_by_path("OEBPS/content.opf").unwrap()
+            .replace(r#"href="art.svg" media-type="application/xhtml+xml""#, r#"href="art.svg" media-type="image/svg+xml""#)
+            .replace("</manifest>", r#"<item id="style" href="Styles/main.css" media-type="text/css"/><item id="import" href="Styles/nested.css" media-type="text/css"/><item id="font" href="Fonts/test.woff2" media-type="font/woff2"/><item id="art" href="image.svg" media-type="image/svg+xml"/></manifest>"#);
+        let xhtml = r##"<html lang="zh-CN" dir="rtl" class="book"><head><link rel="stylesheet" href="../Styles/main.css"/><style>.inline { letter-spacing:0.2em }</style><meta http-equiv="refresh" content="0;url=https://tracker.test"/></head><body><section class="inline" aria-label="正文" style="text-indent:2em"><p>正文<ruby>字<rt>zì</rt></ruby></p><img src="../image.svg"/><svg viewBox="0 0 10 10"><defs><path id="shape" d="M0,0L10,10"/></defs><use href="#shape"/><image href="../images/pic.png"/></svg><math xmlns="http://www.w3.org/1998/Math/MathML"><mfrac><mi>a</mi><mi>b</mi></mfrac></math><script>evil()</script><iframe src="https://tracker.test"/><form><input/></form><img onerror="evil()" src="https://tracker.test/a.png"/></section></body></html>"##;
+        let css = r#"@import "nested.css"; @import url(https://tracker.test/t.css); @font-face{font-family:book;src:url('../Fonts/test.woff2')} body{writing-mode:vertical-rl} .book p{text-indent:2em;background-image:url('../images/pic.png?size=1')} .remote{background:url(https://tracker.test/p.png)}"#;
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10" fill="red"/><script>evil()</script><image href="image.svg"/><foreignObject><p>unsafe</p></foreignObject></svg>"##;
+        let bytes = patch_epub(
+            &bytes,
+            &[
+                ("OEBPS/content.opf", opf.as_bytes()),
+                ("OEBPS/Text/ch.xhtml", xhtml.as_bytes()),
+                ("OEBPS/Styles/main.css", css.as_bytes()),
+                (
+                    "OEBPS/Styles/nested.css",
+                    b"p{margin-bottom:2em} @import 'main.css';",
+                ),
+                ("OEBPS/Fonts/test.woff2", b"test-font"),
+                ("OEBPS/image.svg", svg.as_bytes()),
+                ("OEBPS/art.svg", svg.as_bytes()),
+            ],
+        );
+        let (book, diagnostics) = parse_with_diagnostics(&bytes).unwrap();
+        assert_eq!(book.chapters.len(), 2);
+        let content = &book.chapters[0].content;
+        assert!(content.starts_with("<!doctype html>"));
+        assert!(content.contains("writing-mode:vertical-rl"));
+        assert!(content.contains("margin-bottom:2em"));
+        assert!(content.contains("data:font/woff2;base64,"));
+        assert!(content.contains("data:image/png;base64,"));
+        assert!(content.contains("aria-label=\"正文\""));
+        assert!(content.contains("style=\"text-indent:2em\""));
+        assert!(content.contains("viewBox=\"0 0 10 10\""));
+        assert!(content.contains("<mfrac>"));
+        assert!(content.contains("image:0"));
+        assert!(!content.contains("tracker.test"));
+        assert!(!content.contains("evil()"));
+        assert!(!content.contains("http-equiv"));
+        assert!(book.chapters[1].content.contains("<rect"));
+        assert!(book.images.iter().any(|i| i.mime == "image/svg+xml"));
+        let svg = std::str::from_utf8(&book.images[0].bytes).unwrap();
+        roxmltree::Document::parse(svg).unwrap();
+        assert!(!svg.contains("evil"));
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.reason == "blocked-active-content")
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.reason == "cyclic-stylesheet-import")
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.reason == "cyclic-resource-reference")
+        );
     }
 
     #[test]
@@ -895,7 +933,7 @@ mod tests {
             assert_eq!(book.chapters.len(), 4);
             assert!(book.chapters[0].content.contains("测试作者"));
             assert!(book.chapters[1].content.contains("短篇。"));
-            assert!(book.chapters[2].content.trim().is_empty());
+            assert!(book.chapters[2].content.contains("<body></body>"));
             assert!(book.chapters[3].content.contains("image:0"));
             assert_eq!(book.toc.len(), 4);
         }
@@ -1020,7 +1058,7 @@ mod tests {
                 );
             } else {
                 manifest.push_str(&format!(
-                    r#"<item id="ncx" href="{toc_file}" media-type="application/x-dtbncx+xml"/>"#
+                    r#"<item id="ncx" href="{toc_file}" media-type="application/x-dtbncx+xml"/><item id="pic" href="images/pic.png" media-type="image/png"/>"#
                 ));
             }
             let spine_xml = if fx.version == "3.0" {
@@ -1214,8 +1252,8 @@ mod tests {
         assert!(c0.content.contains("<strong>强调</strong>"));
         assert!(!c0.content.contains("<script"));
         assert!(!c0.content.contains("onclick"));
-        assert!(!c0.content.contains("style="));
-        assert!(!c0.content.contains("svg"));
+        assert!(c0.content.contains("style=\"color:red\""));
+        assert!(c0.content.contains("<svg>"));
         assert!(c0.content.contains("<table>"));
 
         // Embedded image becomes an ingest placeholder; the bytes land in

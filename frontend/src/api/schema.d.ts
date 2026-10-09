@@ -924,9 +924,15 @@ export interface components {
             idx: number;
             title: string;
             /**
-             * @description Sanitized HTML fragment (canonical for every source since the
-             *     storage unification: epub chapters, txt paragraphs, plugin
-             *     text with illustration conventions expanded).
+             * @description Sanitized HTML. Text/plugin chapters and legacy EPUB imports
+             *     are fragments. Newly parsed EPUB chapters are full documents
+             *     beginning with <!doctype html>, with passive publication CSS,
+             *     SVG/MathML and rewritten local resources. Render full documents
+             *     only in a sandboxed frame WITHOUT allow-scripts and with a CSP
+             *     blocking network access except /api/images/, inline styles and
+             *     embedded data images/fonts. Never insert publication CSS in the
+             *     application DOM. html[data-epub-layout] retains the resolved OPF
+             *     rendition layout (reflowable or pre-paginated).
              */
             content: string;
         };

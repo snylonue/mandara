@@ -2016,6 +2016,8 @@ dependencies = [
 name = "mandara-formats"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
+ "cssparser",
  "ego-tree",
  "encoding_rs",
  "epub",
@@ -2023,6 +2025,7 @@ dependencies = [
  "percent-encoding",
  "roxmltree",
  "scraper",
+ "serde_json",
  "url",
  "uuid",
  "zip",

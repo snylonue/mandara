@@ -1,4 +1,12 @@
-/* Canonical chapter HTML (every source; storage unification). */
+/* EPUB publication CSS remains inside its sandboxed document. */
+.epub-document {
+  display: block;
+  width: 100%;
+  height: 75vh;
+  border: 0;
+}
+
+/* Canonical text/plugin HTML and legacy EPUB imports. */
 .epub-content {
   letter-spacing: 0.02em;
   word-wrap: break-word;
