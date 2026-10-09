@@ -27,6 +27,7 @@ pub(crate) struct Renderer<'a, R: Read + Seek> {
     pub images: &'a mut Vec<ParsedImage>,
     pub seen: &'a mut HashMap<String, usize>,
     pub diagnostics: &'a mut Vec<Diagnostic>,
+    references: Option<&'a crate::epub_reference::ReferenceResolver>,
     targets: Option<&'a HashMap<String, u32>>,
     styles: HashSet<String>,
     resources: HashSet<String>,
@@ -46,6 +47,7 @@ impl<'a, R: Read + Seek> Renderer<'a, R> {
             images,
             seen,
             diagnostics,
+            references: None,
             targets: None,
             styles: HashSet::new(),
             resources: HashSet::new(),
@@ -57,12 +59,28 @@ impl<'a, R: Read + Seek> Renderer<'a, R> {
         self
     }
 
+    pub fn with_references(
+        mut self,
+        references: &'a crate::epub_reference::ReferenceResolver,
+    ) -> Self {
+        self.references = Some(references);
+        self
+    }
+
+    fn reference(&mut self, base: &Path, href: &str) -> Option<crate::epub_uri::Reference> {
+        if let Some(references) = self.references {
+            references.resolve(self.container, base, href, self.diagnostics)
+        } else {
+            resolve(base, href)
+        }
+    }
+
     fn link(&mut self, base: &Path, href: &str) -> Option<String> {
         let trimmed = href.trim();
         if keep_link(trimmed) && !trimmed.starts_with('#') {
             return Some(trimmed.to_owned());
         }
-        let reference = resolve(base, trimmed)?;
+        let reference = self.reference(base, trimmed)?;
         let idx = self
             .targets
             .and_then(|targets| targets.get(&reference.path))
@@ -326,7 +344,7 @@ impl<'a, R: Read + Seek> Renderer<'a, R> {
     }
 
     fn resource(&mut self, base: &Path, href: &str) -> Option<(String, Vec<u8>, String)> {
-        let reference = match resolve(base, href) {
+        let reference = match self.reference(base, href) {
             Some(r) => r,
             None => {
                 self.note(base, Some(href), "blocked-non-container-url");

@@ -56,6 +56,20 @@ pub fn parse(bytes: &[u8]) -> Result<ParsedBook> {
 /// Read-only audit entry point: distinguish broken references, unsupported
 /// media and blocked active content from publication content that is retained.
 pub fn parse_with_diagnostics(bytes: &[u8]) -> Result<(ParsedBook, Vec<Diagnostic>)> {
+    parse_with_policy(bytes, ParsePolicy::Compatible)
+}
+
+/// Strict reference interpretation or bounded, diagnostic producer recovery.
+#[derive(Clone, Copy, Debug)]
+pub enum ParsePolicy {
+    Strict,
+    Compatible,
+}
+
+pub fn parse_with_policy(
+    bytes: &[u8],
+    policy: ParsePolicy,
+) -> Result<(ParsedBook, Vec<Diagnostic>)> {
     let mut diagnostics = Vec::new();
     let mut container = crate::epub_container::Container::new(std::io::Cursor::new(bytes))
         .map_err(|e| Error::InvalidArgument(format!("invalid epub container: {e}")))?;
@@ -103,7 +117,16 @@ pub fn parse_with_diagnostics(bytes: &[u8]) -> Result<(ParsedBook, Vec<Diagnosti
 
     // TOC (nav doc / NCX) → tree, with a flattened path → label map for
     // chapter titles (leaf entries win for documents with nested entries).
-    let branches = extract_toc_tree(&mut doc, &mut container);
+    let references = crate::epub_reference::ReferenceResolver::new(
+        doc.root_file.clone(),
+        doc.resources
+            .values()
+            .map(|r| (path_key(&r.path), r.mime.clone())),
+        matches!(policy, ParsePolicy::Compatible),
+        &mut diagnostics,
+    );
+    let mut branches = extract_toc_tree(&mut doc, &mut container);
+    recover_navigation(&mut branches, &references, &container, &mut diagnostics);
     let mut flat = Vec::new();
     flatten_branches(&branches, &mut flat);
     for (reference, _) in &flat {
@@ -277,9 +300,9 @@ pub fn parse_with_diagnostics(bytes: &[u8]) -> Result<(ParsedBook, Vec<Diagnosti
             let d = &documents[scanned];
             let parsed = Html::parse_document(&d.content);
             queue.extend(parsed.select(&selector).filter_map(|a| {
-                a.value()
-                    .attr("href")
-                    .and_then(|h| resolve(&d.resource_path, h))
+                a.value().attr("href").and_then(|h| {
+                    references.resolve(&container, &d.resource_path, h, &mut diagnostics)
+                })
             }));
             scanned += 1;
         }
@@ -359,6 +382,7 @@ pub fn parse_with_diagnostics(bytes: &[u8]) -> Result<(ParsedBook, Vec<Diagnosti
                 &mut diagnostics,
             )
             .with_targets(&chapter_by_path)
+            .with_references(&references)
             .document(&document.content, &document.resource_path, &document.layout),
         });
         kept_spine.push(document.spine_idx);
@@ -503,6 +527,7 @@ fn extract_opf_ext<R: Read + Seek>(doc: &epub::doc::EpubDoc<R>) -> BookExt {
 struct TocBranch {
     title: String,
     path: Option<Reference>,
+    source: Option<(PathBuf, String)>,
     children: Vec<TocBranch>,
 }
 
@@ -631,10 +656,12 @@ fn collect_xml_nav(root: roxmltree::Node<'_, '_>, base: &Path) -> Vec<TocBranch>
                     n.descendants()
                         .find(|n| n.has_tag_name("a") && n.attribute("href").is_some())
                 });
-            let (title, path) = if let Some(a) = own {
+            let (title, path, source) = if let Some(a) = own {
                 (
                     xml_text(a),
                     a.attribute("href").and_then(|h| resolve(base, h)),
+                    a.attribute("href")
+                        .map(|h| (base.to_path_buf(), h.to_owned())),
                 )
             } else {
                 (
@@ -643,11 +670,13 @@ fn collect_xml_nav(root: roxmltree::Node<'_, '_>, base: &Path) -> Vec<TocBranch>
                         .map(xml_text)
                         .collect::<String>(),
                     None,
+                    None,
                 )
             };
             TocBranch {
                 title,
                 path,
+                source,
                 children: collect_xml_nav(li, base),
             }
         })
@@ -683,11 +712,15 @@ fn collect_nav_branches(root: scraper::ElementRef<'_>, base: &Path) -> Vec<TocBr
                     e.select(&a_sel).next()
                 }
             });
-        let (title, path) = match own_link {
+        let (title, path, source) = match own_link {
             Some(a) => {
                 let t: String = a.text().collect::<String>().trim().to_string();
                 let href = a.value().attr("href").unwrap_or("");
-                (t, resolve(base, href))
+                (
+                    t,
+                    resolve(base, href),
+                    Some((base.to_path_buf(), href.to_owned())),
+                )
             }
             None => {
                 // No link: a group entry. Take the li's own text but
@@ -705,7 +738,7 @@ fn collect_nav_branches(root: scraper::ElementRef<'_>, base: &Path) -> Vec<TocBr
                         _ => {}
                     }
                 }
-                (txt.trim().to_string(), None)
+                (txt.trim().to_string(), None, None)
             }
         };
         if title.is_empty() && path.is_none() {
@@ -717,6 +750,7 @@ fn collect_nav_branches(root: scraper::ElementRef<'_>, base: &Path) -> Vec<TocBr
         out.push(TocBranch {
             title,
             path,
+            source,
             children,
         });
     }
@@ -756,16 +790,18 @@ fn collect_xml_ncx(parent: roxmltree::Node<'_, '_>, base: &Path) -> Vec<TocBranc
                 .find(|n| n.has_tag_name("navLabel"))
                 .map(xml_text)
                 .unwrap_or_default();
-            let path = point
+            let href = point
                 .children()
                 .find(|n| n.has_tag_name("content"))
-                .and_then(|n| n.attribute("src"))
-                .and_then(|h| resolve(base, h));
+                .and_then(|n| n.attribute("src"));
+            let path = href.and_then(|h| resolve(base, h));
+            let source = href.map(|h| (base.to_path_buf(), h.to_owned()));
             (
                 order,
                 TocBranch {
                     title,
                     path,
+                    source,
                     children: collect_xml_ncx(point, base),
                 },
             )
@@ -817,13 +853,15 @@ fn collect_ncx_branches(parent: &scraper::ElementRef<'_>, base: &Path) -> Vec<To
                         .and_then(|c| c.value().attr("src").map(|s| s.to_string()))
                 }
             });
-        let path = href.and_then(|h| resolve(base, &h));
+        let path = href.as_deref().and_then(|h| resolve(base, h));
+        let source = href.map(|h| (base.to_path_buf(), h));
         let children = collect_ncx_branches(&np, base);
         ordered.push((
             order,
             TocBranch {
                 title,
                 path,
+                source,
                 children,
             },
         ));
@@ -854,9 +892,24 @@ fn navpoint_branches(points: &[NavPoint]) -> Vec<TocBranch> {
         .map(|p| TocBranch {
             title: p.label.clone(),
             path: resolve(Path::new(""), &p.content.to_string_lossy()),
+            source: Some((PathBuf::new(), p.content.to_string_lossy().into_owned())),
             children: navpoint_branches(&p.children),
         })
         .collect()
+}
+
+fn recover_navigation<R: Read + Seek>(
+    branches: &mut [TocBranch],
+    references: &crate::epub_reference::ReferenceResolver,
+    container: &crate::epub_container::Container<R>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for branch in branches {
+        if let Some((base, href)) = &branch.source {
+            branch.path = references.resolve(container, base, href, diagnostics);
+        }
+        recover_navigation(&mut branch.children, references, container, diagnostics);
+    }
 }
 
 /// Flatten a branch tree into `(path, label)` pairs, depth-first,
@@ -985,6 +1038,88 @@ mod tests {
             }
         }
         writer.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn recovers_package_relative_producer_links_only_after_exact_resolution_fails() {
+        for version in ["2.0", "3.0"] {
+            let bytes = build_epub(&Fixture {
+                version,
+                metadata_extra: "",
+                spine: vec![
+                    ("text/main.xhtml".into(), true),
+                    ("text/end.xhtml".into(), true),
+                ],
+                toc: vec![e("正文", "text/main.xhtml", vec![])],
+            });
+            let mut doc = EpubDoc::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+            let nav_name = if version == "2.0" {
+                "toc.ncx"
+            } else {
+                "nav.xhtml"
+            };
+            let nav = doc
+                .get_resource_str_by_path(format!("OEBPS/{nav_name}"))
+                .unwrap();
+            let opf = doc
+                .get_resource_str_by_path("OEBPS/content.opf")
+                .unwrap()
+                .replace(
+                    &format!("href=\"{nav_name}\""),
+                    &format!("href=\"text/{nav_name}\""),
+                )
+                .replace(
+                    "</manifest>",
+                    r#"<item id="css" href="style.css" media-type="text/css"/></manifest>"#,
+                );
+            let main = r#"<html><head><link rel="stylesheet" href="style.css"/></head><body><p>正文<img src="images/pic.png"/><a href="text/end.xhtml#end">下一章</a></p></body></html>"#;
+            let bytes = patch_epub(
+                &bytes,
+                &[
+                    ("OEBPS/content.opf", opf.as_bytes()),
+                    (&format!("OEBPS/text/{nav_name}"), nav.as_bytes()),
+                    ("OEBPS/text/main.xhtml", main.as_bytes()),
+                    (
+                        "OEBPS/style.css",
+                        b"body { margin:7em; background-image:url(images/pic.png) }",
+                    ),
+                ],
+            );
+            let (strict, diagnostics) = parse_with_policy(&bytes, ParsePolicy::Strict).unwrap();
+            assert!(strict.images.is_empty());
+            assert!(
+                diagnostics
+                    .iter()
+                    .any(|d| d.reason == "missing-manifest-resource")
+            );
+            assert!(
+                diagnostics
+                    .iter()
+                    .all(|d| !d.reason.starts_with("compatibility-"))
+            );
+            let (compatible, diagnostics) = parse_with_diagnostics(&bytes).unwrap();
+            assert_eq!(compatible.chapters.len(), 2);
+            assert_eq!(compatible.images.len(), 1);
+            assert_eq!(compatible.toc[0].idx, Some(0));
+            assert_eq!(compatible.toc[0].title, "正文");
+            assert!(compatible.chapters[0].content.contains("margin:7em"));
+            assert!(
+                compatible.chapters[0]
+                    .content
+                    .contains("epub:chapter/1#end")
+            );
+            assert!(
+                diagnostics
+                    .iter()
+                    .any(|d| d.reason == "compatibility-opf-relative-reference")
+            );
+            assert!(
+                diagnostics
+                    .iter()
+                    .all(|d| d.reason != "missing-manifest-resource"
+                        && d.reason != "missing-navigation-resource")
+            );
+        }
     }
 
     #[test]

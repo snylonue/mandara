@@ -5,6 +5,7 @@
 
 pub mod epub;
 mod epub_container;
+mod epub_reference;
 mod epub_render;
 mod epub_uri;
 pub mod htmlize;

@@ -2,9 +2,15 @@
 use base64::{Engine, engine::general_purpose::STANDARD};
 fn main() {
     let output = std::env::var_os("MANDARA_EPUB_AUDIT_OUTPUT_DIR").map(std::path::PathBuf::from);
-    for path in std::env::args().skip(1) {
+    let args: Vec<_> = std::env::args().skip(1).collect();
+    let policy = if args.iter().any(|a| a == "--strict") {
+        mandara_formats::epub::ParsePolicy::Strict
+    } else {
+        mandara_formats::epub::ParsePolicy::Compatible
+    };
+    for path in args.into_iter().filter(|a| a != "--strict") {
         let bytes = std::fs::read(&path).expect("read EPUB");
-        match mandara_formats::epub::parse_with_diagnostics(&bytes) {
+        match mandara_formats::epub::parse_with_policy(&bytes, policy) {
             Ok((book, diagnostics)) => {
                 println!(
                     "{path}: chapters={} images={} toc={} authors={}",
