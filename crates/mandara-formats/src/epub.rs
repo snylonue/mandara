@@ -57,6 +57,8 @@ pub fn parse(bytes: &[u8]) -> Result<ParsedBook> {
 /// media and blocked active content from publication content that is retained.
 pub fn parse_with_diagnostics(bytes: &[u8]) -> Result<(ParsedBook, Vec<Diagnostic>)> {
     let mut diagnostics = Vec::new();
+    let mut container = crate::epub_container::Container::new(std::io::Cursor::new(bytes))
+        .map_err(|e| Error::InvalidArgument(format!("invalid epub container: {e}")))?;
     let mut doc = epub::doc::EpubDoc::from_reader(std::io::Cursor::new(bytes))
         .map_err(|e| Error::InvalidArgument(format!("{e}")))?;
 
@@ -101,7 +103,7 @@ pub fn parse_with_diagnostics(bytes: &[u8]) -> Result<(ParsedBook, Vec<Diagnosti
 
     // TOC (nav doc / NCX) → tree, with a flattened path → label map for
     // chapter titles (leaf entries win for documents with nested entries).
-    let branches = extract_toc_tree(&mut doc);
+    let branches = extract_toc_tree(&mut doc, &mut container);
     let mut flat = Vec::new();
     flatten_branches(&branches, &mut flat);
     for (reference, _) in &flat {
@@ -135,7 +137,7 @@ pub fn parse_with_diagnostics(bytes: &[u8]) -> Result<(ParsedBook, Vec<Diagnosti
 
     // Spine order is the reading order; `linear="no"` items (cover, nav,
     // acknowledgements, …) remain addressable outside the default order.
-    let package = doc.get_resource_str_by_path(doc.root_file.clone());
+    let package = container.text(&doc.root_file);
     let fallback_ids: HashMap<String, String> = package
         .as_deref()
         .and_then(|s| roxmltree::Document::parse(s).ok())
@@ -221,7 +223,7 @@ pub fn parse_with_diagnostics(bytes: &[u8]) -> Result<(ParsedBook, Vec<Diagnosti
     let mut images: Vec<ParsedImage> = Vec::new();
     let mut seen_images: HashMap<String, usize> = HashMap::new();
     let mut documents = Vec::new();
-    for (spine_idx, (id, mime, resource_path, layout, linear)) in spine.iter().cloned().enumerate()
+    for (spine_idx, (_id, mime, resource_path, layout, linear)) in spine.iter().cloned().enumerate()
     {
         if !XHTML_MIMES.contains(&mime.as_str()) && mime != "image/svg+xml" {
             diagnostics.push(Diagnostic {
@@ -231,11 +233,15 @@ pub fn parse_with_diagnostics(bytes: &[u8]) -> Result<(ParsedBook, Vec<Diagnosti
             });
             continue;
         }
-        let Some((html, _mime)) = doc.get_resource_str(&id) else {
+        let Some(html) = container.text(&resource_path) else {
             diagnostics.push(Diagnostic {
                 document: path_key(&resource_path),
                 reference: None,
-                reason: "missing-spine-resource",
+                reason: if container.contains(&resource_path) {
+                    "invalid-spine-text-encoding"
+                } else {
+                    "missing-spine-resource"
+                },
             });
             continue;
         };
@@ -293,7 +299,7 @@ pub fn parse_with_diagnostics(bytes: &[u8]) -> Result<(ParsedBook, Vec<Diagnosti
                 continue;
             }
             known.insert(reference.path.clone());
-            let Some(html) = doc.get_resource_str_by_path(&reference.path) else {
+            let Some(html) = container.text(Path::new(&reference.path)) else {
                 continue;
             };
             let pos = spine.len() + documents.len();
@@ -345,9 +351,15 @@ pub fn parse_with_diagnostics(bytes: &[u8]) -> Result<(ParsedBook, Vec<Diagnosti
         chapters.push(ParsedChapter {
             title,
             linear: document.linear,
-            content: Renderer::new(&mut doc, &mut images, &mut seen_images, &mut diagnostics)
-                .with_targets(&chapter_by_path)
-                .document(&document.content, &document.resource_path, &document.layout),
+            content: Renderer::new(
+                &mut doc,
+                &mut container,
+                &mut images,
+                &mut seen_images,
+                &mut diagnostics,
+            )
+            .with_targets(&chapter_by_path)
+            .document(&document.content, &document.resource_path, &document.layout),
         });
         kept_spine.push(document.spine_idx);
     }
@@ -377,7 +389,13 @@ pub fn parse_with_diagnostics(bytes: &[u8]) -> Result<(ParsedBook, Vec<Diagnosti
 
     // Cover image: EPUB3 `cover-image` property, EPUB2 `<meta name="cover">`.
     let cover = doc
-        .get_cover()
+        .get_cover_id()
+        .and_then(|id| doc.resources.get(&id))
+        .and_then(|resource| {
+            container
+                .bytes(&resource.path)
+                .map(|bytes| (bytes, resource.mime.clone()))
+        })
         .filter(|(bytes, _)| !bytes.is_empty())
         .map(|(bytes, mime)| CoverImage { bytes, mime });
 
@@ -492,11 +510,17 @@ struct TocBranch {
 /// nav document when present, otherwise the NCX `navMap`, finally the
 /// flattened `EpubDoc` NCX parse. Returns the tree with hierarchy intact
 /// (`playOrder` respected for NCX).
-fn extract_toc_tree<R: Read + Seek>(doc: &mut EpubDoc<R>) -> Vec<TocBranch> {
+fn extract_toc_tree<R: Read + Seek>(
+    doc: &mut EpubDoc<R>,
+    container: &mut crate::epub_container::Container<R>,
+) -> Vec<TocBranch> {
     // EPUB 3: the nav document listed in the manifest with the `nav` property.
     if doc.version == epub::doc::EpubVersion::Version3_0
         && let Some(nav_id) = doc.get_nav_id()
-        && let Some((html, _)) = doc.get_resource_str(&nav_id)
+        && let Some(html) = doc
+            .resources
+            .get(&nav_id)
+            .and_then(|r| container.text(&r.path))
     {
         let nav_path = doc
             .resources
@@ -510,7 +534,7 @@ fn extract_toc_tree<R: Read + Seek>(doc: &mut EpubDoc<R>) -> Vec<TocBranch> {
     }
 
     // EPUB 2 selects the NCX through spine@toc, not HashMap iteration.
-    let package = doc.get_resource_str_by_path(doc.root_file.clone());
+    let package = container.text(&doc.root_file);
     let toc_id = package
         .as_deref()
         .and_then(|xml| roxmltree::Document::parse(xml).ok())
@@ -533,7 +557,7 @@ fn extract_toc_tree<R: Read + Seek>(doc: &mut EpubDoc<R>) -> Vec<TocBranch> {
                 .min()
         });
     if let Some(ncx_path) = ncx_path
-        && let Some(xml) = doc.get_resource_str_by_path(&ncx_path)
+        && let Some(xml) = container.text(&ncx_path)
     {
         let branches = parse_ncx_branches(&xml, &ncx_path);
         if !branches.is_empty() {

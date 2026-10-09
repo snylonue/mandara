@@ -23,6 +23,7 @@ pub struct Diagnostic {
 
 pub(crate) struct Renderer<'a, R: Read + Seek> {
     pub doc: &'a mut EpubDoc<R>,
+    container: &'a mut crate::epub_container::Container<R>,
     pub images: &'a mut Vec<ParsedImage>,
     pub seen: &'a mut HashMap<String, usize>,
     pub diagnostics: &'a mut Vec<Diagnostic>,
@@ -34,12 +35,14 @@ pub(crate) struct Renderer<'a, R: Read + Seek> {
 impl<'a, R: Read + Seek> Renderer<'a, R> {
     pub fn new(
         doc: &'a mut EpubDoc<R>,
+        container: &'a mut crate::epub_container::Container<R>,
         images: &'a mut Vec<ParsedImage>,
         seen: &'a mut HashMap<String, usize>,
         diagnostics: &'a mut Vec<Diagnostic>,
     ) -> Self {
         Self {
             doc,
+            container,
             images,
             seen,
             diagnostics,
@@ -335,7 +338,7 @@ impl<'a, R: Read + Seek> Renderer<'a, R> {
             self.note(base, Some(href), "missing-manifest-resource");
             return None;
         };
-        let Some(bytes) = self.doc.get_resource_by_path(&reference.path) else {
+        let Some(bytes) = self.container.bytes(Path::new(&reference.path)) else {
             self.note(base, Some(href), "missing-container-resource");
             return None;
         };
@@ -410,13 +413,13 @@ impl<'a, R: Read + Seek> Renderer<'a, R> {
             self.note(base, None, "cyclic-resource-reference");
             return None;
         }
-        let text = std::str::from_utf8(bytes).ok()?;
+        let text = crate::epub_container::decode_text(bytes)?;
         let key = base.to_string_lossy().into_owned();
         if !self.resources.insert(key.clone()) {
             self.note(base, None, "cyclic-resource-reference");
             return None;
         }
-        let parsed = Html::parse_fragment(text);
+        let parsed = Html::parse_fragment(&text);
         let svg = parsed
             .select(&scraper::Selector::parse("svg").unwrap())
             .next();
@@ -488,7 +491,11 @@ impl<'a, R: Read + Seek> Renderer<'a, R> {
             self.note(base, Some(href), "cyclic-stylesheet-import");
             return String::new();
         }
-        let text = String::from_utf8_lossy(&bytes);
+        let Some(text) = crate::epub_container::decode_text(&bytes) else {
+            self.styles.remove(&path);
+            self.note(base, Some(href), "invalid-stylesheet-text-encoding");
+            return String::new();
+        };
         let css = self.css(&text, Path::new(&path), depth + 1);
         self.styles.remove(&path);
         css

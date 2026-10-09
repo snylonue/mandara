@@ -18,5 +18,4 @@ cssparser = "0.37"
 base64 = "0.22"
 serde_json = { workspace = true }
 
-[dev-dependencies]
 zip = { workspace = true }

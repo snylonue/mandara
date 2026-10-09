@@ -4,6 +4,7 @@
 //! ([`ParsedBook`]), which the server then stores in the central library.
 
 pub mod epub;
+mod epub_container;
 mod epub_render;
 mod epub_uri;
 pub mod htmlize;
