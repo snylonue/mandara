@@ -13,6 +13,11 @@ pub(crate) struct Reference {
 /// Resolve against a document, never a directory. Only container-local URLs
 /// are accepted; network and active schemes must not become ZIP lookups.
 pub(crate) fn resolve(document: &Path, href: &str) -> Option<Reference> {
+    // The synthetic origin is an implementation detail, never a publication
+    // origin. Reject every absolute URL, including one matching that host.
+    if Url::parse(href.trim()).is_ok() {
+        return None;
+    }
     let mut base = Url::parse("https://epub.invalid/").ok()?;
     {
         let mut segments = base.path_segments_mut().ok()?;
@@ -82,6 +87,8 @@ mod tests {
     fn rejects_non_container_references() {
         for href in [
             "https://tracker.test/p.png",
+            "https://epub.invalid/OPS/p.png",
+            "https://user:password@epub.invalid/OPS/p.png",
             "//tracker.test/p.png",
             "javascript:alert(1)",
             "data:image/png;base64,x",
