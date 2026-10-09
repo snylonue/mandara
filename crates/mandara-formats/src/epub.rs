@@ -99,9 +99,12 @@ pub fn parse_with_policy(
             .collect();
         let name = creator.value.trim();
         let author = roles.is_empty()
-            || roles
-                .iter()
-                .any(|r| matches!(r.value.to_ascii_lowercase().as_str(), "aut" | "author"));
+            || roles.iter().any(|r| {
+                matches!(
+                    r.value.trim().to_ascii_lowercase().as_str(),
+                    "aut" | "author"
+                )
+            });
         if author && !name.is_empty() && !authors.iter().any(|a| a == name) {
             authors.push(name.to_owned());
         }
@@ -478,7 +481,7 @@ fn extract_opf_ext<R: Read + Seek>(doc: &epub::doc::EpubDoc<R>) -> BookExt {
         .filter(|d| {
             d.refined.iter().any(|r| {
                 r.property.eq_ignore_ascii_case("role")
-                    && matches!(r.value.to_lowercase().as_str(), "trl" | "translator")
+                    && matches!(r.value.trim().to_lowercase().as_str(), "trl" | "translator")
             })
         })
         .map(|d| d.value.trim().to_string())
@@ -499,15 +502,17 @@ fn extract_opf_ext<R: Read + Seek>(doc: &epub::doc::EpubDoc<R>) -> BookExt {
             .iter()
             .filter(|r| r.property.eq_ignore_ascii_case("role"))
             .collect();
-        if roles
-            .iter()
-            .any(|r| matches!(r.value.to_ascii_lowercase().as_str(), "ill" | "illustrator"))
-            && !illustrators.iter().any(|i| i == name)
+        if roles.iter().any(|r| {
+            matches!(
+                r.value.trim().to_ascii_lowercase().as_str(),
+                "ill" | "illustrator"
+            )
+        }) && !illustrators.iter().any(|i| i == name)
         {
             illustrators.push(name.to_owned());
         }
         contributors.push(serde_json::json!({ "name": name, "kind": item.property,
-            "language": item.lang, "roles": roles.iter().map(|r| serde_json::json!({ "value": r.value, "scheme": r.scheme })).collect::<Vec<_>>() }));
+            "language": item.lang, "roles": roles.iter().map(|r| serde_json::json!({ "value": r.value.trim(), "scheme": r.scheme })).collect::<Vec<_>>() }));
     }
     ext.illustrators = (!illustrators.is_empty()).then_some(illustrators);
     if !contributors.is_empty() {
@@ -1169,7 +1174,7 @@ mod tests {
             let extra = if version == "2.0" {
                 r#"<dc:creator opf:role="aut">第二作者</dc:creator><dc:creator opf:role="aut">测试作者</dc:creator><dc:contributor opf:role="trl">译者</dc:contributor><dc:contributor opf:role="ill">画师</dc:contributor>"#
             } else {
-                r##"<dc:creator id="author2">第二作者</dc:creator><meta refines="#author2" property="role" scheme="marc:relators">aut</meta><dc:contributor id="translator">译者</dc:contributor><meta refines="#translator" property="role" scheme="marc:relators">trl</meta><dc:creator id="illustrator">画师</dc:creator><meta refines="#illustrator" property="role" scheme="marc:relators">ill</meta>"##
+                r##"<dc:creator id="author2">第二作者</dc:creator><meta refines="#author2" property="role" scheme="marc:relators">  aut  </meta><dc:contributor id="translator">译者</dc:contributor><meta refines="#translator" property="role" scheme="marc:relators">  trl  </meta><dc:creator id="illustrator">画师</dc:creator><meta refines="#illustrator" property="role" scheme="marc:relators">  ill  </meta>"##
             };
             let bytes = build_epub(&Fixture {
                 version,
