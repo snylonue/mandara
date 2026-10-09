@@ -84,7 +84,12 @@ pub fn parse_with_policy(
         }
     }
 
-    let title = doc.get_title().unwrap_or_else(|| "Untitled".into());
+    let title = doc
+        .metadata
+        .iter()
+        .find(|m| m.property.eq_ignore_ascii_case("title") && !m.value.trim().is_empty())
+        .map(|m| m.value.trim().to_owned())
+        .unwrap_or_else(|| "Untitled".into());
 
     let mut authors = Vec::new();
     for creator in doc
@@ -463,6 +468,12 @@ pub fn parse_with_policy(
 fn extract_opf_ext<R: Read + Seek>(doc: &epub::doc::EpubDoc<R>) -> BookExt {
     let mut ext = BookExt::default();
     let md = &doc.metadata;
+    // The primary display fields are projections, not the complete package
+    // metadata. Keep repeated titles, descriptions, identifiers and refinements.
+    let metadata: Vec<_> = md.iter().map(|m| serde_json::json!({ "property": m.property, "value": m.value, "language": m.lang,
+        "refinements": m.refined.iter().map(|r| serde_json::json!({ "property": r.property, "value": r.value, "language": r.lang, "scheme": r.scheme })).collect::<Vec<_>>() })).collect();
+    ext.extra
+        .insert("epub_metadata".into(), serde_json::Value::Array(metadata));
     let by_property = |name: &str| {
         md.iter()
             .find(|d| d.property.eq_ignore_ascii_case(name))
@@ -1057,6 +1068,35 @@ mod tests {
             }
         }
         writer.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn retains_alternate_titles_descriptions_languages_and_refinements() {
+        let bytes = build_epub(&Fixture {
+            version: "3.0",
+            metadata_extra: r##"<dc:title id="alternate" xml:lang="zh-Hant">備用標題</dc:title><meta refines="#alternate" property="title-type">short</meta><dc:description xml:lang="zh-Hans">说明正文</dc:description><dc:description xml:lang="zh-Hant">備用說明</dc:description>"##,
+            spine: vec![("ch.xhtml".into(), true)],
+            toc: vec![],
+        });
+        let book = parse(&bytes).unwrap();
+        assert_eq!(book.title, "测试书");
+        assert_eq!(book.description.as_deref(), Some("说明正文"));
+        let metadata = book.ext.extra["epub_metadata"].as_array().unwrap();
+        let titles: Vec<_> = metadata
+            .iter()
+            .filter(|m| m["property"] == "title")
+            .collect();
+        assert_eq!(titles.len(), 2);
+        assert_eq!(titles[1]["value"], "備用標題");
+        assert_eq!(titles[1]["language"], "zh-Hant");
+        assert_eq!(titles[1]["refinements"][0]["value"], "short");
+        assert_eq!(
+            metadata
+                .iter()
+                .filter(|m| m["property"] == "description")
+                .count(),
+            2
+        );
     }
 
     #[test]
