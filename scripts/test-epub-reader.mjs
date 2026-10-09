@@ -7,7 +7,7 @@ import path from "node:path";
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE ?? "playwright");
 const origin = "http://127.0.0.1:8112";
 const documents = [
-  '<!doctype html><html data-epub-layout="reflowable" lang="zh-CN"><head><style>body{color:rgb(12,34,56)}.nav{display:none}p{text-indent:2em;margin-bottom:2em}.spacer{height:2000px}</style></head><body><a href="#target">脚注</a><p>正文<ruby>字<rt>zì</rt></ruby></p><table><tr><td>表格</td></tr></table><script>window.executed=true;parent.executed=true</script><img src="https://tracker.invalid/track"><div class="spacer"></div><p id="target">目标</p></body></html>',
+  '<!doctype html><html data-epub-layout="reflowable" lang="zh-CN"><head><style>body{color:rgb(12,34,56)}.nav{display:none}p{text-indent:2em;margin-bottom:2em}.spacer{height:2000px}#target{display:none}#target:target{display:block}</style></head><body><a href="#target">脚注</a><p>正文<ruby>字<rt>zì</rt></ruby></p><table><tr><td>表格</td></tr></table><script>window.executed=true;parent.executed=true</script><img src="https://tracker.invalid/track"><div class="spacer"></div><p id="target">目标</p></body></html>',
   '<!doctype html><html data-epub-layout="reflowable"><head><style>body{writing-mode:vertical-rl;height:400px;width:4000px}</style></head><body><p>竖排正文</p><svg viewBox="0 0 10 10"><rect width="10" height="10" fill="red"/></svg></body></html>',
   '<!doctype html><html data-epub-layout="pre-paginated"><head><meta name="viewport" content="width=1000,height=1500"></head><body><svg viewBox="0 0 1000 1500" width="1000" height="1500"><rect width="1000" height="1500" fill="red"/></svg></body></html>',
 ];
@@ -50,6 +50,8 @@ try {
   assert.equal(await frame.locator("table").count(), 1);
   await frame.locator("a").click();
   await frame.waitForFunction(() => document.scrollingElement.scrollTop > 0);
+  assert.ok(await frame.locator("#target").isVisible());
+  assert.equal(await frame.evaluate(() => location.hash), "#target");
   assert.ok(await frame.evaluate(() => document.getElementById("target").getBoundingClientRect().top < innerHeight));
   frame = await open(1);
   assert.equal(await frame.locator("body").evaluate(el => getComputedStyle(el).writingMode), "vertical-rl");
@@ -67,7 +69,7 @@ try {
     chapters: [
       { idx: 0, title: "第一章", linear: true, content: '<!doctype html><html><body><a href="epub:chapter/2#note%20one">注释</a></body></html>' },
       { idx: 1, title: "第二章", linear: true, content: '<!doctype html><html><body>第二章</body></html>' },
-      { idx: 2, title: "注释", linear: false, content: '<!doctype html><html><body><div style="height:2000px"></div><p id="note one">注释正文<a href="epub:chapter/0">返回</a></p></body></html>' },
+      { idx: 2, title: "注释", linear: false, content: '<!doctype html><html><body><div style="height:2000px"></div><details><summary>注释</summary><p id="note one">注释正文<a href="epub:chapter/0">返回</a></p></details></body></html>' },
     ], toc: [{ title: "注释目录", idx: 2, frag: "note one", children: [] }],
   };
   frame = await open();

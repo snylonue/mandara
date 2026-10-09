@@ -34,14 +34,31 @@ export function EpubDocument({ content, title, settings, onFraction, onReady, on
     const doc = frame.current?.contentDocument;
     return doc ? getComputedStyle(doc.body).writingMode.startsWith("vertical") : false;
   }
+  function navigateFragment(fragment: string) {
+    const doc = frame.current?.contentDocument;
+    if (!doc?.defaultView) return;
+    // Native fragment state activates :target and reveals collapsed details;
+    // scrolling alone loses publication footnote presentation semantics.
+    doc.defaultView.location.hash = "#" + encodeURIComponent(fragment);
+    const target = doc.getElementById(fragment);
+    for (let parent = target?.parentElement; parent; parent = parent.parentElement) {
+      if (parent.tagName === "DETAILS") parent.setAttribute("open", "");
+    }
+    requestAnimationFrame(() => {
+      if (frame.current?.contentDocument !== doc) return;
+      target?.scrollIntoView({ block: "start" });
+      frame.current?.scrollIntoView({ block: "nearest" });
+    });
+  }
+
   useImperativeHandle(ref, () => ({
     scrollToFragment(fragment) {
-      frame.current?.contentDocument?.getElementById(fragment)?.scrollIntoView({ block: "start" });
-      frame.current?.scrollIntoView({ block: "nearest" });
+      navigateFragment(fragment);
     },
     restoreFraction(fraction) {
       const root = scroller();
       if (!root) return;
+      if (fraction === 0 && frame.current?.contentWindow) frame.current.contentWindow.location.hash = "";
       if (vertical()) {
         const mode = getComputedStyle(frame.current!.contentDocument!.body).writingMode;
         root.scrollLeft = (mode === "vertical-rl" ? -1 : 1) * (root.scrollWidth - root.clientWidth) * fraction;
@@ -107,7 +124,7 @@ export function EpubDocument({ content, title, settings, onFraction, onReady, on
       if (internal) {
         try { callbacks.current.onNavigate(Number(internal[1]), internal[2] ? decodeURIComponent(internal[2]) : undefined); } catch { /* Invalid source fragment. */ }
       } else if (href.startsWith("#")) {
-        try { doc?.getElementById(decodeURIComponent(href.slice(1)))?.scrollIntoView({ block: "start" }); } catch { /* Invalid source fragment. */ }
+        try { navigateFragment(decodeURIComponent(href.slice(1))); } catch { /* Invalid source fragment. */ }
       } else if (/^(https?:|mailto:)/i.test(href)) {
         window.open(href, "_blank", "noopener,noreferrer");
       }
