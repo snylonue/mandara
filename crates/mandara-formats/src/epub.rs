@@ -272,12 +272,29 @@ fn extract_toc_tree<R: Read + Seek>(doc: &mut EpubDoc<R>) -> Vec<TocBranch> {
         }
     }
 
-    // EPUB 2: the NCX document from the manifest.
-    let ncx_path = doc
-        .resources
-        .values()
-        .find(|r| r.mime == NCX_MIME)
-        .map(|r| r.path.clone());
+    // EPUB 2 selects the NCX through spine@toc, not HashMap iteration.
+    let package = doc.get_resource_str_by_path(doc.root_file.clone());
+    let toc_id = package
+        .as_deref()
+        .and_then(|xml| roxmltree::Document::parse(xml).ok())
+        .and_then(|xml| {
+            xml.descendants()
+                .find(|n| n.has_tag_name("spine"))
+                .and_then(|n| n.attribute("toc"))
+                .map(str::to_owned)
+        });
+    let ncx_path = toc_id
+        .as_ref()
+        .and_then(|id| doc.resources.get(id))
+        .filter(|r| r.mime == NCX_MIME)
+        .map(|r| r.path.clone())
+        .or_else(|| {
+            doc.resources
+                .values()
+                .filter(|r| r.mime == NCX_MIME)
+                .map(|r| r.path.clone())
+                .min()
+        });
     if let Some(ncx_path) = ncx_path
         && let Some(xml) = doc.get_resource_str_by_path(&ncx_path)
     {
@@ -291,22 +308,89 @@ fn extract_toc_tree<R: Read + Seek>(doc: &mut EpubDoc<R>) -> Vec<TocBranch> {
     navpoint_branches(&doc.toc)
 }
 
-/// Branch list of an EPUB 3 nav document. `<nav epub:type="toc">` navs win;
-/// otherwise the first nav element is used. `href` values are relative to
-/// the nav document's directory.
+/// Select the EPUB 3 TOC by namespace and semantic token list. A typed
+/// landmarks/page-list navigation is never a substitute for the TOC.
 fn parse_nav_branches(html: &str, nav_path: &Path) -> Vec<TocBranch> {
-    let frag = Html::parse_document(html);
-    let nav = frag
-        .select(&Selector::parse(r#"nav[epub\:type=toc]"#).expect("static selector"))
-        .next()
-        .or_else(|| {
-            frag.select(&Selector::parse("nav").expect("static selector"))
-                .next()
+    if let Ok(xml) = roxmltree::Document::parse(html) {
+        let nav = xml.descendants().find(|n| {
+            n.has_tag_name(("http://www.w3.org/1999/xhtml", "nav"))
+                && n.attribute(("http://www.idpf.org/2007/ops", "type"))
+                    .is_some_and(|v| v.split_ascii_whitespace().any(|v| v == "toc"))
         });
-    let Some(nav) = nav else {
-        return Vec::new();
-    };
-    collect_nav_branches(nav, nav_path)
+        let nav = nav.or_else(|| {
+            xml.descendants().find(|n| {
+                n.has_tag_name("nav")
+                    && n.attribute(("http://www.idpf.org/2007/ops", "type"))
+                        .is_none()
+            })
+        });
+        return nav
+            .map(|n| collect_xml_nav(n, nav_path))
+            .unwrap_or_default();
+    }
+    // Recovery for producer HTML that is not namespace-well-formed XML.
+    let parsed = Html::parse_document(html);
+    let selector = Selector::parse("nav").expect("static selector");
+    let navs: Vec<_> = parsed.select(&selector).collect();
+    let nav = navs
+        .iter()
+        .copied()
+        .find(|n| {
+            n.value()
+                .attr("epub:type")
+                .is_some_and(|v| v.split_ascii_whitespace().any(|v| v == "toc"))
+        })
+        .or_else(|| {
+            navs.iter()
+                .copied()
+                .find(|n| n.value().attr("epub:type").is_none())
+        });
+    nav.map(|nav| collect_nav_branches(nav, nav_path))
+        .unwrap_or_default()
+}
+
+fn xml_text(node: roxmltree::Node<'_, '_>) -> String {
+    node.descendants()
+        .filter(|n| n.is_text())
+        .filter_map(|n| n.text())
+        .collect::<String>()
+        .trim()
+        .to_owned()
+}
+
+fn collect_xml_nav(root: roxmltree::Node<'_, '_>, base: &Path) -> Vec<TocBranch> {
+    root.children()
+        .filter(|n| n.has_tag_name("ol"))
+        .flat_map(|ol| ol.children().filter(|n| n.has_tag_name("li")))
+        .map(|li| {
+            let own = li
+                .children()
+                .take_while(|n| !n.has_tag_name("ol"))
+                .find_map(|n| {
+                    n.descendants()
+                        .find(|n| n.has_tag_name("a") && n.attribute("href").is_some())
+                });
+            let (title, path) = if let Some(a) = own {
+                (
+                    xml_text(a),
+                    a.attribute("href").and_then(|h| resolve(base, h)),
+                )
+            } else {
+                (
+                    li.children()
+                        .filter(|n| !n.has_tag_name("ol"))
+                        .map(xml_text)
+                        .collect::<String>(),
+                    None,
+                )
+            };
+            TocBranch {
+                title,
+                path,
+                children: collect_xml_nav(li, base),
+            }
+        })
+        .collect()
 }
 
 #[allow(clippy::only_used_in_recursion)]
@@ -381,6 +465,11 @@ fn collect_nav_branches(root: scraper::ElementRef<'_>, base: &Path) -> Vec<TocBr
 /// Branch tree of an EPUB 2 NCX `navMap`. `src` values are relative to the
 /// NCX document's directory; sibling order follows `playOrder`.
 fn parse_ncx_branches(xml: &str, ncx_path: &Path) -> Vec<TocBranch> {
+    if let Ok(parsed) = roxmltree::Document::parse(xml)
+        && let Some(map) = parsed.descendants().find(|n| n.has_tag_name("navMap"))
+    {
+        return collect_xml_ncx(map, ncx_path);
+    }
     let frag = Html::parse_fragment(xml);
     let base = ncx_path;
     // The top-level `navPoint` elements live inside `navMap`; start there
@@ -390,6 +479,39 @@ fn parse_ncx_branches(xml: &str, ncx_path: &Path) -> Vec<TocBranch> {
         .next()
         .unwrap_or(frag.root_element());
     collect_ncx_branches(&parent, base)
+}
+
+fn collect_xml_ncx(parent: roxmltree::Node<'_, '_>, base: &Path) -> Vec<TocBranch> {
+    let mut points: Vec<_> = parent
+        .children()
+        .filter(|n| n.has_tag_name("navPoint"))
+        .map(|point| {
+            let order = point
+                .attribute("playOrder")
+                .and_then(|o| o.parse::<usize>().ok())
+                .unwrap_or(usize::MAX);
+            let title = point
+                .children()
+                .find(|n| n.has_tag_name("navLabel"))
+                .map(xml_text)
+                .unwrap_or_default();
+            let path = point
+                .children()
+                .find(|n| n.has_tag_name("content"))
+                .and_then(|n| n.attribute("src"))
+                .and_then(|h| resolve(base, h));
+            (
+                order,
+                TocBranch {
+                    title,
+                    path,
+                    children: collect_xml_ncx(point, base),
+                },
+            )
+        })
+        .collect();
+    points.sort_by_key(|(order, _)| *order);
+    points.into_iter().map(|(_, branch)| branch).collect()
 }
 
 fn collect_ncx_branches(parent: &scraper::ElementRef<'_>, base: &Path) -> Vec<TocBranch> {
@@ -675,6 +797,73 @@ mod tests {
             }
         }
         writer.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn selects_toc_tokens_and_namespace_not_first_landmarks_nav() {
+        for tokens in ["toc", "toc landmarks", "landmarks toc"] {
+            let xml = format!(
+                r#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:e="http://www.idpf.org/2007/ops"><body><nav e:type="landmarks"><ol><li><a href="cover.xhtml">封面</a></li></ol></nav><nav e:type="{tokens}"><ol><li><a href="../Text/ch.xhtml#section">章节</a></li></ol></nav></body></html>"#
+            );
+            let branches = parse_nav_branches(&xml, Path::new("OPS/Nav/nav.xhtml"));
+            assert_eq!(branches.len(), 1);
+            assert_eq!(branches[0].title, "章节");
+            assert_eq!(branches[0].path.as_ref().unwrap().path, "OPS/Text/ch.xhtml");
+        }
+        let xml = r#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:e="http://www.idpf.org/2007/ops"><body><nav e:type="page-list"><ol><li><a href="a.xhtml">页码</a></li></ol></nav></body></html>"#;
+        assert!(parse_nav_branches(xml, Path::new("OPS/nav.xhtml")).is_empty());
+    }
+
+    #[test]
+    fn selects_spine_ncx_and_deterministic_malformed_package_fallback() {
+        let bytes = build_epub(&Fixture {
+            version: "2.0",
+            metadata_extra: "",
+            spine: vec![("ch.xhtml".into(), true)],
+            toc: vec![e("指定目录", "ch.xhtml", vec![])],
+        });
+        let mut doc = EpubDoc::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+        let opf = doc.get_resource_str_by_path("OEBPS/content.opf").unwrap()
+            .replace("</manifest>", r#"<item id="other" href="aaa.ncx" media-type="application/x-dtbncx+xml"/></manifest>"#);
+        let other = r#"<ncx><navMap><navPoint><navLabel><text>备用目录</text></navLabel><content src="ch.xhtml"/></navPoint></navMap></ncx>"#;
+        let selected = patch_epub(
+            &bytes,
+            &[
+                ("OEBPS/content.opf", opf.as_bytes()),
+                ("OEBPS/aaa.ncx", other.as_bytes()),
+            ],
+        );
+        assert_eq!(parse(&selected).unwrap().chapters[0].title, "指定目录");
+        let fallback = patch_epub(
+            &selected,
+            &[(
+                "OEBPS/content.opf",
+                opf.replace(r#"toc="ncx""#, r#"toc="missing""#).as_bytes(),
+            )],
+        );
+        for _ in 0..8 {
+            assert_eq!(parse(&fallback).unwrap().chapters[0].title, "备用目录");
+        }
+    }
+
+    #[test]
+    fn local_navigation_fragments_resolve_against_the_navigation_document() {
+        let xml = r##"<html><body><nav epub:type="toc"><ol><li><a href="#section">小节</a></li></ol></nav></body></html>"##;
+        let branches = parse_nav_branches(xml, Path::new("OPS/nav.xhtml"));
+        assert_eq!(branches[0].path.as_ref().unwrap().path, "OPS/nav.xhtml");
+        assert_eq!(
+            branches[0].path.as_ref().unwrap().fragment.as_deref(),
+            Some("section")
+        );
+        let ncx = r##"<ncx><navMap><navPoint><navLabel><text>小节</text></navLabel><content src="#section"/></navPoint></navMap></ncx>"##;
+        assert_eq!(
+            parse_ncx_branches(ncx, Path::new("OPS/toc.ncx"))[0]
+                .path
+                .as_ref()
+                .unwrap()
+                .path,
+            "OPS/toc.ncx"
+        );
     }
 
     #[test]
