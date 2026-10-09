@@ -17,9 +17,10 @@
 //! - Output is a safe whitelist: scripts, styles, event handlers and
 //!   foreign-content tags are stripped; only reachable link targets are kept.
 
+use crate::epub_uri::{Reference, resolve};
 use std::collections::HashMap;
 use std::io::{Read, Seek};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use crate::ParsedImage;
 use epub::doc::{EpubDoc, NavPoint};
@@ -51,6 +52,14 @@ pub fn parse(bytes: &[u8]) -> Result<ParsedBook> {
     let mut doc = epub::doc::EpubDoc::from_reader(std::io::Cursor::new(bytes))
         .map_err(|e| Error::InvalidArgument(format!("{e}")))?;
 
+    // epub-rs stores manifest hrefs as filesystem joins. Canonicalize them
+    // once as URLs before any resource access (including covers and nav).
+    for resource in doc.resources.values_mut() {
+        if let Some(reference) = resolve(Path::new(""), &resource.path.to_string_lossy()) {
+            resource.path = PathBuf::from(reference.path);
+        }
+    }
+
     let title = doc.get_title().unwrap_or_else(|| "Untitled".into());
 
     let authors = doc
@@ -71,8 +80,11 @@ pub fn parse(bytes: &[u8]) -> Result<ParsedBook> {
     let branches = extract_toc_tree(&mut doc);
     let mut flat = Vec::new();
     flatten_branches(&branches, &mut flat);
-    let title_by_path: HashMap<String, String> =
-        flat.into_iter().map(|(p, l)| (path_key(&p), l)).collect();
+    let title_by_path: HashMap<String, String> = flat
+        .into_iter()
+        .filter(|(p, _)| p.fragment.is_none())
+        .map(|(p, l)| (p.path, l))
+        .collect();
 
     // Spine order is the reading order; `linear="no"` items (cover, nav,
     // acknowledgements, …) are auxiliary and must not become chapters.
@@ -252,7 +264,7 @@ fn extract_opf_ext<R: Read + Seek>(doc: &epub::doc::EpubDoc<R>) -> BookExt {
 /// target document (`None` for pure group entries).
 struct TocBranch {
     title: String,
-    path: Option<PathBuf>,
+    path: Option<Reference>,
     children: Vec<TocBranch>,
 }
 
@@ -311,8 +323,7 @@ fn parse_nav_branches(html: &str, nav_path: &Path) -> Vec<TocBranch> {
     let Some(nav) = nav else {
         return Vec::new();
     };
-    let base = nav_path.parent().unwrap_or(Path::new(""));
-    collect_nav_branches(nav, base)
+    collect_nav_branches(nav, nav_path)
 }
 
 #[allow(clippy::only_used_in_recursion)]
@@ -348,11 +359,7 @@ fn collect_nav_branches(root: scraper::ElementRef<'_>, base: &Path) -> Vec<TocBr
             Some(a) => {
                 let t: String = a.text().collect::<String>().trim().to_string();
                 let href = a.value().attr("href").unwrap_or("");
-                if href.starts_with('#') {
-                    (t, None)
-                } else {
-                    (t, Some(base.join(href)))
-                }
+                (t, resolve(base, href))
             }
             None => {
                 // No link: a group entry. Take the li's own text but
@@ -392,7 +399,7 @@ fn collect_nav_branches(root: scraper::ElementRef<'_>, base: &Path) -> Vec<TocBr
 /// NCX document's directory; sibling order follows `playOrder`.
 fn parse_ncx_branches(xml: &str, ncx_path: &Path) -> Vec<TocBranch> {
     let frag = Html::parse_fragment(xml);
-    let base = ncx_path.parent().unwrap_or(Path::new(""));
+    let base = ncx_path;
     // The top-level `navPoint` elements live inside `navMap`; start there
     // so `collect_ncx_branches` sees exactly one level per call.
     let parent = frag
@@ -444,7 +451,7 @@ fn collect_ncx_branches(parent: &scraper::ElementRef<'_>, base: &Path) -> Vec<To
                         .and_then(|c| c.value().attr("src").map(|s| s.to_string()))
                 }
             });
-        let path = href.filter(|h| !h.starts_with('#')).map(|h| base.join(h));
+        let path = href.and_then(|h| resolve(base, &h));
         let children = collect_ncx_branches(&np, base);
         ordered.push((
             order,
@@ -480,7 +487,7 @@ fn navpoint_branches(points: &[NavPoint]) -> Vec<TocBranch> {
         .iter()
         .map(|p| TocBranch {
             title: p.label.clone(),
-            path: Some(p.content.clone()),
+            path: resolve(Path::new(""), &p.content.to_string_lossy()),
             children: navpoint_branches(&p.children),
         })
         .collect()
@@ -489,7 +496,7 @@ fn navpoint_branches(points: &[NavPoint]) -> Vec<TocBranch> {
 /// Flatten a branch tree into `(path, label)` pairs, depth-first,
 /// **children last** so document-level title lookups prefer the deepest
 /// (most specific) entry for a document.
-fn flatten_branches(branches: &[TocBranch], out: &mut Vec<(PathBuf, String)>) {
+fn flatten_branches(branches: &[TocBranch], out: &mut Vec<(Reference, String)>) {
     for b in branches {
         if let Some(path) = &b.path {
             out.push((path.clone(), b.title.clone()));
@@ -498,17 +505,9 @@ fn flatten_branches(branches: &[TocBranch], out: &mut Vec<(PathBuf, String)>) {
     }
 }
 
-/// Canonical key for container paths: normalized components joined with
-/// `/`, tolerant of `.`/`..`/separator differences.
+/// Key for a container path already canonicalized by the URL resolver.
 fn path_key(p: &Path) -> String {
-    p.components()
-        .filter_map(|c| match c {
-            Component::CurDir | Component::RootDir | Component::Prefix(_) => None,
-            Component::Normal(s) => Some(s.to_string_lossy().into_owned()),
-            Component::ParentDir => Some("..".to_string()),
-        })
-        .collect::<Vec<_>>()
-        .join("/")
+    p.to_string_lossy().into_owned()
 }
 
 /// Map the parsed branch tree onto the final chapter list.
@@ -529,14 +528,13 @@ fn remap_branches(
     branches: &[TocBranch],
     spine_pos: &HashMap<String, usize>,
     kept: &[usize],
-    parent_key: Option<&str>,
+    parent_key: Option<&Reference>,
 ) -> Vec<TocNode> {
     let mut out = Vec::new();
     for b in branches {
-        let key = b.path.as_deref().map(path_key);
-        let base_key = key.as_deref().and_then(|k| k.split('#').next());
-        let this_idx: Option<u32> = base_key.and_then(|k| {
-            let pos = spine_pos.get(k)?;
+        let key = b.path.as_ref();
+        let this_idx: Option<u32> = key.and_then(|k| {
+            let pos = spine_pos.get(&k.path)?;
             kept.binary_search(pos).ok().map(|i| i as u32)
         });
         match this_idx {
@@ -556,15 +554,11 @@ fn remap_branches(
             Some(i) => {
                 // Exact duplicate of an ancestor entry (same target):
                 // already reachable, drop it.
-                if key.as_deref() == parent_key {
+                if key == parent_key {
                     continue;
                 }
-                let frag = key
-                    .as_deref()
-                    .and_then(|k| k.split('#').nth(1))
-                    .filter(|f| !f.is_empty())
-                    .map(Into::into);
-                let children = remap_branches(&b.children, spine_pos, kept, key.as_deref());
+                let frag = key.and_then(|k| k.fragment.clone());
+                let children = remap_branches(&b.children, spine_pos, kept, key);
                 out.push(TocNode {
                     title: b.title.clone(),
                     idx: Some(i),
@@ -602,7 +596,7 @@ fn clean_xhtml<R: Read + Seek>(
     images: &mut Vec<ParsedImage>,
     seen: &mut HashMap<String, usize>,
 ) -> String {
-    let base = doc_path.parent().unwrap_or(Path::new(""));
+    let base = doc_path;
     // The epub-specific attribute rules: extract container images (rewriting
     // their src to an ingest placeholder) and drop cross-document links.
     let mut rewriter = |tag: &str, name: &str, value: &str| match (tag, name) {
@@ -631,13 +625,7 @@ fn extract_image<R: Read + Seek>(
     if src.starts_with("http://") || src.starts_with("https://") {
         return None;
     }
-    let path = if let Some(rel) = src.strip_prefix('/') {
-        // Container-root-relative (non-standard but seen in the wild).
-        PathBuf::from(rel)
-    } else {
-        base.join(src)
-    };
-    let key = path_key(&path);
+    let key = resolve(base, src)?.path;
     if let Some(n) = seen.get(&key) {
         return Some(format!("image:{n}"));
     }
@@ -719,6 +707,60 @@ mod tests {
     use std::io::Write;
     use zip::ZipWriter;
     use zip::write::SimpleFileOptions;
+
+    /// Replace/add entries in a generated fixture without shipping real books.
+    fn patch_epub(bytes: &[u8], replacements: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut writer = ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let opts = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        for i in 0..archive.len() {
+            let mut entry = archive.by_index(i).unwrap();
+            let mut data = Vec::new();
+            entry.read_to_end(&mut data).unwrap();
+            if let Some((_, replacement)) = replacements.iter().find(|(p, _)| *p == entry.name()) {
+                data = replacement.to_vec();
+            }
+            writer.start_file(entry.name(), opts).unwrap();
+            writer.write_all(&data).unwrap();
+        }
+        for (path, data) in replacements {
+            if archive.by_name(path).is_err() {
+                writer.start_file(*path, opts).unwrap();
+                writer.write_all(data).unwrap();
+            }
+        }
+        writer.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn resolves_nested_nav_images_queries_and_encoded_names() {
+        let bytes = build_epub(&Fixture {
+            version: "3.0",
+            spine: vec![("Text/chapter one.xhtml".into(), true)],
+            toc: vec![],
+            metadata_extra: "",
+        });
+        let mut doc = EpubDoc::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+        let opf = doc
+            .get_resource_str_by_path("OEBPS/content.opf")
+            .unwrap()
+            .replace(
+                "Text/chapter one.xhtml",
+                "Text/./chapter%20one.xhtml?edition=1",
+            )
+            .replace("nav.xhtml", "Navigation/nav.xhtml");
+        let bytes = patch_epub(&bytes, &[
+            ("OEBPS/content.opf", opf.as_bytes()),
+            ("OEBPS/Navigation/nav.xhtml", r#"<html><body><nav epub:type="toc"><ol><li><a href="../Text/chapter%20one.xhtml?reader=1#part%20two">测试章节</a></li></ol></nav></body></html>"#.as_bytes()),
+            ("OEBPS/Text/chapter one.xhtml", r#"<html><body><h1>测试章节</h1><p id="part two">正文</p><img src="../images/./pic.png?size=1#xywh=0,0,1,1"/></body></html>"#.as_bytes()),
+        ]);
+        let book = parse(&bytes).unwrap();
+        assert_eq!(book.chapters[0].title, "测试章节");
+        assert_eq!(book.toc[0].idx, Some(0));
+        assert_eq!(book.toc[0].frag.as_deref(), Some("part two"));
+        assert_eq!(book.images.len(), 1);
+        assert!(book.chapters[0].content.contains("image:0"));
+    }
 
     const PNG_1PX: &[u8] = &[
         0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,

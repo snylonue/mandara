@@ -2020,7 +2020,9 @@ dependencies = [
  "encoding_rs",
  "epub",
  "mandara-core",
+ "percent-encoding",
  "scraper",
+ "url",
  "uuid",
  "zip",
 ]
