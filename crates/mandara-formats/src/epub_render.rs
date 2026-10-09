@@ -29,6 +29,7 @@ pub(crate) struct Renderer<'a, R: Read + Seek> {
     pub diagnostics: &'a mut Vec<Diagnostic>,
     references: Option<&'a crate::epub_reference::ReferenceResolver>,
     targets: Option<&'a HashMap<String, u32>>,
+    empty_publisher_css: bool,
     styles: HashSet<String>,
     resources: HashSet<String>,
 }
@@ -49,6 +50,7 @@ impl<'a, R: Read + Seek> Renderer<'a, R> {
             diagnostics,
             references: None,
             targets: None,
+            empty_publisher_css: false,
             styles: HashSet::new(),
             resources: HashSet::new(),
         }
@@ -113,10 +115,39 @@ impl<'a, R: Read + Seek> Renderer<'a, R> {
         });
     }
 
+    pub fn with_empty_publisher_css(mut self, empty: bool) -> Self {
+        self.empty_publisher_css = empty;
+        self
+    }
+
     pub fn document(&mut self, source: &str, base: &Path, layout: &str) -> String {
         let parsed = Html::parse_document(source);
         let mut out = String::from("<!doctype html>");
         self.node(&mut out, &parsed.root_element(), base, 0, false, layout);
+        let vrtl = parsed
+            .root_element()
+            .value()
+            .attr("class")
+            .is_some_and(|c| c.split_ascii_whitespace().any(|c| c == "vrtl"));
+        let inline = parsed
+            .select(&scraper::Selector::parse("style,[style]").unwrap())
+            .any(|e| {
+                e.value()
+                    .attr("style")
+                    .is_some_and(|s| !s.trim().is_empty())
+                    || (e.value().name() == "style" && !e.inner_html().trim().is_empty())
+            });
+        if self.empty_publisher_css
+            && vrtl
+            && !inline
+            && layout != "pre-paginated"
+            && let Some(head) = out
+                .find("<head")
+                .and_then(|i| out[i..].find('>').map(|j| i + j + 1))
+        {
+            out.insert_str(head, "<style data-mandara-compat=\"empty-css-vrtl\">:where(html){writing-mode:vertical-rl;text-orientation:mixed}</style>");
+            self.note(base, None, "compatibility-empty-css-vrtl");
+        }
         out
     }
 

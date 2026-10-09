@@ -117,6 +117,19 @@ pub fn parse_with_policy(
     // ISBN, which is validated + canonicalized; anything unparseable or
     // invalid is skipped — a broken field never fails the upload.
     let ext = extract_opf_ext(&doc);
+    // Producer-class recovery is not EPUB semantics. Apply it only when the
+    // entire declared publisher CSS set is genuinely present but zero-length.
+    let stylesheets: Vec<_> = doc
+        .resources
+        .values()
+        .filter(|r| r.mime == "text/css")
+        .map(|r| r.path.clone())
+        .collect();
+    let empty_publisher_css = matches!(policy, ParsePolicy::Compatible)
+        && !stylesheets.is_empty()
+        && stylesheets
+            .iter()
+            .all(|p| container.bytes(p).is_some_and(|b| b.is_empty()));
 
     // TOC (nav doc / NCX) → tree, with a flattened path → label map for
     // chapter titles (leaf entries win for documents with nested entries).
@@ -386,6 +399,7 @@ pub fn parse_with_policy(
             )
             .with_targets(&chapter_by_path)
             .with_references(&references)
+            .with_empty_publisher_css(empty_publisher_css)
             .document(&document.content, &document.resource_path, &document.layout),
         });
         kept_spine.push(document.spine_idx);
@@ -1043,6 +1057,105 @@ mod tests {
             }
         }
         writer.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn empty_css_vertical_recovery_is_compatible_only_and_never_overrides_publisher_styles() {
+        let bytes = build_epub(&Fixture {
+            version: "3.0",
+            metadata_extra: "",
+            spine: vec![("ch.xhtml".into(), true)],
+            toc: vec![],
+        });
+        let mut doc = EpubDoc::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+        let opf = doc
+            .get_resource_str_by_path("OEBPS/content.opf")
+            .unwrap()
+            .replace(
+                "</manifest>",
+                r#"<item id="css" href="style.css" media-type="text/css"/></manifest>"#,
+            );
+        let html = r#"<html class="vrtl"><head><link rel="stylesheet" href="style.css"/></head><body><p>竖排正文</p></body></html>"#;
+        let bytes = patch_epub(
+            &bytes,
+            &[
+                ("OEBPS/content.opf", opf.as_bytes()),
+                ("OEBPS/ch.xhtml", html.as_bytes()),
+                ("OEBPS/style.css", b""),
+            ],
+        );
+        let (strict, diagnostics) = parse_with_policy(&bytes, ParsePolicy::Strict).unwrap();
+        assert!(!strict.chapters[0].content.contains("data-mandara-compat"));
+        assert!(
+            diagnostics
+                .iter()
+                .all(|d| !d.reason.starts_with("compatibility-"))
+        );
+        let (compatible, diagnostics) = parse_with_diagnostics(&bytes).unwrap();
+        assert!(
+            compatible.chapters[0]
+                .content
+                .contains("writing-mode:vertical-rl")
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.reason == "compatibility-empty-css-vrtl")
+        );
+        let css = patch_epub(
+            &bytes,
+            &[("OEBPS/style.css", b"html{writing-mode:horizontal-tb}")],
+        );
+        assert!(
+            !parse(&css).unwrap().chapters[0]
+                .content
+                .contains("data-mandara-compat")
+        );
+        let inline = patch_epub(
+            &bytes,
+            &[(
+                "OEBPS/ch.xhtml",
+                html.replace(
+                    "<head>",
+                    "<head><style>html{writing-mode:horizontal-tb}</style>",
+                )
+                .as_bytes(),
+            )],
+        );
+        assert!(
+            !parse(&inline).unwrap().chapters[0]
+                .content
+                .contains("data-mandara-compat")
+        );
+        let fixed = patch_epub(
+            &bytes,
+            &[(
+                "OEBPS/content.opf",
+                opf.replace(
+                    "</metadata>",
+                    r#"<meta property="rendition:layout">pre-paginated</meta></metadata>"#,
+                )
+                .as_bytes(),
+            )],
+        );
+        assert!(
+            !parse(&fixed).unwrap().chapters[0]
+                .content
+                .contains("data-mandara-compat")
+        );
+        let missing = patch_epub(
+            &bytes,
+            &[(
+                "OEBPS/content.opf",
+                opf.replace("href=\"style.css\"", "href=\"missing.css\"")
+                    .as_bytes(),
+            )],
+        );
+        assert!(
+            !parse(&missing).unwrap().chapters[0]
+                .content
+                .contains("data-mandara-compat")
+        );
     }
 
     #[test]
