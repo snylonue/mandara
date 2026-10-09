@@ -83,11 +83,19 @@ try {
   console.log("PASS: cross-document footnote/backlink, decoded fragments and linear-only next order");
   for (const file of process.argv.slice(2)) {
     book = JSON.parse(await fs.readFile(file, "utf8"));
-    frame = await open();
-    assert.ok(await frame.locator("body").count());
-    const images = await frame.locator("img").evaluateAll(images => images.map(img => ({ loaded: img.complete && img.naturalWidth > 0, src: img.getAttribute("src") })));
-    assert.ok(images.filter(i => i.src).every(i => i.loaded), "broken first-page images: " + file);
-    console.log("PASS: corpus", path.basename(file), "chapters=" + book.chapters.length, "first-page-images=" + images.filter(i => i.src).length);
+    let occurrences = 0;
+    for (const chapter of book.chapters) {
+      frame = await open(chapter.idx);
+      assert.ok(await frame.locator("body").count());
+      await frame.waitForFunction(() => Array.from(document.images).filter(i => i.getAttribute("src")).every(i => i.complete));
+      const images = await frame.locator("img").evaluateAll(images => images.map(img => ({ loaded: img.complete && img.naturalWidth > 0, src: img.getAttribute("src") })));
+      assert.ok(images.filter(i => i.src).every(i => i.loaded), "broken images: " + file + " chapter=" + chapter.idx);
+      occurrences += images.filter(i => i.src).length;
+      if (chapter.content.includes("data-mandara-compat=")) {
+        assert.equal(await frame.locator("html").evaluate(el => getComputedStyle(el).writingMode), "vertical-rl");
+      }
+    }
+    console.log("PASS: corpus", path.basename(file), "all-chapters=" + book.chapters.length, "image-occurrences=" + occurrences);
   }
   assert.deepEqual(unexpected, []);
   assert.deepEqual(errors, []);
