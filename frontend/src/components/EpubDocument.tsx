@@ -120,6 +120,37 @@ export function EpubDocument({ content, title, settings, onFraction, onReady, on
       const offset = vertical() ? Math.abs(root.scrollLeft) : root.scrollTop;
       callbacks.current.onFraction(max > 0 ? Math.max(0, Math.min(1, offset / max)) : 0);
     }
+    function advance(amount: number) {
+      const root = scroller();
+      if (!root) return;
+      const mode = getComputedStyle(doc!.body).writingMode;
+      root.scrollLeft += (mode === "vertical-rl" ? -1 : 1) * amount;
+    }
+    function wheel(event: WheelEvent) {
+      const root = scroller();
+      if (!root || !vertical() || root.scrollWidth <= root.clientWidth || event.ctrlKey || event.shiftKey || event.defaultPrevented || Math.abs(event.deltaX) >= Math.abs(event.deltaY)) return;
+      event.preventDefault();
+      const unit = event.deltaMode === 1 ? parseFloat(getComputedStyle(doc!.documentElement).fontSize) : event.deltaMode === 2 ? root.clientWidth : 1;
+      advance(event.deltaY * unit);
+    }
+    function keydown(event: KeyboardEvent) {
+      const root = scroller();
+      if (!root || !vertical() || root.scrollWidth <= root.clientWidth || event.ctrlKey || event.altKey || event.metaKey || event.defaultPrevented) return;
+      const target = event.target as Element | null;
+      if (target?.closest?.("a,button,input,textarea,select,summary,[contenteditable]")) return;
+      const page = root.clientWidth * 0.9;
+      switch (event.key) {
+        case "ArrowDown": advance(parseFloat(getComputedStyle(doc!.documentElement).fontSize) * 3); break;
+        case "ArrowUp": advance(-parseFloat(getComputedStyle(doc!.documentElement).fontSize) * 3); break;
+        case "PageDown": advance(page); break;
+        case "PageUp": advance(-page); break;
+        case " ": advance(event.shiftKey ? -page : page); break;
+        case "Home": root.scrollLeft = 0; break;
+        case "End": advance(root.scrollWidth); break;
+        default: return;
+      }
+      event.preventDefault();
+    }
     function click(event: MouseEvent) {
       const anchor = (event.target as Element | null)?.closest("a");
       const href = anchor?.getAttribute("href");
@@ -138,10 +169,14 @@ export function EpubDocument({ content, title, settings, onFraction, onReady, on
     if (frame.current) observer.observe(frame.current);
     win.addEventListener("scroll", scroll, { passive: true });
     doc.addEventListener("click", click);
+    doc.addEventListener("wheel", wheel, { passive: false });
+    doc.addEventListener("keydown", keydown);
     cleanup.current = () => {
       observer.disconnect();
       win.removeEventListener("scroll", scroll);
       doc.removeEventListener("click", click);
+      doc.removeEventListener("wheel", wheel);
+      doc.removeEventListener("keydown", keydown);
     };
     callbacks.current.onReady();
   }

@@ -96,9 +96,29 @@ try {
         assert.ok(dimensions.scrollWidth <= dimensions.width + 1 && dimensions.scrollHeight <= dimensions.height + 1, JSON.stringify({ viewport, mode, dimensions }));
       }
     }
+    for (const mode of ["vertical-rl", "vertical-lr"]) {
+      book = { title: "竖排测试", chapters: [{ idx: 0, title: "正文", content: '<!doctype html><html data-epub-layout="reflowable" style="writing-mode:' + mode + '"><body>' + '<p>这是用于验证竖排正文能从头读到最后的段落。</p>'.repeat(150) + '<p id="last">正文末尾</p></body></html>' }], toc: [] };
+      frame = await open();
+      const sign = mode === "vertical-rl" ? -1 : 1;
+      await waitInFrame(frame, () => document.scrollingElement.scrollWidth > innerWidth);
+      await page.mouse.move(viewport.width / 2, viewport.height / 2);
+      await page.mouse.wheel(0, 300);
+      await waitInFrame(frame, sign => document.scrollingElement.scrollLeft * sign > 0, sign);
+      assert.ok(await frame.evaluate(() => document.scrollingElement.scrollTop === 0));
+      await page.mouse.click(viewport.width / 2, viewport.height / 2);
+      await page.keyboard.press("End");
+      await waitInFrame(frame, () => { const rect = document.getElementById("last").getBoundingClientRect(); return rect.left >= -1 && rect.right <= innerWidth + 1; });
+      await page.waitForFunction(() => document.querySelector(".reader-topbar-chapter").textContent.includes("100%"));
+      await page.keyboard.press("Home");
+      await waitInFrame(frame, () => Math.abs(document.scrollingElement.scrollLeft) < 1);
+      await page.keyboard.press("PageDown");
+      await waitInFrame(frame, sign => document.scrollingElement.scrollLeft * sign > 0, sign);
+      await page.keyboard.press("PageUp");
+      await waitInFrame(frame, () => Math.abs(document.scrollingElement.scrollLeft) < 1);
+    }
   }
   await page.setViewportSize({ width: 1100, height: 850 });
-  console.log("PASS: portrait/landscape illustrations fit both axes on desktop/mobile");
+  console.log("PASS: portrait/landscape illustrations fit both axes; wheel and keyboard reach vertical text end on desktop/mobile");
   book = {
     title: "内部链接测试",
     chapters: [
