@@ -192,13 +192,13 @@ export function Reader({
       <header className="reader-topbar">
         <div className="reader-topbar-side">
           {backHref && (
-            <Link className="btn link reader-back" to={backHref} aria-label={t("common.backToDetail")} title={t("common.backToDetail")}>
-              <IconArrowLeft size={18} /> <span>{t("common.backToDetail")}</span>
+            <Link className="btn ghost reader-toolbar-icon reader-back" to={backHref} aria-label={t("common.backToDetail")} title={t("common.backToDetail")}>
+              <IconArrowLeft size={18} />
             </Link>
           )}
           {(toc ?? []).length > 0 && (
             <button
-              className="btn link reader-toolbar-icon"
+              className="btn ghost reader-toolbar-icon"
               onClick={() => setTocOpen(true)}
               aria-expanded={tocOpen}
               aria-label={t("reader.toc")}
@@ -217,7 +217,7 @@ export function Reader({
         </div>
         <div className="reader-topbar-side reader-topbar-end">
           <button
-            className="btn link reader-toolbar-icon"
+            className="btn ghost reader-toolbar-icon"
             onClick={() => setSettingsOpen((v) => !v)}
             aria-expanded={settingsOpen}
             aria-label={t("reader.settings")}
@@ -265,7 +265,7 @@ export function Reader({
           style={{
             fontSize: `${settings.fontSize}px`,
             lineHeight: settings.lineHeight,
-            maxWidth: isDocument ? undefined : `${settings.widthEm}em`,
+            maxWidth: `${settings.widthEm}em`,
           }}
         >
           {loading && <p className="hint">{t("common.loading")}</p>}
