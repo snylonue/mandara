@@ -45,7 +45,8 @@ try {
   assert.equal(await frame.locator("body").evaluate(el => getComputedStyle(el).color), "rgb(12, 34, 56)");
   assert.equal(await page.evaluate(() => window.executed ?? false), false);
   assert.equal(await frame.evaluate(() => window.executed ?? false), false);
-  assert.ok(await page.locator("header.nav").isVisible());
+  assert.ok(await page.locator(".reader-topbar").isVisible());
+  assert.equal(await page.locator("header.nav").isVisible(), false);
   assert.equal(await frame.locator("ruby").count(), 1);
   assert.equal(await frame.locator("table").count(), 1);
   await frame.locator("a").click();

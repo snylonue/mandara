@@ -1,13 +1,53 @@
 /* ---- reader ---- */
-.reader {
-  margin: 0 auto;
+.app-reader > .nav {
+  display: none;
 }
 
-/* Fixed top bar under the app nav:
-   目录 / 返回 · book title · chapter · percent · 设置 */
+.app-reader > .content {
+  max-width: none;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+.reader-page {
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.reader {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+.reader-viewport {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.reader-viewport-document {
+  overflow: hidden;
+}
+
+.reader-body.reader-body-document {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  padding: 0;
+  border-radius: 0;
+}
+
+/* Controls sit outside the content scroll area. */
 .reader-topbar {
-  position: sticky;
-  top: var(--nav-h);
+  position: relative;
+  flex-shrink: 0;
   z-index: var(--z-sticky);
   display: flex;
   align-items: center;
@@ -15,7 +55,7 @@
   gap: var(--space-3);
   background: var(--bg);
   border-bottom: 1px solid var(--border);
-  padding: var(--space-2) 0;
+  padding: var(--space-2) var(--space-4);
   min-height: 44px;
 }
 
@@ -23,7 +63,7 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  flex: 1;
+  flex-shrink: 0;
   min-width: 0;
 }
 
@@ -32,6 +72,7 @@
 }
 
 .reader-topbar-center {
+  flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -221,7 +262,8 @@
   height: 3px;
   background: var(--border);
   border-radius: var(--radius-pill);
-  margin: 14px 0;
+  margin: 0;
+  flex-shrink: 0;
   overflow: hidden;
 }
 
@@ -270,18 +312,21 @@
 /* Large bottom prev/next with chapter-title preview. */
 .reader-bottom {
   display: flex;
+  flex-shrink: 0;
   gap: var(--space-3);
-  margin-top: var(--space-5);
+  padding: var(--space-2) var(--space-4);
+  border-top: 1px solid var(--border);
 }
 
 .reader-nav-btn {
   flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: var(--space-1);
   text-align: left;
-  padding: var(--space-3) var(--space-4);
+  padding: var(--space-2) var(--space-3);
 }
 
 .reader-nav-btn.next {
@@ -309,11 +354,31 @@
 
 .reader-session-bar {
   display: flex;
-  gap: 10px;
+  gap: var(--space-1);
   align-items: center;
-  margin-bottom: 16px;
 }
 
 .reader-session-bar select {
-  min-width: 160px;
+  min-width: 0;
+  max-width: 120px;
+}
+
+@media (width <= 600px) {
+  .reader-topbar {
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .reader-topbar-center {
+    order: 1;
+    flex-basis: 100%;
+  }
+
+  .reader-topbar-end {
+    margin-left: auto;
+  }
+
+  .reader-session-bar select {
+    max-width: 90px;
+  }
 }

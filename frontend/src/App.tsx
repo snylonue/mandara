@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { Link, NavLink, Navigate, Route, Routes } from "react-router-dom";
+import { Link, NavLink, Navigate, Route, Routes, useMatch } from "react-router-dom";
 import { useAuth } from "./auth";
 import {
   IconLogout,
@@ -40,6 +40,8 @@ function loadTheme(): AppTheme {
 
 export default function App() {
   const { user, logout } = useAuth();
+  const reading = Boolean(useMatch("/read/:id"));
+  const sharing = Boolean(useMatch("/share/:token"));
   const { t } = useTranslation();
   const [theme, setTheme] = useState<AppTheme>(loadTheme);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -71,7 +73,7 @@ export default function App() {
 
   return (
     <ToastProvider>
-      <div className="app">
+      <div className={`app${reading || sharing ? " app-reader" : ""}`}>
         <header className={`nav${scrolled ? " scrolled" : ""}`}>
           <div className="nav-left">
             <Link to="/" className="brand">

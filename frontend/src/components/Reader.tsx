@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { IconArrowLeft, IconChevronLeft, IconChevronRight } from "./icons";
@@ -24,6 +24,7 @@ interface ReaderProps {
   readOnly?: boolean;
   /** Where the top-bar 返回 points (book detail page); hidden when absent. */
   backHref?: string;
+  sessionControls?: ReactNode;
 }
 
 export function Reader({
@@ -35,6 +36,7 @@ export function Reader({
   onProgress,
   readOnly,
   backHref,
+  sessionControls,
 }: ReaderProps) {
   const { t } = useTranslation();
   const [settings, setSettings] = useReaderSettings();
@@ -54,6 +56,7 @@ export function Reader({
   const pendingFragRef = useRef<string | null>(null);
   const epubRef = useRef<EpubDocumentHandle>(null);
   const articleRef = useRef<HTMLElement>(null);
+  const viewportRef = useRef<HTMLDivElement>(null);
   const renderTarget = useRef<{ fragment: string | null; fraction: number }>({ fragment: null, fraction: 0 });
   const isDocument = chapter?.content.startsWith("<!doctype html>") ?? false;
 
@@ -98,13 +101,15 @@ export function Reader({
 
   function restoreScroll(frac: number) {
     if (!frac) {
-      window.scrollTo(0, 0);
+      viewportRef.current?.scrollTo(0, 0);
       return;
     }
     // wait a tick for the content to render
     requestAnimationFrame(() => {
-      const max = document.documentElement.scrollHeight - window.innerHeight;
-      window.scrollTo(0, Math.round(max * frac));
+      const viewport = viewportRef.current;
+      if (!viewport) return;
+      const max = viewport.scrollHeight - viewport.clientHeight;
+      viewport.scrollTo(0, Math.round(max * frac));
     });
   }
 
@@ -139,19 +144,21 @@ export function Reader({
   const lastFractionRef = useRef(fraction);
   const lastChapterRef = useRef(idx);
   useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
     function onScroll() {
       if (isDocument) return;
-      const max = document.documentElement.scrollHeight - window.innerHeight;
-      const f = max > 0 ? Math.min(1, Math.max(0, window.scrollY / max)) : 0;
+      const max = viewport!.scrollHeight - viewport!.clientHeight;
+      const f = max > 0 ? Math.min(1, Math.max(0, viewport!.scrollTop / max)) : 0;
       setFraction(f);
       lastFractionRef.current = f;
       if (!onProgress || readOnly) return;
       window.clearTimeout(debounceRef.current);
       debounceRef.current = window.setTimeout(() => onProgress(f, idx), 600);
     }
-    window.addEventListener("scroll", onScroll, { passive: true });
+    viewport.addEventListener("scroll", onScroll, { passive: true });
     return () => {
-      window.removeEventListener("scroll", onScroll);
+      viewport.removeEventListener("scroll", onScroll);
       window.clearTimeout(debounceRef.current);
       // Flush the pending fraction on unmount (leaving the reader must
       // not lose the last 600 ms of scroll).
@@ -160,10 +167,6 @@ export function Reader({
       }
     };
   }, [onProgress, readOnly, isDocument, idx]);
-
-  useEffect(() => {
-    return () => window.scrollTo(0, 0);
-  }, []);
 
   const cur = chapters.find((c) => c.idx === idx);
   const linearChapters = chapters.filter(c => c.linear !== false);
@@ -185,7 +188,7 @@ export function Reader({
 
   return (
     <div className="reader" data-theme={settings.theme}>
-      {/* fixed top bar: 目录 / 返回 · book title · chapter title · percent · 设置 */}
+      {/* Reader controls stay visible while the content scrolls. */}
       <header className="reader-topbar">
         <div className="reader-topbar-side">
           {(toc ?? []).length > 0 && (
@@ -207,6 +210,7 @@ export function Reader({
           </span>
         </div>
         <div className="reader-topbar-side reader-topbar-end">
+          {sessionControls}
           <button
             className={`btn sm${settingsOpen ? " active" : ""}`}
             onClick={() => setSettingsOpen((v) => !v)}
@@ -246,36 +250,38 @@ export function Reader({
         <div className="progress-fill" style={{ width: `${progress}%` }} />
       </div>
 
-      <article
-        ref={articleRef}
-        className={`reader-body font-${settings.font}`}
-        style={{
-          fontSize: `${settings.fontSize}px`,
-          lineHeight: settings.lineHeight,
-          maxWidth: `${settings.widthEm}em`,
-        }}
-      >
-        {loading && <p className="hint">{t("common.loading")}</p>}
-        {chapter && (isDocument ? <EpubDocument
-          ref={epubRef}
-          content={chapter.content}
-          title={chapter.title}
-          settings={settings}
-          onNavigate={goto}
-          onReady={() => {
-            const target = renderTarget.current;
-            epubRef.current?.restoreFraction(target.fraction);
-            if (target.fragment) epubRef.current?.scrollToFragment(target.fragment);
+      <div ref={viewportRef} className={`reader-viewport${isDocument ? " reader-viewport-document" : ""}`}>
+        <article
+          ref={articleRef}
+          className={`reader-body font-${settings.font}${isDocument ? " reader-body-document" : ""}`}
+          style={{
+            fontSize: `${settings.fontSize}px`,
+            lineHeight: settings.lineHeight,
+            maxWidth: isDocument ? undefined : `${settings.widthEm}em`,
           }}
-          onFraction={(f) => {
-            setFraction(f);
-            lastFractionRef.current = f;
-            if (!onProgress || readOnly) return;
-            window.clearTimeout(debounceRef.current);
-            debounceRef.current = window.setTimeout(() => onProgress(f, idx), 600);
-          }}
-        /> : <div className="epub-content" dangerouslySetInnerHTML={{ __html: chapter.content }} />)}
-      </article>
+        >
+          {loading && <p className="hint">{t("common.loading")}</p>}
+          {chapter && (isDocument ? <EpubDocument
+            ref={epubRef}
+            content={chapter.content}
+            title={chapter.title}
+            settings={settings}
+            onNavigate={goto}
+            onReady={() => {
+              const target = renderTarget.current;
+              epubRef.current?.restoreFraction(target.fraction);
+              if (target.fragment) epubRef.current?.scrollToFragment(target.fragment);
+            }}
+            onFraction={(f) => {
+              setFraction(f);
+              lastFractionRef.current = f;
+              if (!onProgress || readOnly) return;
+              window.clearTimeout(debounceRef.current);
+              debounceRef.current = window.setTimeout(() => onProgress(f, idx), 600);
+            }}
+          /> : <div className="epub-content" dangerouslySetInnerHTML={{ __html: chapter.content }} />)}
+        </article>
+      </div>
 
       {/* single prev/next control set — large buttons with chapter preview */}
       <div className="reader-bottom">

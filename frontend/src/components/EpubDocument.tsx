@@ -91,14 +91,13 @@ export function EpubDocument({ content, title, settings, onFraction, onReady, on
     const width = Number(viewport.match(/(?:^|[,;])\s*width\s*=\s*(\d+(?:\.\d+)?)/i)?.[1]);
     const height = Number(viewport.match(/(?:^|[,;])\s*height\s*=\s*(\d+(?:\.\d+)?)/i)?.[1]);
     if (!(width > 0 && height > 0)) return;
-    const scale = Math.min(element.clientWidth / width, window.innerHeight * 0.75 / height);
+    const scale = Math.min(element.clientWidth / width, element.clientHeight / height);
     const root = doc.documentElement;
     root.style.width = width + "px";
     root.style.height = height + "px";
     root.style.transformOrigin = "top left";
     root.style.transform = "scale(" + scale + ")";
     root.style.overflow = "hidden";
-    element.style.height = height * scale + "px";
   }
 
   function ready() {

@@ -82,38 +82,37 @@ export function ReaderPage() {
   if (error) return <div className="error">{error}</div>;
   if (!detail) return <div className="page-loading">{t("common.loading")}</div>;
 
-  const { file, book, chapters } = detail;
+  const { book, chapters } = detail;
 
   return (
-    <div>
-      <div className="reader-session-bar">
-        {active ? (
-          <>
-            <select
-              value={active.id}
-              onChange={(e) => switchSession(e.target.value)}
-              aria-label={t("reader.sessionLabel")}
-            >
-              {sessions.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.label}
-                </option>
-              ))}
-            </select>
-            <button className="btn link" onClick={() => void createSession()}>
-              <IconPlus size={13} /> {t("reader.newSession")}
-            </button>
-          </>
-        ) : (
-          <button className="btn link" onClick={() => void createSession()}>
-            <IconPlus size={13} /> {t("reader.createSession")}
-          </button>
-        )}
-        <span className="hint">
-          {book.title} · {file.label || file.format}
-        </span>
-      </div>
+    <div className="reader-page">
       <Reader
+        sessionControls={
+          <div className="reader-session-bar">
+            {active ? (
+              <>
+                <select
+                  value={active.id}
+                  onChange={(e) => switchSession(e.target.value)}
+                  aria-label={t("reader.sessionLabel")}
+                >
+                  {sessions.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.label}
+                    </option>
+                  ))}
+                </select>
+                <button className="btn link" onClick={() => void createSession()} aria-label={t("reader.newSession")} title={t("reader.newSession")}>
+                  <IconPlus size={13} />
+                </button>
+              </>
+            ) : (
+              <button className="btn link" onClick={() => void createSession()}>
+                <IconPlus size={13} /> {t("reader.createSession")}
+              </button>
+            )}
+          </div>
+        }
         title={book.title}
         chapters={chapters}
         toc={detail.toc}

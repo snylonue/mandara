@@ -40,7 +40,7 @@ export function SharePage() {
   if (!view || !book) return <div className="page-loading">{t("common.loading")}</div>;
 
   return (
-    <div>
+    <div className="reader-page">
       {view.session && (
         <div className="card share-snapshot">
           <h2>
