@@ -9,7 +9,12 @@
   runCommand,
   package,
 }:
-{ config, name, ... }:
+{
+  config,
+  options,
+  name,
+  ...
+}:
 
 let
   cfg = config.mandara;
@@ -282,7 +287,8 @@ in
         '';
 
     process.argv = [ (lib.getExe cfg.package) ] ++ cliArgs ++ cfg.extraArgs;
-
+  }
+  // lib.optionalAttrs (options ? systemd) {
     systemd.services."" = {
       description = "Mandara light-novel reading server";
       wantedBy = [ "multi-user.target" ];
