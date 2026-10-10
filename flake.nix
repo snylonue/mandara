@@ -42,18 +42,6 @@
         import ./nix/packages.nix { pkgs = prev; }
       );
 
-      # The module users import. It defaults the package to this flake's own
-      # build, so no overlay is needed (and none is injected into the host);
-      # `overlays.default` is there for configurations that prefer
-      # `pkgs.mandara*` (e.g. `plugins = [ pkgs.mandara-plugin-hello ]`).
-      mandaraModule =
-        { config, lib, ... }:
-        {
-          imports = [ ./nix/module.nix ];
-          services.mandara.package = lib.mkDefault (
-            inputs.self.packages.${config.nixpkgs.hostPlatform.system}.mandara
-          );
-        };
     in
     flake-parts.lib.mkFlake { inherit inputs; } {
       # x86_64-darwin is not listed: nixpkgs 26.11 dropped that platform.
@@ -65,10 +53,6 @@
 
       flake = {
         overlays.default = overlay;
-        nixosModules = {
-          mandara = mandaraModule;
-          default = mandaraModule;
-        };
       };
 
       perSystem =
@@ -110,7 +94,7 @@
             lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
               mandara-vm = import ./nix/tests/mandara-vm.nix {
                 inherit pkgs;
-                module = mandaraModule;
+                module = packageSet.mandara.services.default;
                 # Deploy the plugins as separate packages, the way a user
                 # picking a subset of the in-repo sources would.
                 plugins = lib.attrValues (

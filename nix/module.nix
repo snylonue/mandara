@@ -1,24 +1,19 @@
-# NixOS module for mandara.
+# Modular service for mandara, exported as package.services.default.
 #
 # Everything mutable (SQLite database, retained originals, images, plugin
 # drop-ins) lives in one directory under /var/lib, so a backup is a tar of
 # that directory. The server itself is stateless: config comes in on the
 # command line plus a handful of environment variables.
 {
-  config,
   lib,
-  pkgs,
-  ...
+  runCommand,
+  package,
 }:
+{ config, name, ... }:
 
 let
-  cfg = config.services.mandara;
-  inherit (lib)
-    mkIf
-    mkOption
-    mkEnableOption
-    types
-    ;
+  cfg = config.mandara;
+  inherit (lib) mkOption types;
 
   dataDir = "/var/lib/${cfg.stateDirectory}";
 
@@ -30,7 +25,7 @@ let
     if cfg.plugins == [ ] then
       null
     else
-      pkgs.runCommand "mandara-plugins-dir" { } ''
+      runCommand "mandara-plugins-dir" { } ''
         mkdir -p $out
         for src in ${lib.escapeShellArgs (map (p: "${p}") cfg.plugins)}; do
           if [ -f "$src" ]; then
@@ -59,6 +54,7 @@ let
 
   # Shared between the server and the one-shot re-parse task.
   commonServiceConfig = {
+    DynamicUser = lib.mkDefault true;
     User = cfg.user;
     Group = cfg.group;
     StateDirectory = cfg.stateDirectory;
@@ -112,18 +108,17 @@ let
   };
 in
 {
-  options.services.mandara = {
-    enable = mkEnableOption "the mandara light-novel reading server";
+  _class = "service";
 
+  options.mandara = {
     package = mkOption {
       type = types.package;
-      default = pkgs.mandara;
-      defaultText = lib.literalExpression "pkgs.mandara";
+      default = package;
+      defaultText = lib.literalExpression "the package exporting this service module";
       description = ''
         Package to run: the server binary plus (unless {option}`frontendDir`
-        is set) the web frontend it serves. `nixosModules.default` defaults
-        this to the flake's own build; importing this file directly expects
-        `pkgs.mandara` from `overlays.default`. The frontend and server are
+        is set) the web frontend it serves. Defaults to the package exporting
+        this module, including any package overrides. The frontend and server are
         separate derivations in `pkgs.mandaraPackages`, so an overridden
         variant can be built with `pkgs.mandaraPackages.overrideScope`.
 
@@ -134,25 +129,30 @@ in
 
     user = mkOption {
       type = types.str;
-      default = "mandara";
+      default = name;
+      defaultText = lib.literalExpression "the service instance name";
       description = ''
-        User the service runs as. A system user of this name is created
-        when it is left at the default.
+        User shared by the server and re-parse task. By default systemd
+        allocates it dynamically. To use a persistent account, create it in
+        the host configuration and set `systemd.services."".serviceConfig.DynamicUser = false`
+        (and likewise for `systemd.services.reparse-originals`).
       '';
     };
 
     group = mkOption {
       type = types.str;
-      default = "mandara";
+      default = cfg.user;
+      defaultText = lib.literalExpression "config.mandara.user";
       description = ''
-        Group the service runs as. A group of this name is created when it
-        is left at the default.
+        Group shared by the server and re-parse task. By default systemd
+        allocates it dynamically alongside the user.
       '';
     };
 
     stateDirectory = mkOption {
       type = types.str;
-      default = "mandara";
+      default = name;
+      defaultText = lib.literalExpression "the service instance name";
       description = ''
         Name of the state directory below {file}`/var/lib`. It holds the
         SQLite database, the retained original files, the image store and
@@ -172,12 +172,6 @@ in
       type = types.port;
       default = 8080;
       description = "Port to listen on.";
-    };
-
-    openFirewall = mkOption {
-      type = types.bool;
-      default = false;
-      description = "Open {option}`port` in the firewall.";
     };
 
     jwtSecretFile = mkOption {
@@ -244,7 +238,7 @@ in
         them all.
 
         When empty, the server loads the `*.wasm` files dropped into
-        `lib/plugins/` inside the state directory instead.
+        `plugins/` inside the state directory instead.
       '';
     };
 
@@ -275,33 +269,22 @@ in
     };
   };
 
-  config = mkIf cfg.enable {
+  config = {
     warnings =
       lib.optional
         (
           cfg.jwtSecretFile == null && !(cfg.environment ? MANDARA_JWT_SECRET) && cfg.environmentFile == null
         )
         ''
-          services.mandara.jwtSecretFile is not set, so the server signs session
-          tokens with a built-in development secret and anyone can forge logins.
-          Set services.mandara.jwtSecretFile (e.g. `openssl rand -base64 32`).
+          mandara.jwtSecretFile is not set, so the server signs session tokens
+          with a built-in development secret and anyone can forge logins.
+          Set mandara.jwtSecretFile (e.g. `openssl rand -base64 32`).
         '';
 
-    users.users = mkIf (cfg.user == "mandara") {
-      mandara = {
-        isSystemUser = true;
-        group = cfg.group;
-        home = dataDir;
-        description = "mandara service user";
-      };
-    };
-    users.groups = mkIf (cfg.group == "mandara") { mandara = { }; };
+    process.argv = [ (lib.getExe cfg.package) ] ++ cliArgs ++ cfg.extraArgs;
 
-    networking.firewall.allowedTCPPorts = mkIf cfg.openFirewall [ cfg.port ];
-
-    systemd.services.mandara = {
+    systemd.services."" = {
       description = "Mandara light-novel reading server";
-      documentation = [ "https://github.com/example/mandara" ];
       wantedBy = [ "multi-user.target" ];
       wants = [ "network-online.target" ];
       after = [ "network-online.target" ];
@@ -320,7 +303,6 @@ in
       serviceConfig = commonServiceConfig // {
         EnvironmentFile = lib.mkIf (cfg.environmentFile != null) cfg.environmentFile;
         LoadCredential = lib.mkIf (cfg.jwtSecretFile != null) "jwt-secret:${cfg.jwtSecretFile}";
-        ExecStart = lib.escapeShellArgs ([ (lib.getExe cfg.package) ] ++ cliArgs ++ cfg.extraArgs);
         Restart = "on-failure";
         RestartSec = 5;
       };
@@ -329,15 +311,12 @@ in
     # One-shot upgrade task: re-run the current parser over every retained
     # original (e.g. after a mandara upgrade that improves chapter
     # splitting): `systemctl start mandara-reparse-originals`.
-    systemd.services.mandara-reparse-originals = {
+    systemd.services.reparse-originals = { name, ... }: {
       description = "Mandara: re-parse every retained original book file";
-      documentation = [ "https://github.com/example/mandara" ];
-      after = [ "mandara.service" ];
+      after = [ "${lib.removeSuffix "-reparse-originals" name}.service" ];
       serviceConfig = commonServiceConfig // {
         Type = "oneshot";
-        ExecStart = lib.escapeShellArgs (
-          [ (lib.getExe cfg.package) ] ++ cliArgs ++ [ "--reparse-originals" ] ++ cfg.extraArgs
-        );
+        ExecStart = config.systemd.mainExecStart + " --reparse-originals";
       };
     };
   };

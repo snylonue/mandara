@@ -1,9 +1,9 @@
-# End-to-end test of the NixOS module: the server boots, serves the bundled
+# End-to-end test of the modular service: the server boots, serves the bundled
 # frontend, authenticates with the credential-held JWT secret, loads the
 # packaged wasm plugins (wasmtime JIT-compiles them at startup, under the
 # module's sandbox) and parses an uploaded txt book.
 #
-# `module` is the flake's nixosModules.default, so this test uses what a user
+# `module` is the package's services.default, so this test uses what a user
 # writes in configuration.nix: the package default, the packaged components
 # and the module's environment wiring.
 {
@@ -17,14 +17,35 @@ pkgs.testers.runNixOSTest {
   name = "mandara";
 
   nodes = {
-    machine = {
-      imports = [ module ];
-      services.mandara = {
-        enable = true;
-        inherit plugins;
-        jwtSecretFile = "/etc/mandara-jwt-secret";
-        # session cookies must carry Secure (asserted below)
-        cookieSecure = true;
+    machine = { config, ... }: {
+      assertions = [
+        {
+          assertion = config.systemd.services.mandara.serviceConfig.StateDirectory == "mandara";
+          message = "The modular service must configure its primary unit.";
+        }
+        {
+          assertion =
+            config.systemd.services.mandara.serviceConfig.User
+            != config.systemd.services.library.serviceConfig.User;
+          message = "Mandara instances must use separate service users by default.";
+        }
+      ];
+
+      system.services.mandara = {
+        imports = [ module ];
+        mandara = {
+          inherit plugins;
+          jwtSecretFile = "/etc/mandara-jwt-secret";
+          # session cookies must carry Secure (asserted below)
+          cookieSecure = true;
+        };
+      };
+      system.services.library = {
+        imports = [ module ];
+        mandara = {
+          port = 8081;
+          allowRegister = false;
+        };
       };
       environment.etc."mandara-jwt-secret".text = "test-jwt-secret-not-for-production";
     };
@@ -32,11 +53,12 @@ pkgs.testers.runNixOSTest {
     # Second instance with the opposite boolean options: the module passes
     # them as environment variables, which needs its own coverage.
     locked = {
-      imports = [ module ];
-      services.mandara = {
-        enable = true;
-        jwtSecretFile = "/etc/mandara-jwt-secret";
-        allowRegister = false;
+      system.services.mandara = {
+        imports = [ module ];
+        mandara = {
+          jwtSecretFile = "/etc/mandara-jwt-secret";
+          allowRegister = false;
+        };
       };
       environment.etc."mandara-jwt-secret".text = "test-jwt-secret-not-for-production";
     };
@@ -49,6 +71,8 @@ pkgs.testers.runNixOSTest {
     start_all()
     machine.wait_for_unit("mandara.service")
     machine.wait_for_open_port(8080)
+    machine.wait_for_unit("library.service")
+    machine.wait_for_open_port(8081)
     locked.wait_for_unit("mandara.service")
     locked.wait_for_open_port(8080)
 
@@ -62,6 +86,13 @@ pkgs.testers.runNixOSTest {
 
     with subtest("state directory"):
         machine.succeed("test -f /var/lib/mandara/mandara.db")
+
+    with subtest("multiple service instances are isolated"):
+        machine.succeed("test -f /var/lib/library/mandara.db")
+        health = json.loads(machine.succeed("curl -fsS http://127.0.0.1:8081/api/health"))
+        assert health["allow_register"] is False, health
+        machine.succeed("systemctl start library-reparse-originals.service")
+        machine.succeed("systemctl is-active mandara.service library.service")
 
     with subtest("first account becomes admin"):
         credentials = json.dumps({"username": "admin", "password": "admin-password"})
@@ -113,5 +144,13 @@ pkgs.testers.runNixOSTest {
             f"http://127.0.0.1:8080/api/files/{file_id}/chapters/0"
         ))
         assert "第一段正文" in chapter["content"], chapter
+
+    with subtest("re-parse task shares the server state"):
+        machine.succeed("systemctl start mandara-reparse-originals.service")
+        reparsed = json.loads(machine.succeed(
+            f"curl -fsS -H 'Authorization: Bearer {token}' "
+            f"http://127.0.0.1:8080/api/files/{file_id}/chapters/0"
+        ))
+        assert "第一段正文" in reparsed["content"], reparsed
   '';
 }

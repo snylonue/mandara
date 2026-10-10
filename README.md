@@ -37,16 +37,16 @@ and a **wasm plugin system** for user-provided book and metadata sources.
 | Backend | Rust 2021, axum 0.8, sqlx 0.9 (SQLite, runtime queries only), jsonwebtoken, argon2 |
 | Plugin host | wasmtime 48 (component model), WIT in `crates/mandara-plugin/wit/` |
 | Frontend | Vite 8 + React 19 + TypeScript (npm), plain CSS, react-router 7 |
-| Environment | Nix flake (flake-parts + rust-overlay): dev shell, packages, NixOS module |
+| Environment | Nix flake (flake-parts + rust-overlay): dev shell, packages, modular service |
 | Language | UI strings and book examples are Chinese; code comments and docs are English |
 
 ## Repository layout
 
 ```
-├── flake.nix                    # dev shell, packages, overlay, NixOS module
+├── flake.nix                    # dev shell, packages, overlay, modular service
 ├── nix/
 │   ├── packages.nix             # server / frontend / wasm plugin builds
-│   ├── module.nix               # services.mandara (systemd unit, hardening)
+│   ├── module.nix               # package.services.default (modular service, hardening)
 │   └── tests/mandara-vm.nix   # end-to-end NixOS VM test of the module
 ├── Cargo.toml                   # cargo workspace
 ├── crates/
@@ -92,17 +92,18 @@ cargo run -p mandara-server                 # serves frontend/dist (SPA) at /
 
 ## Deployment on NixOS
 
-The flake provides the packages, an overlay and a NixOS module:
+The flake provides packages and an overlay. The combined package exports a
+[Modular Service](https://nixos.org/manual/nixos/stable/#modular-services)
+as `services.default`, for NixOS 26.05 or newer:
 
 | Output | What it is |
 |---|---|
-| `packages.<system>.mandara` | server binary + built frontend (the default) |
+| `packages.<system>.mandara` | server binary + built frontend (the default), with `services.default` |
 | `packages.<system>.mandara-server` | server binary only |
 | `packages.<system>.mandara-frontend` | the Vite build output |
 | `packages.<system>.mandara-plugin-<name>` | one wasm component per in-repo plugin |
 | `packages.<system>.mandara-plugins` | all in-repo wasm components in one directory |
 | `overlays.default` | the same as `pkgs.mandara*`, plus the `pkgs.mandaraPackages` scope |
-| `nixosModules.default` | `services.mandara`, with the package defaulting to this flake's build |
 
 ```nix
 # flake.nix of the host
@@ -110,79 +111,99 @@ inputs.mandara = {
   url = "github:example/mandara";
   inputs.nixpkgs.follows = "nixpkgs";
 };
-
-# ... in the nixosSystem modules:
-modules = [ inputs.mandara.nixosModules.default ./configuration.nix ];
 ```
 
 ```nix
-# configuration.nix
-services.mandara = {
-  enable = true;
-  address = "127.0.0.1";  # TLS terminates in the reverse proxy
-  cookieSecure = true;    # session cookie only over https
-  # openssl rand -base64 32 > /run/secrets/mandara-jwt-secret
-  jwtSecretFile = "/run/secrets/mandara-jwt-secret";
-  # pick the in-repo wasm plugins you want; with
-  # `nixpkgs.overlays = [ inputs.mandara.overlays.default ]` these are
-  # simply `[ pkgs.mandara-plugin-hello pkgs.mandara-plugin-wenku8 ]`
-  plugins = [
-    inputs.mandara.packages.${pkgs.stdenv.hostPlatform.system}.mandara-plugin-hello
-    inputs.mandara.packages.${pkgs.stdenv.hostPlatform.system}.mandara-plugin-wenku8
-  ];
-  # ...or drop *.wasm files into /var/lib/mandara/plugins
-};
+# A host module receiving inputs through specialArgs
+{ inputs, pkgs, ... }:
+let
+  packages = inputs.mandara.packages.${pkgs.stdenv.hostPlatform.system};
+in
+{
+  system.services.mandara = {
+    imports = [ packages.mandara.services.default ];
+    mandara = {
+      address = "127.0.0.1";  # TLS terminates in the reverse proxy
+      cookieSecure = true;
+      # openssl rand -base64 32 > /run/secrets/mandara-jwt-secret
+      jwtSecretFile = "/run/secrets/mandara-jwt-secret";
+      plugins = [
+        packages.mandara-plugin-hello
+        packages.mandara-plugin-wenku8
+      ];
+      # ...or drop *.wasm files into /var/lib/mandara/plugins
+    };
+  };
 
-services.nginx.virtualHosts."books.example.com" = {
-  forceSSL = true;
-  enableACME = true;
-  locations."/".proxyPass = "http://127.0.0.1:8080";
-};
+  services.nginx.virtualHosts."books.example.com" = {
+    forceSSL = true;
+    enableACME = true;
+    locations."/".proxyPass = "http://127.0.0.1:8080";
+  };
+}
 ```
 
-The server, frontend and plugins are independent derivations composed by
-`lib.makeScope`, so one can be replaced without touching the others and
-building the server never builds a plugin. With
-`nixpkgs.overlays = [ inputs.mandara.overlays.default ]` this is either
-the scope:
+With `nixpkgs.overlays = [ inputs.mandara.overlays.default ]`, import
+`pkgs.mandara.services.default` instead. The module defaults `mandara.package`
+to the package exporting it, so importing an overridden package's service
+also uses that package. The server, frontend and plugins are independent
+derivations composed by `lib.makeScope`:
 
 ```nix
-services.mandara.package =
+system.services.mandara.imports = [
   (pkgs.mandaraPackages.overrideScope (final: prev: {
     frontend = prev.frontend.override { src = /path/to/frontend; };
-  })).mandara;
+  })).mandara.services.default
+];
 ```
 
-or an individual package: `pkgs.mandara.override { frontend = …; }`,
-`pkgs.mandara-server.override { src = …; }`. Plugins are always
-selected separately through {option}`services.mandara.plugins`.
+Individual packages can also be overridden with
+`pkgs.mandara.override { frontend = …; }` or
+`pkgs.mandara-server.override { src = …; }`. Plugins are selected separately
+through `system.services.<name>.mandara.plugins`.
 
-What the module does:
+The instance name determines the unit name, default state directory and
+service user. For example, a second instance named `library` can import the
+same module and set `mandara.port = 8081`; it uses `library.service`,
+`/var/lib/library` and `library-reparse-originals.service`. Set a distinct
+`mandara.stateDirectory` explicitly when nesting instances under
+`system.services.<name>.services` to avoid sharing state with another
+instance of the same local name.
 
-- runs the server under a dedicated unprivileged system user and a
-  sandboxed unit (read-only `/`, empty capability set, seccomp filter with
-  the `memfd_create` wasmtime's JIT needs),
-- defaults {option}`package` to the flake's own build, so no overlay is
-  needed — `overlays.default` only exists for reaching the packages as
-  `pkgs.mandara*`,
-- keeps every piece of mutable state in `/var/lib/mandara` (SQLite
-  database, retained originals, image store, and the plugin drop-in
-  directory when `plugins` is empty), so a backup is a copy of that one
-  directory (stop the service, or use `sqlite3 … ".backup"`: the database
-  runs in WAL mode),
-- passes the JWT secret through systemd `LoadCredential=`, so the secret
-  file only has to be readable by root,
-- ships `systemctl start mandara-reparse-originals`: a one-shot task that
-  re-runs the current parser over every retained original (use it after an
-  upgrade that improves chapter splitting).
+The service:
 
-Useful options: `port`, `openFirewall`, `allowRegister` (defaults to true,
-because the **first registered account becomes the admin** — turn it off
-once that account exists), `maxUploadMb`, `frontendDir`, `environment`,
-`environmentFile`, `extraArgs`; every option is documented.
+- runs under an unprivileged systemd `DynamicUser` with a sandboxed unit
+  (read-only `/`, empty capability set, and a seccomp filter including the
+  `memfd_create` needed by wasmtime's JIT),
+- keeps mutable state in `/var/lib/<instance>`: the SQLite database, retained
+  originals, images and plugin drop-ins. Stop the service before copying
+  this directory, or use `sqlite3 … ".backup"` for the WAL-mode database,
+- passes the JWT secret through systemd `LoadCredential=`, so the source
+  secret file only needs to be readable by root,
+- provides `systemctl start <instance>-reparse-originals` to re-run the
+  current parser over retained originals after an upgrade.
 
-`nix build .#checks.x86_64-linux.mandara-vm` boots the module in a VM and
-checks the frontend, plugin loading, registration and the upload/read path.
+Service-specific options live under `system.services.<name>.mandara`:
+`port`, `allowRegister`, `maxUploadMb`, `frontendDir`, `environment`,
+`environmentFile` and `extraArgs`. Registration defaults to true because
+**the first registered account becomes the admin**; disable it once that
+account exists. Compose additional service modules with `imports`, extend
+`process.argv`, or customize `systemd.services.""` and
+`systemd.services.reparse-originals` inside the instance.
+
+To migrate from the old NixOS module, remove the `nixosModules.default`
+import and replace `services.mandara = { enable = true; …; }` with the
+instance configuration above. The default `mandara` instance retains
+`/var/lib/mandara`; systemd manages its ownership with `DynamicUser`.
+For a custom persistent user/group, create those accounts in the host
+configuration, set `mandara.user`/`mandara.group`, and disable `DynamicUser`
+on both units. Replace `openFirewall = true` with the host setting
+`networking.firewall.allowedTCPPorts = [ 8080 ];` when exposing the server
+directly. A reverse proxy deployment only needs its public HTTP(S) ports.
+
+`nix build .#checks.x86_64-linux.mandara-vm` boots the service in a VM and
+checks multiple instances, state isolation, re-parsing, the frontend,
+plugin loading, registration and the upload/read path.
 
 ## Configuration (env vars / CLI flags)
 
