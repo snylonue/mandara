@@ -12,6 +12,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: var(--space-3);
   padding: var(--space-3) var(--nav-inset);
   background: var(--nav-bg);
   backdrop-filter: blur(12px);
@@ -44,6 +45,8 @@
 }
 
 .brand {
+  flex-shrink: 0;
+  white-space: nowrap;
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
@@ -58,12 +61,14 @@
 }
 
 .nav-items {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: var(--space-1);
 }
 
 .nav-item {
+  white-space: nowrap;
   color: var(--text-2);
   text-decoration: none;
   font-size: var(--fs-md);
@@ -83,6 +88,7 @@
 }
 
 .nav-right {
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: var(--space-3);
@@ -108,10 +114,16 @@
 }
 
 .user-menu {
+  min-width: 0;
   position: relative;
 }
 
 .user-menu-btn {
+  display: block;
+  max-width: 16ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   background: none;
   border-color: transparent;
   color: var(--text-1);
@@ -150,4 +162,60 @@
   max-width: 1240px;
   margin: 0 auto;
   padding: 32px 16px 64px;
+}
+
+@media (width <= 700px) {
+  .nav {
+    --nav-inset: max(var(--space-4), env(safe-area-inset-left), env(safe-area-inset-right));
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0 var(--space-2);
+    padding-top: max(var(--space-1), env(safe-area-inset-top));
+    padding-bottom: var(--space-1);
+  }
+
+  .nav-left {
+    display: contents;
+  }
+
+  .brand {
+    grid-column: 1;
+    grid-row: 1;
+    min-height: 44px;
+  }
+
+  .nav-right {
+    grid-column: 2;
+    grid-row: 1;
+    gap: var(--space-1);
+  }
+
+  .nav-right .icon-btn {
+    flex-shrink: 0;
+    width: 44px;
+    height: 44px;
+  }
+
+  .user-menu-btn {
+    max-width: min(12ch, 28vw);
+    min-height: 44px;
+    padding: 0 var(--space-2);
+  }
+
+  .nav-items {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    gap: var(--space-2);
+  }
+
+  .nav-item {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    padding: var(--space-2) var(--space-3);
+  }
+
+  .content {
+    padding: var(--space-5) max(var(--space-4), env(safe-area-inset-right)) max(var(--space-5), env(safe-area-inset-bottom)) max(var(--space-4), env(safe-area-inset-left));
+  }
 }

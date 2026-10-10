@@ -191,30 +191,31 @@ export function Reader({
       {/* Reader controls stay visible while the content scrolls. */}
       <header className="reader-topbar">
         <div className="reader-topbar-side">
+          {backHref && (
+            <Link className="btn link reader-back" to={backHref} aria-label={t("common.backToDetail")} title={t("common.backToDetail")}>
+              <IconArrowLeft size={18} /> <span>{t("common.backToDetail")}</span>
+            </Link>
+          )}
           {(toc ?? []).length > 0 && (
-            <button className="btn sm" onClick={() => setTocOpen(true)}>
+            <button className="btn sm" onClick={() => setTocOpen(true)} aria-expanded={tocOpen}>
               {t("reader.toc")}
             </button>
           )}
-          {backHref && (
-            <Link className="btn link" to={backHref}>
-              <IconArrowLeft size={14} /> {t("common.backToDetail")}
-            </Link>
-          )}
         </div>
         <div className="reader-topbar-center">
-          <span className="reader-topbar-book">{title}</span>
-          <span className="reader-topbar-chapter">
-            {cur?.title ?? ""}
-            {!readOnly && ` · ${Math.round(progress)}%`}
-          </span>
+          <span className="reader-topbar-book" title={title}>{title}</span>
+          <div className="reader-topbar-meta">
+            <span className="reader-topbar-chapter" title={cur?.title}>{cur?.title ?? ""}</span>
+            {!readOnly && <span className="reader-topbar-progress">{Math.round(progress)}%</span>}
+          </div>
         </div>
         <div className="reader-topbar-side reader-topbar-end">
-          {sessionControls}
           <button
             className={`btn sm${settingsOpen ? " active" : ""}`}
             onClick={() => setSettingsOpen((v) => !v)}
             aria-expanded={settingsOpen}
+            aria-label={t("reader.settings")}
+            title={t("reader.settings")}
           >
             Aa
           </button>
@@ -222,6 +223,7 @@ export function Reader({
         {settingsOpen && (
           <ReaderSettingsPanel
             settings={settings}
+            sessionControls={sessionControls}
             onChange={setSettings}
             onClose={() => setSettingsOpen(false)}
           />

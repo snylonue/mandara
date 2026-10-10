@@ -30,6 +30,7 @@
   min-height: 0;
   overflow: auto;
   overscroll-behavior: contain;
+  padding-inline: env(safe-area-inset-left) env(safe-area-inset-right);
 }
 
 .reader-viewport-document {
@@ -55,7 +56,7 @@
   gap: var(--space-3);
   background: var(--bg);
   border-bottom: 1px solid var(--border);
-  padding: var(--space-2) var(--space-4);
+  padding: max(var(--space-2), env(safe-area-inset-top)) max(var(--space-4), env(safe-area-inset-right)) var(--space-2) max(var(--space-4), env(safe-area-inset-left));
   min-height: 44px;
 }
 
@@ -90,7 +91,28 @@
   max-width: 100%;
 }
 
+.reader-topbar-meta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+}
+
+.reader-topbar-progress {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.reader-topbar-side .btn {
+  white-space: nowrap;
+}
+
 .reader-topbar-chapter {
+  min-width: 0;
   color: var(--text-2);
   font-size: var(--fs-xs);
   white-space: nowrap;
@@ -135,7 +157,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: var(--space-3) var(--space-4);
+  padding: max(var(--space-3), env(safe-area-inset-top)) max(var(--space-4), env(safe-area-inset-right)) var(--space-3) max(var(--space-4), env(safe-area-inset-left));
   border-bottom: 1px solid var(--border);
 }
 
@@ -146,16 +168,19 @@
 .toc-drawer-body {
   flex: 1;
   overflow-y: auto;
-  padding: var(--space-2) var(--space-3) var(--space-4);
+  padding: var(--space-2) max(var(--space-3), env(safe-area-inset-right)) max(var(--space-4), env(safe-area-inset-bottom)) max(var(--space-3), env(safe-area-inset-left));
 }
 
 /* Reading settings popover. */
 .reader-settings {
   position: absolute;
   top: calc(100% + var(--space-2));
-  right: 0;
+  right: max(var(--space-2), env(safe-area-inset-right));
   z-index: var(--z-popover);
-  width: min(320px, 92vw);
+  width: min(320px, calc(100vw - 2 * var(--space-2) - env(safe-area-inset-left) - env(safe-area-inset-right)));
+  max-height: calc(100dvh - 88px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  overflow-y: auto;
+  overscroll-behavior: contain;
   border-radius: var(--radius);
   padding: var(--space-3) var(--space-4) var(--space-4);
   display: flex;
@@ -278,6 +303,7 @@
   --reader-border: var(--border);
   --reader-muted: var(--text-2);
   min-height: 40vh;
+  width: 100%;
   margin: 0 auto;
   padding: var(--space-4) var(--space-4) var(--space-5);
   color: var(--fg);
@@ -314,7 +340,7 @@
   display: flex;
   flex-shrink: 0;
   gap: var(--space-3);
-  padding: var(--space-2) var(--space-4);
+  padding: var(--space-2) max(var(--space-4), env(safe-area-inset-right)) max(var(--space-2), env(safe-area-inset-bottom)) max(var(--space-4), env(safe-area-inset-left));
   border-top: 1px solid var(--border);
 }
 
@@ -363,22 +389,72 @@
   max-width: 120px;
 }
 
-@media (width <= 600px) {
+@media (width <= 700px), (pointer: coarse) {
   .reader-topbar {
+    gap: var(--space-2);
+    padding-inline: max(var(--space-2), env(safe-area-inset-left)) max(var(--space-2), env(safe-area-inset-right));
+  }
+
+  .reader-topbar-side {
+    gap: var(--space-1);
+  }
+
+  .reader-topbar-side .btn {
+    min-width: 44px;
+    height: 44px;
+    padding: 0 var(--space-2);
+    align-self: center;
+  }
+
+  .reader-back span {
+    display: none;
+  }
+
+  .reader-topbar-book {
+    font-size: var(--fs-md);
+  }
+
+  .reader-settings {
+    padding: var(--space-3);
+  }
+
+  .reader-setting-row {
     flex-wrap: wrap;
     gap: var(--space-2);
   }
 
-  .reader-topbar-center {
-    order: 1;
-    flex-basis: 100%;
+  .reader-settings .btn {
+    min-width: 44px;
+    min-height: 44px;
   }
 
-  .reader-topbar-end {
-    margin-left: auto;
+  .reader-session-bar {
+    flex: 1;
+    justify-content: flex-end;
   }
 
   .reader-session-bar select {
-    max-width: 90px;
+    height: 44px;
+    font-size: var(--fs-control-mobile);
+  }
+
+  .toc-link {
+    min-height: 44px;
+    padding: 11px var(--space-2);
+  }
+
+  .toc-drawer-head .btn {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .reader-body {
+    padding-inline: var(--space-3);
+  }
+
+  .reader-nav-btn {
+    min-height: 44px;
+    gap: 0;
+    padding: var(--space-1) var(--space-2);
   }
 }

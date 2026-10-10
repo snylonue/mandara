@@ -83,6 +83,7 @@
   --fs-2xl: 24px;
   --fs-3xl: 28px;
   --fs-card-title: 15px;
+  --fs-control-mobile: 16px;
 
   /* typography */
   --font-sans: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;

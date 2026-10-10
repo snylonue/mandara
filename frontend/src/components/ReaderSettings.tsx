@@ -1,6 +1,6 @@
 // Reader display settings (font size / line height / theme / font family /
 // column width), persisted to localStorage. Purely client-side — no API.
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 export type ReaderTheme = "dark" | "sepia" | "light";
@@ -49,10 +49,12 @@ const WIDTHS = [34, 38, 42, 48];
 /** Popover panel with all reading display controls. */
 export function ReaderSettingsPanel({
   settings,
+  sessionControls,
   onChange,
   onClose,
 }: {
   settings: ReaderSettings;
+  sessionControls?: ReactNode;
   onChange: (next: ReaderSettings) => void;
   onClose: () => void;
 }) {
@@ -67,6 +69,13 @@ export function ReaderSettingsPanel({
           ✕
         </button>
       </div>
+
+      {sessionControls && (
+        <div className="reader-setting-row">
+          <span className="reader-setting-label">{t("reader.sessionLabel")}</span>
+          {sessionControls}
+        </div>
+      )}
 
       <div className="reader-setting-row">
         <span className="reader-setting-label">{t("reader.fontSize")}</span>
