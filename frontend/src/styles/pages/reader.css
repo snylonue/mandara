@@ -111,6 +111,17 @@
   white-space: nowrap;
 }
 
+.reader-topbar-side .reader-toolbar-icon {
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  align-self: center;
+}
+
+.reader-topbar .reader-toolbar-icon[aria-expanded="true"] {
+  color: var(--accent);
+}
+
 .reader-topbar-chapter {
   min-width: 0;
   color: var(--text-2);

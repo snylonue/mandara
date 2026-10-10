@@ -218,7 +218,7 @@ export function IconGridCompact({ size, className }: IconProps) {
   );
 }
 
-/** Lines — shelf list view. */
+/** Lines — table of contents or list view. */
 export function IconList({ size, className }: IconProps) {
   return (
     <svg {...base(size)} className={className}>
@@ -228,6 +228,15 @@ export function IconList({ size, className }: IconProps) {
       <line x1="3" x2="3.01" y1="6" y2="6" />
       <line x1="3" x2="3.01" y1="12" y2="12" />
       <line x1="3" x2="3.01" y1="18" y2="18" />
+    </svg>
+  );
+}
+
+/** Type — reading typography settings. */
+export function IconType({ size, className }: IconProps) {
+  return (
+    <svg {...base(size)} className={className}>
+      <path d="M4 7V4h16v3M12 4v16M8 20h8" />
     </svg>
   );
 }

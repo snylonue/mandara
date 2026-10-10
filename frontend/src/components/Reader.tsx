@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { IconArrowLeft, IconChevronLeft, IconChevronRight } from "./icons";
+import { IconArrowLeft, IconChevronLeft, IconChevronRight, IconList, IconType } from "./icons";
 import { EpubDocument, type EpubDocumentHandle } from "./EpubDocument";
 import {
   ReaderSettingsPanel,
@@ -197,8 +197,14 @@ export function Reader({
             </Link>
           )}
           {(toc ?? []).length > 0 && (
-            <button className="btn sm" onClick={() => setTocOpen(true)} aria-expanded={tocOpen}>
-              {t("reader.toc")}
+            <button
+              className="btn link reader-toolbar-icon"
+              onClick={() => setTocOpen(true)}
+              aria-expanded={tocOpen}
+              aria-label={t("reader.toc")}
+              title={t("reader.toc")}
+            >
+              <IconList size={18} />
             </button>
           )}
         </div>
@@ -211,13 +217,13 @@ export function Reader({
         </div>
         <div className="reader-topbar-side reader-topbar-end">
           <button
-            className={`btn sm${settingsOpen ? " active" : ""}`}
+            className="btn link reader-toolbar-icon"
             onClick={() => setSettingsOpen((v) => !v)}
             aria-expanded={settingsOpen}
             aria-label={t("reader.settings")}
             title={t("reader.settings")}
           >
-            Aa
+            <IconType size={18} />
           </button>
         </div>
         {settingsOpen && (
