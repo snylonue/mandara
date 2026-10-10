@@ -81,6 +81,12 @@ export function EpubDocument({ content, title, settings, onFraction, onReady, on
     // Low-specificity defaults precede publication rules; no paragraph/div
     // justification or display:block overrides the publisher's own cascade.
     defaults.textContent = ":where(html){font-size:" + settings.fontSize + "px;line-height:" + settings.lineHeight + ";font-family:" + inherited.fontFamily + ";color:" + inherited.color + ";background:transparent} :where(body){margin:0;padding:0.5em} :where(img,svg){max-width:100%;height:auto} :where(table){max-width:100%}";
+    if (doc.documentElement.dataset.epubLayout !== "pre-paginated") {
+      // A vertical block can be wider than the viewport, so 100% alone does
+      // not constrain publisher image dimensions. Bound both physical axes.
+      defaults.textContent += " :where(img){max-width:calc(100vw - 3em);max-height:calc(100vh - 3em);width:auto;height:auto} :where(html[data-mandara-image-only] body){display:grid;place-items:center;width:100vw;height:100vh;box-sizing:border-box} :where(html[data-mandara-image-only] img){display:block}";
+      doc.documentElement.toggleAttribute("data-mandara-image-only", doc.images.length === 1 && !doc.body.textContent?.trim() && !doc.querySelector("svg,table,video,audio,canvas"));
+    }
   }
 
   function scaleFixedLayout() {
