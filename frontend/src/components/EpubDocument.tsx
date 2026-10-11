@@ -23,8 +23,17 @@ export function EpubDocument({ content, title, settings, onFraction, onReady, on
   callbacks.current = { onFraction, onReady, onNavigate };
   const source = useMemo(() => {
     const csp = "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data: " + location.origin + "/api/images/; font-src data:; base-uri 'none'; form-action 'none'";
+    // iOS cannot paint horizontally overflowing vertical iframe documents
+    // (https://bugs.webkit.org/show_bug.cgi?id=320457). Skip our optional
+    // empty-CSS direction inference there; keep authored publication CSS.
+    // iPadOS also identifies as macOS when requesting desktop websites.
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
+      || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    const readable = isIOS
+      ? content.replace(/<style\b[^>]*\bdata-mandara-compat=["']empty-css-vrtl["'][^>]*>[\s\S]*?<\/style>/gi, "")
+      : content;
     // CSP precedes all source markup, including when stored HTML is malformed.
-    return content.replace(/<!doctype html>/i, '<!doctype html><meta http-equiv="Content-Security-Policy" content="' + csp + '">');
+    return readable.replace(/<!doctype html>/i, '<!doctype html><meta http-equiv="Content-Security-Policy" content="' + csp + '">');
   }, [content]);
 
   function scroller() {
@@ -194,11 +203,13 @@ export function EpubDocument({ content, title, settings, onFraction, onReady, on
   useEffect(() => { applySettings(); scaleFixedLayout(); }, [settings]);
   useEffect(() => () => cleanup.current?.(), []);
 
+  // WebKit otherwise suppresses even the trusted parent's event listeners.
+  // The leading script-src CSP still forbids all publication scripts.
   return <iframe
     ref={frame}
     className="epub-document"
     title={title}
-    sandbox="allow-same-origin"
+    sandbox="allow-same-origin allow-scripts"
     referrerPolicy="no-referrer"
     srcDoc={source}
     onLoad={ready}
