@@ -705,19 +705,6 @@ impl PluginService {
         Ok(None)
     }
 
-    /// Resolve the effective content-target instance for a book entry:
-    /// `content-source` ?? the entry's own instance, `content-id` ?? `id`.
-    pub fn content_target<'a>(
-        &self,
-        instance: &'a str,
-        entry: &'a SourceBook,
-    ) -> (&'a str, &'a str) {
-        (
-            entry.content_source.as_deref().unwrap_or(instance),
-            entry.content_id.as_deref().unwrap_or(&entry.id),
-        )
-    }
-
     /// Validate a content-target instance for rebinding: it must exist,
     /// and when it has the `lookup` capability the book must resolve via
     /// `get-book` (catches typos early).

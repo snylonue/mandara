@@ -3,10 +3,8 @@
 //! A *metadata-only* source speaking HTTP: the catalog lives on a remote
 //! site (config `base-url`), fetched through the host's `http.fetch`
 //! import — the only network a plugin gets (see
-//! `docs/plugin-http-api-design.md`). Every `book-entry` points its
-//! `content-source` at the `reader` instance and its `content-id` at the
-//! reader's book id, so the host materializes metadata from here and
-//! chapters from the reader plugin (R5 demo).
+//! `docs/plugin-http-api-design.md`). Users choose a content source in
+//! the host acquisition flow; this plugin knows only its own metadata.
 //!
 //! The demo source is `scripts/mock-source.py` (port 8765); point
 //! `base-url` at any HTTP API with the same shape:
@@ -103,10 +101,6 @@ struct JsonEntry {
     description: Option<String>,
     #[serde(default)]
     cover_url: Option<String>,
-    #[serde(default)]
-    content_source: Option<String>,
-    #[serde(default)]
-    content_id: Option<String>,
     /// Multi-volume structure (WIT volume-info), when the metadata source
     /// declares it — the host splits acquisition into one book per 卷.
     /// Multi-volume is the METADATA source's responsibility, so a metadata
@@ -132,8 +126,6 @@ impl From<JsonEntry> for BookEntry {
             description: e.description,
             cover_url: e.cover_url,
             extra: None,
-            content_source: e.content_source,
-            content_id: e.content_id,
             volumes: e.volumes.map(|vs| {
                 vs.into_iter()
                     .map(|v| VolumeInfo {

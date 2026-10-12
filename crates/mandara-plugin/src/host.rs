@@ -473,8 +473,6 @@ impl TryFrom<BookEntry> for SourceBook {
             description: b.description,
             cover_url: b.cover_url,
             ext,
-            content_source: b.content_source,
-            content_id: b.content_id,
             volumes: b
                 .volumes
                 .unwrap_or_default()

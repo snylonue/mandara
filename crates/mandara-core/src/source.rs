@@ -27,12 +27,6 @@ pub struct SourceBook {
     /// free-form extras; see `docs/metadata-ext-design.md`). Validated at
     /// the storage boundary; `None` = no extended metadata.
     pub ext: Option<serde_json::Value>,
-    /// When set, the book's chapters come from another plugin instance
-    /// (metadata/content source separation). `None` = this instance also
-    /// provides the content.
-    pub content_source: Option<String>,
-    /// Book id inside the content source. `None` = same as `id`.
-    pub content_id: Option<String>,
     /// Volume structure when the source book spans several volumes;
     /// empty = single volume. The host auto-splits acquisition into one
     /// series + one library book per volume when >1 volumes are declared.

@@ -6,7 +6,7 @@ HTTP — the plugins now fetch everything through the host's `http.fetch`
 import. Two namespaces, one server:
 
   /wiki/...    metadata-only source: w-N entries pointing
-               content-source at the `reader` instance (R5 demo)
+               users select the reader source independently in the host
   /reader/...  content source: r-N entries with chapter titles/bodies
                and whole epub downloads (file mode)
 
@@ -125,8 +125,6 @@ def wiki_entry(book, site: str):
         "authors": authors,
         "description": f"{desc}（词条由 {site} 提供，全文来自阅读源）",
         "cover_url": None,
-        "content_source": "reader",
-        "content_id": reader_id,
     }
     # The metadata source declares its own 卷 structure (multi-volume is
     # the metadata source's responsibility, independent of the content
@@ -145,8 +143,6 @@ def reader_entry(book):
         "authors": authors,
         "description": f"{desc}（阅读源：远程模拟源）",
         "cover_url": None,
-        "content_source": None,
-        "content_id": None,
     }
     # Multi-volume books declare their 卷 structure (WIT volume-info);
     # the host splits acquisition into one book per volume.

@@ -137,7 +137,7 @@ TOTAL=$(api GET "/api/plugins/wiki/search?limit=3" | jq_field "d['total']")
 [ "$TOTAL" = "8" ] || fail "wiki search total=$TOTAL (expected 8)"
 pass "wiki search: $TOTAL books served over HTTP"
 
-BOOK=$(acquire wiki w-1 | jq_field "d['books'][0]['book']['id']")
+BOOK=$(api_form /api/books "plugin_source=reader" "plugin_book_id=r-1" "metadata_source=wiki" "metadata_book_id=w-1" "visibility=public" | jq_field "d['books'][0]['book']['id']")
 FILE=$(api GET "/api/books/$BOOK" | jq_field "d['files'][0]['id']")
 COUNT=$(api GET "/api/books/$BOOK" | jq_field "d['files'][0]['chapter_count']")
 [ "$COUNT" = "3" ] || fail "w-1 chapter_count=$COUNT (expected 3)"
@@ -148,10 +148,10 @@ echo "$CHAPTER" | grep -q "mock-source.py" || fail "chapter 0 does not come from
 echo "$CHAPTER" | grep -q "第一章 回声信标" || fail "chapter 0 title wrong"
 pass "chapter 0 materialized lazily from the HTTP source"
 
-# wiki's content-source indirection: chapters come from the reader instance
-CS=$(api GET "/api/books/$BOOK" | jq_field "d['files'][0]['content_source']")
+# User-selected content is recorded independently of wiki metadata.
+CS=$(api GET "/api/books/$BOOK" | jq_field "d['files'][0]['source']")
 [ "$CS" = "reader" ] || fail "content_source=$CS (expected reader)"
-pass "content indirection wiki -> reader intact"
+pass "user-selected reader content and wiki metadata remain independent"
 
 # independent materialize through the reader instance
 COUNT2=$(acquire reader r-1 | jq_field "d['books'][0]['files'][0]['chapter_count']")

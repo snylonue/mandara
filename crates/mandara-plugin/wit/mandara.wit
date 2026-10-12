@@ -40,7 +40,7 @@
 //     unsupported features are declared via `capabilities()` and return
 //     `none`/empty).
 
-package mandara:plugin@0.7.0;
+package mandara:plugin@0.8.0;
 
 /// Shared types between mandara and plugins.
 interface types {
@@ -76,15 +76,6 @@ interface types {
         /// series splits also read status/total-volumes/tags). The host
         /// validates it — malformed objects fail the call.
         extra: option<string>,
-        /// Chapters come from another plugin instance when set.
-        ///
-        /// Metadata-only plugins set this to the id of a content plugin
-        /// instance; content plugins leave it `none` (the book's content
-        /// comes from this instance itself). Must be an instance id known
-        /// to the host, or the book's chapters stay unavailable.
-        content-source: option<string>,
-        /// Book id inside the content source. Defaults to `id` when `none`.
-        content-id: option<string>,
         /// Volume structure when the source book spans several volumes
         /// (e.g. a 卷-split series TOC). `none`/empty = single volume
         /// (one library book, today's behavior). When >1 volumes are

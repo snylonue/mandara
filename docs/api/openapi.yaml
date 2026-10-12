@@ -196,8 +196,8 @@ paths:
         basename returned by GET /api/plugins/wasm-files; `config` is
         validated against the plugin's config schema (defaults fill the
         rest). An explicit `id` becomes the source id used in
-        `book_files.source` — stable ids let metadata plugins point their
-        `content-source` at a content plugin's instance. A declare-capable
+        `book_files.source`; metadata and content sources are selected by
+        the user, not linked by plugin entries. A declare-capable
         instance is synced right away.
       operationId: registerInstance
       security:

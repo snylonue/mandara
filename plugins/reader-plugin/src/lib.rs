@@ -5,10 +5,8 @@
 //! the host's `http.fetch` import — the only network a plugin gets (see
 //! `docs/plugin-http-api-design.md`).
 //!
-//! The demo flow: the wiki metadata entry points `content-source:
-//! "reader"`, `content-id: "r-N"`, and the host asks this instance for
-//! titles/chapters of `r-N`. A user can also materialize `r-N` directly
-//! through the source browser.
+//! Users select this content source independently of a metadata source
+//! in the host acquisition flow, or acquire its books directly.
 //!
 //! The demo source is `scripts/mock-source.py` (port 8765); point
 //! `base-url` at any HTTP API with the same shape:
@@ -98,10 +96,6 @@ struct JsonEntry {
     description: Option<String>,
     #[serde(default)]
     cover_url: Option<String>,
-    #[serde(default)]
-    content_source: Option<String>,
-    #[serde(default)]
-    content_id: Option<String>,
     /// Multi-volume structure (WIT volume-info), when the source
     /// declares it; the host splits acquisition into one book per 卷.
     #[serde(default)]
@@ -124,8 +118,6 @@ impl From<JsonEntry> for BookEntry {
             description: e.description,
             cover_url: e.cover_url,
             extra: None,
-            content_source: e.content_source,
-            content_id: e.content_id,
             volumes: e.volumes.map(|vs| {
                 vs.into_iter()
                     .map(|v| VolumeInfo {

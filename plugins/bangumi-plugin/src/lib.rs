@@ -431,8 +431,6 @@ impl From<&ApiSubject> for BookEntry {
             },
             cover_url: s.images.as_ref().and_then(ApiImages::best),
             extra: serde_json::to_string(&extra).ok(),
-            content_source: None,
-            content_id: None,
             // A bangumi **series** subject (e.g. 狼与香辛料 = 24 卷) is a
             // multi-volume publication family. Declare one volume-info per
             // 卷 (each with a single placeholder chapter — bangumi is

@@ -311,9 +311,11 @@ impl Library {
             let (book_id, file_id) = self
                 .ensure_plugin_book(&catalog.instance, None, &book.book, &titles)
                 .await?;
-            // Eager bodies: only when this instance also provides the
-            // content (a `content-source` pointer defers to the target).
-            if book.book.content_source.is_none() {
+            let file = self
+                .get_file(&file_id)
+                .await?
+                .ok_or_else(|| ApiError::not_found("file"))?;
+            if file.content_source.is_none() {
                 self.upsert_chapters(&file_id, &book.chapters).await?;
             }
             info!(
@@ -601,8 +603,6 @@ impl Library {
                         schema::book_files::book_id.eq(&book_id),
                         schema::book_files::source.eq(source_id),
                         schema::book_files::external_id.eq(&book.id),
-                        schema::book_files::content_source.eq(&book.content_source),
-                        schema::book_files::content_external_id.eq(&book.content_id),
                         schema::book_files::format.eq(FileFormat::Plugin.as_ref()),
                         schema::book_files::visibility.eq("public"),
                         schema::book_files::owner_id.eq(owner),
@@ -613,18 +613,15 @@ impl Library {
                 file_id
             }
         };
-        // Content indirection comes from the entry; the metadata instance
-        // owns the `books` row, the content instance the chapters. Scoped
-        // to the specific file (never a filter on (source, external_id),
-        // which would also rewrite volume files sharing the same pair).
-        diesel::update(schema::book_files::table.find(&file_id))
-            .set((
-                schema::book_files::chapter_count.eq(titles.len() as i64),
-                schema::book_files::content_source.eq(&book.content_source),
-                schema::book_files::content_external_id.eq(&book.content_id),
-            ))
-            .execute(&mut self.diesel_db.get().await?)
-            .await?;
+        // Sync never changes the user-selected content binding or its titles.
+        diesel::update(
+            schema::book_files::table
+                .find(&file_id)
+                .filter(schema::book_files::content_source.is_null()),
+        )
+        .set((schema::book_files::chapter_count.eq(titles.len() as i64),))
+        .execute(&mut self.diesel_db.get().await?)
+        .await?;
         Ok((book_id, file_id))
     }
 
@@ -886,14 +883,8 @@ impl Library {
                     let hash = sha256_hex(bytes);
                     let book_id = match self.plugins.identify_upload(filename, &hash).await? {
                         Some((source, entry)) => {
-                            let (content_inst, content_id) =
-                                self.plugins.content_target(&source, &entry);
-                            let titles = self
-                                .plugins
-                                .chapter_titles(content_inst, content_id)
-                                .await?;
-                            let (book_id, _) = self
-                                .ensure_plugin_book(&source, Some(&user.id), &entry, &titles)
+                            let book_id = self
+                                .resolve_plugin_metadata(&source, Some(&user.id), &entry)
                                 .await?;
                             self.apply_overrides(&book_id, overrides).await?;
                             book_id
@@ -929,8 +920,7 @@ impl Library {
                     let has_content = if self.plugins.declares(source, "book-file").await? {
                         true
                     } else {
-                        let (content_inst, content_id) =
-                            self.plugins.content_target(source, &entry);
+                        let (content_inst, content_id) = (source, entry.id.as_str());
                         !self
                             .plugins
                             .chapter_titles(content_inst, content_id)
@@ -938,8 +928,7 @@ impl Library {
                             .is_empty()
                     };
                     let book_id = if has_content {
-                        let (content_inst, content_id) =
-                            self.plugins.content_target(source, &entry);
+                        let (content_inst, content_id) = (source, entry.id.as_str());
                         let titles = self
                             .plugins
                             .chapter_titles(content_inst, content_id)
@@ -1189,7 +1178,7 @@ impl Library {
         if self.plugins.declares(source, "book-file").await? {
             return Ok(true);
         }
-        let (content_inst, content_id) = self.plugins.content_target(source, entry);
+        let (content_inst, content_id) = (source, entry.id.as_str());
         let titles = self
             .plugins
             .chapter_titles(content_inst, content_id)
@@ -1246,8 +1235,7 @@ impl Library {
         // for a split to happen at all; otherwise this is not a series
         // the metadata source knows about. The volume validation and
         // slicing live in `plan_volume_slices` (pure + unit-tested).
-        let (content_inst, content_id) =
-            self.plugins.content_target(content_source, &content_entry);
+        let (content_inst, content_id) = (content_source, content_entry.id.as_str());
         let titles = self
             .plugins
             .chapter_titles(content_inst, content_id)
@@ -1437,8 +1425,6 @@ impl Library {
                 schema::book_files::book_id.eq(book_id),
                 schema::book_files::source.eq(source),
                 schema::book_files::external_id.eq(&entry.id),
-                schema::book_files::content_source.eq(&entry.content_source),
-                schema::book_files::content_external_id.eq(&entry.content_id),
                 schema::book_files::format.eq(FileFormat::Plugin.as_ref()),
                 schema::book_files::label.eq(&pf.volume_title),
                 schema::book_files::visibility.eq(visibility.as_ref()),
@@ -1508,8 +1494,6 @@ impl Library {
                 schema::book_files::book_id.eq(book_id),
                 schema::book_files::source.eq(source),
                 schema::book_files::external_id.eq(&book.id),
-                schema::book_files::content_source.eq(&book.content_source),
-                schema::book_files::content_external_id.eq(&book.content_id),
                 schema::book_files::format.eq(FileFormat::Plugin.as_ref()),
                 schema::book_files::visibility.eq("public"),
                 schema::book_files::owner_id.eq(owner),
@@ -1547,18 +1531,14 @@ impl Library {
             .await?
             .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("plugin file vanished")))?;
         if file.chapter_count == 0 {
-            let (content_inst, content_id) = self.plugins.content_target(source, entry);
+            let (content_inst, content_id) = (source, entry.id.as_str());
             let titles = self
                 .plugins
                 .chapter_titles(content_inst, content_id)
                 .await?;
             if !titles.is_empty() {
                 diesel::update(schema::book_files::table.find(&file.id))
-                    .set((
-                        schema::book_files::chapter_count.eq(titles.len() as i64),
-                        schema::book_files::content_source.eq(&entry.content_source),
-                        schema::book_files::content_external_id.eq(&entry.content_id),
-                    ))
+                    .set((schema::book_files::chapter_count.eq(titles.len() as i64),))
                     .execute(&mut self.diesel_db.get().await?)
                     .await?;
                 self.upsert_placeholder_titles(&file.id, &titles).await?;
@@ -2017,8 +1997,16 @@ impl Library {
             )
             .select((
                 schema::book_files::id,
-                schema::book_files::source,
-                schema::book_files::external_id,
+                coalesce(
+                    schema::book_files::content_source,
+                    schema::book_files::source,
+                )
+                .assume_not_null(),
+                coalesce(
+                    schema::book_files::content_external_id,
+                    schema::book_files::external_id,
+                )
+                .assume_not_null(),
                 schema::book_files::volume_no,
                 schema::book_files::volume_offset,
                 schema::book_files::chapter_count,
@@ -2081,7 +2069,7 @@ impl Library {
             })?;
             let entry = SourceBook::try_from(entry)?;
 
-            let (content_inst, content_id) = self.plugins.content_target(source_id, &entry);
+            let (content_inst, content_id) = (source_id, entry.id.as_str());
             let titles = self
                 .plugins
                 .chapter_titles(content_inst, content_id)
@@ -2101,11 +2089,7 @@ impl Library {
                 *chapter_count as u32,
             );
             diesel::update(schema::book_files::table.find(file_id))
-                .set((
-                    schema::book_files::chapter_count.eq(slice.len() as i64),
-                    schema::book_files::content_source.eq(&entry.content_source),
-                    schema::book_files::content_external_id.eq(&entry.content_id),
-                ))
+                .set((schema::book_files::chapter_count.eq(slice.len() as i64),))
                 .execute(&mut self.diesel_db.get().await?)
                 .await?;
             if !slice.is_empty() {
@@ -3506,6 +3490,69 @@ fn sha256_hex(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use mandara_formats::ParsedImage;
+
+    #[tokio::test]
+    async fn sync_preserves_user_selected_content_binding() {
+        let dir = std::env::temp_dir().join(format!("mandara-binding-{}", uuid::Uuid::new_v4()));
+        let path = dir.join("library.db");
+        crate::db::run_migrations(&path).await.unwrap();
+        let db = crate::db::connect_diesel(&path).unwrap();
+        let library = Library::new(
+            db.clone(),
+            Arc::new(PluginService::new(db.clone(), vec![])),
+            dir.join("files"),
+        );
+        let book = SourceBook {
+            id: "plugin-defined-id".into(),
+            title: "单卷".into(),
+            authors: vec![],
+            description: None,
+            cover_url: None,
+            ext: None,
+            volumes: vec![],
+        };
+        let (_, file_id) = library
+            .ensure_plugin_book("metadata", None, &book, &["目录".into()])
+            .await
+            .unwrap();
+        diesel::update(schema::book_files::table.find(&file_id))
+            .set((
+                schema::book_files::content_source.eq("chosen-content"),
+                schema::book_files::content_external_id.eq("opaque-book-id"),
+            ))
+            .execute(&mut db.get().await.unwrap())
+            .await
+            .unwrap();
+        library
+            .sync_catalog(&DeclaredCatalog {
+                instance: "metadata".into(),
+                books: vec![crate::service::plugins::DeclaredCatalogBook {
+                    book,
+                    chapters: vec![SourceChapter {
+                        title: "目录".into(),
+                        format: "text".into(),
+                        content: "来源正文".into(),
+                    }],
+                }],
+            })
+            .await
+            .unwrap();
+        let file = library.get_file(&file_id).await.unwrap().unwrap();
+        assert_eq!(
+            file_content_target(&file),
+            ("chosen-content", "opaque-book-id")
+        );
+        let count: i64 = schema::chapters::table
+            .filter(schema::chapters::file_id.eq(&file_id))
+            .count()
+            .get_result(&mut db.get().await.unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            count, 0,
+            "sync must not inject the original source's bodies after rebinding"
+        );
+    }
 
     fn vol(title: &str, n: u32) -> SourceVolume {
         SourceVolume {

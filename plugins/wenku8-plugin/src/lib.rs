@@ -906,8 +906,6 @@ fn parse_book_page(book: &str, html: &str) -> Option<BookEntry> {
         // metadata stays empty (sources can add `extra` any time without
         // host changes).
         extra: None,
-        content_source: None,
-        content_id: None,
         volumes: None,
     })
 }

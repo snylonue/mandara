@@ -57,7 +57,7 @@ the full design. This guide is for plugin authors.
 ## Interface (WIT)
 
 Interface file: `crates/mandara-plugin/wit/mandara.wit`, world
-`mandara:plugin/mandara-plugin@0.7.0`. Every export is **required**
+`mandara:plugin/mandara-plugin@0.8.0`. Every export is **required**
 (the WIT parser has no optional exports) — unsupported features return
 `none`/empty and are declared via `capabilities()`:
 
@@ -77,9 +77,6 @@ interface types {
         cover-url: option<string>,
         // extended metadata (v0.7.0): JSON object, BookExt shape
         extra: option<string>,
-        // metadata/content separation (R5):
-        content-source: option<string>,  // instance id providing the chapters
-        content-id: option<string>,      // book id inside that instance
         volumes: option<list<volume-info>>,  // none/empty = single volume
     }
     record chapter { title: string, content: string }  // empty content = lazy body
@@ -325,14 +322,11 @@ file serves many sites (per-instance config).
 
 ## Metadata / content separation (R5)
 
-A metadata-only plugin (e.g. a wiki) returns `book-entry`s with
-`content-source`/`content-id` pointing at a content plugin's **instance
-id** — register the content plugin with a stable id for this to be
-predictable. Materializing such a book stores its metadata from the wiki
-and pulls titles/bodies from the reader instance on demand. Reader-side,
-users can also rebind a file's content source manually
-(`POST /api/files/{id}/content-source`, owner/admin; validates the target
-and, when it has `lookup`, the book id).
+Plugins describe only their own source. Users independently choose metadata
+and content in the acquisition flow; the host records both source ids and
+source-local book ids. Plugins never reference another instance. Owners and
+admins may rebind an existing file via `POST /api/files/{id}/content-source`;
+sync and refresh preserve that user-selected binding.
 
 ## Example plugins
 
@@ -340,8 +334,8 @@ and, when it has `lookup`, the book id).
   plugin; config-driven (site name, content variant, verbose logging, a
   deliberate infinite-loop switch for testing the epoch timeout).
 - `plugins/wiki-plugin/` — metadata-only over HTTP: `search` + `lookup`,
-  config `base-url`/`api-key`/`site-name`/`page-size`; every entry points
-  `content-source: "reader"`. Try it with `scripts/mock-source.py`.
+  config `base-url`/`api-key`/`site-name`/`page-size`; users choose
+  the reader source separately. Try it with `scripts/mock-source.py`.
 - `plugins/bangumi-plugin/` — a **real-world** metadata-only source:
   Bangumi (`https://bgm.tv`) book subjects via the official v0 API.
   `search` + `lookup`, no content — acquired entries are pure metadata;
