@@ -1,3 +1,5 @@
+> Historical design: the flat-slice/plugin-pointer model below is superseded by the explicit per-volume book and series protocol v0.9.0 described in `docs/plugins.md`.
+
 # Plugin System v2 — Design & Development Plan
 
 Status: **proposal** (dev phase; no backward compatibility constraints).

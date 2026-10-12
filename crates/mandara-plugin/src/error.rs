@@ -40,6 +40,8 @@ impl From<anyhow::Error> for ImageStoreError {
 /// Invalid metadata advertised by a guest, before it enters the library.
 #[derive(Debug, thiserror::Error)]
 pub enum BookEntryError {
+    #[error("invalid plugin identity or series membership: {0}")]
+    Identity(String),
     #[error("invalid `extra` metadata JSON: {0}")]
     Json(#[from] serde_json::Error),
     #[error("invalid `extra` metadata object: {0}")]

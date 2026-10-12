@@ -164,7 +164,8 @@ impl Guest for HelloPlugin {
             )),
             cover_url: None,
             extra: None,
-            volumes: None,
+            series: None,
+            volume_no: 0,
         };
         let book2 = BookEntry {
             id: "hello-2".into(),
@@ -177,7 +178,8 @@ impl Guest for HelloPlugin {
             extra: Some(
                 r#"{"publisher":"Mandara Press","pub_date":"2026-08","pages":42,"future_key":{"nested":true}}"#.into(),
             ),
-            volumes: None,
+            series: None,
+            volume_no: 0,
         };
         Some(vec![
             DeclaredBook {
@@ -291,11 +293,16 @@ impl Guest for HelloPlugin {
                 description: Some("这是一本由 wasm 插件提供的示例书。".into()),
                 cover_url: None,
                 extra: None,
-                volumes: None,
+                series: None,
+                volume_no: 0,
             })
         } else {
             None
         }
+    }
+
+    fn get_series(_series_id: String) -> Option<SeriesResult> {
+        None
     }
 
     fn get_book_file(_book_id: String) -> Option<BookFile> {

@@ -1,65 +1,20 @@
-// mandara plugin interface v7 (dev phase: no backward compatibility).
-//
-// v7 adds `chapter.format`: how the chapter body is interpreted
-// (`"text"` = plain text normalized by the host, `"html"` = the plugin's
-// own final HTML, passed through after image-reference annotation).
-// Plugins that need site-specific markup (e.g. wenku8's 插图 plates)
-// emit `"html"` and keep their expansion logic in the guest.
-//
-// v6 added `book-entry.extra`: an optional JSON object with extended
-// metadata (ISBN, publisher, dates, translators/illustrators, pages,
-// price, binding, language; series splits also read status/
-// total-volumes/tags from the same object). The host validates and
-// normalizes it at the storage boundary — future metadata fields never
-// require a WIT bump (see docs/metadata-ext-design.md).
-//
-// v5 added `volume-info`/`book-entry.volumes`: sources with multi-volume
-// books (light-novel series where vcss-style TOC rows group chapters into
-// 卷) declare the volume structure, and the host acquires each volume as
-// its own library book under one series entry instead of merging the whole
-// series into a single book (see docs/series-design.md).
-//
-// v4 added `source-info`: the plugin declares how the frontend should
-// present it when a user acquires books (interaction kind + id/search
-// hints), so UIs do not need to hardcode one plugin's shape (e.g. wenku8's
-// login-walled search / numeric book ids).
-//
-// See docs/plugin-v2-design.md and docs/plugin-http-api-design.md for the
-// full design. Key differences vs v2:
-//   - new `http` import: a controlled outbound HTTP channel, the ONLY way
-//     a plugin can reach the outside world (no wasi); every request runs
-//     under host policy (timeout/size caps, redirect limit, secret-free
-//     logging);
-//   - `get-book-file`: whole book files (epub/txt downloads) flow through
-//     the host's existing upload parser, so file-mode books get chapters,
-//     hierarchical TOC and sanitized HTML like uploads (capability
-//     `"book-file"`);
-//   - `source-info` (v4): per-plugin interaction hints;
-//   - `volumes` (v5): multi-volume structure (auto-split by the host);
-//   - every export is still required (wit-parser has no `optional-export`;
-//     unsupported features are declared via `capabilities()` and return
-//     `none`/empty).
+// Plugin protocol v9: one volume is one addressable book.
+// Plugins adapt upstream data and define opaque, stable IDs.
+// Metadata/content source selection belongs exclusively to the host.
 
-package mandara:plugin@0.8.0;
+package mandara:plugin@0.9.0;
 
 /// Shared types between mandara and plugins.
 interface types {
-    /// One volume of a multi-volume source book (a light-novel series).
-    ///
-    /// A volume's chapter list is a consecutive slice of the flat
-    /// `chapter-titles` order: volume `k` starts at the sum of the
-    /// `chapter-count`s of its predecessors, and the host maps
-    /// per-volume chapter indices to flat indices using these counts
-    /// (the persisted per-file `volume-offset` is the cache of that
-    /// sum). The sum of all counts should equal `chapter-titles`; the
-    /// host clamps mismatches defensively.
-    record volume-info {
-        /// Volume title as shown in the library (e.g. `"第一卷"`); the
-        /// host falls back to `第N卷` when empty.
+    /// Series metadata, distinct from an individual volume.
+    record series-entry {
+        id: string,
         title: string,
-        /// Number of chapters in this volume, in the flat reading order
-        /// (after the plugin's own 插图/etc. placement policy).
-        chapter-count: u32,
+        authors: list<string>,
+        description: option<string>,
+        cover-url: option<string>,
+        /// SeriesExt JSON object, validated by the host.
+        extra: option<string>,
     }
 
     /// A book offered by a plugin source.
@@ -73,15 +28,13 @@ interface types {
         /// Optional extended metadata as a JSON object (`BookExt` shape:
         /// subtitle/original-title/isbn/publisher/pub-date/translators/
         /// illustrators/pages/price/binding/language + free-form extras;
-        /// series splits also read status/total-volumes/tags). The host
+        /// per-volume publication fields). The host
         /// validates it — malformed objects fail the call.
         extra: option<string>,
-        /// Volume structure when the source book spans several volumes
-        /// (e.g. a 卷-split series TOC). `none`/empty = single volume
-        /// (one library book, today's behavior). When >1 volumes are
-        /// declared, the host auto-splits acquisition into one series +
-        /// one library book (and file) per volume.
-        volumes: option<list<volume-info>>,
+        /// Parent series metadata supplied by this plugin, or none.
+        series: option<series-entry>,
+        /// Display order within the series; zero for standalone books.
+        volume-no: u32,
     }
 
     /// A single chapter of a book.
@@ -90,13 +43,8 @@ interface types {
         /// Empty string = title-only placeholder (body fetched lazily via
         /// `get-chapter`); non-empty = can be materialized eagerly.
         content: string,
-        /// How `content` is interpreted: `"text"` (default) = plain text,
-        /// the host escapes and paragraph-wraps it; `"html"` = the plugin
-        /// already emits sanitized HTML fragments (escaped text, known
-        /// tags) and the host only annotates images. HTML-emitting plugins
-        /// are responsible for escaping text and emitting only safe tags
-        /// (see docs/plugins.md); the host never re-parses `"html"`
-        /// content.
+        /// "text" = plain text normalized by the host; "html" = HTML
+        /// fragment sanitized by the host before storage.
         format: string,
     }
 
@@ -112,7 +60,18 @@ interface types {
         /// Source-side total number of matches (may be capped by the
         /// source; the host relies on pagination, not on this number).
         total: u64,
-        items: list<book-entry>,
+        items: list<catalog-entry>,
+    }
+
+    variant catalog-entry {
+        single(book-entry),
+        series(series-entry),
+    }
+
+    /// Every member has a stable book ID accepted by get-book/content exports.
+    record series-result {
+        series: series-entry,
+        books: list<book-entry>,
     }
 
     /// A whole book as the source stores it (epub/txt download).
@@ -299,7 +258,7 @@ world mandara-plugin {
     // Types used by this world's exports come from the imported `types`
     // interface; WIT requires an explicit `use` to bring them into the
     // world scope.
-    use types.{book-entry, chapter, declared-book, search-result, book-file, source-info, volume-info};
+    use types.{book-entry, chapter, declared-book, search-result, book-file, source-info, series-entry, series-result, catalog-entry};
     use config.{config-field, config-value};
 
     /// Human-readable name of this plugin (same for all instances).
@@ -345,6 +304,9 @@ world mandara-plugin {
     /// Single book by id (materialize-on-demand, refresh). `none` = not
     /// found.
     export get-book: func(book-id: string) -> option<book-entry>;
+
+    /// Series lookup; IDs may be different from upstream website IDs.
+    export get-series: func(series-id: string) -> option<series-result>;
 
     /// Chapter titles of `book-id`, in reading order. Indices returned
     /// here are the same indices passed to `get-chapter`.

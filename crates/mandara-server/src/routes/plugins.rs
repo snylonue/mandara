@@ -71,9 +71,7 @@ pub async fn wasm_files(
 #[derive(Deserialize)]
 pub struct RegisterInstance {
     /// Optional explicit instance id (= source id in `book_files.source`;
-    /// defaults to a generated uuid). Stable ids like `"wiki"` let a
-    /// metadata plugin point its `content-source` at a content plugin's
-    /// instance. Must be unique.
+    /// defaults to a generated uuid). Must be unique; selected by users.
     pub id: Option<String>,
     pub wasm_file: String,
     #[serde(default = "default_config")]
@@ -208,6 +206,7 @@ fn default_search_limit() -> u32 {
 /// already synced into (when it is).
 #[derive(Serialize)]
 pub struct SearchItem {
+    pub kind: &'static str,
     pub id: String,
     pub title: String,
     pub authors: Vec<String>,
@@ -252,14 +251,7 @@ pub async fn search_plugins(
         .await?;
     let items: Vec<SearchItem> = items
         .into_iter()
-        .map(|(book, book_id)| SearchItem {
-            id: book.id,
-            title: book.title,
-            authors: book.authors,
-            description: book.description,
-            cover_url: book.cover_url,
-            book_id,
-        })
+        .map(|(entry, book_id)| search_item(entry, book_id))
         .collect();
     Ok(Json(SearchResponse { total, items }))
 }
@@ -283,7 +275,7 @@ pub async fn materialize_book(
 ) -> Result<impl IntoResponse, ApiError> {
     let user = current_user(&st, &headers).await?;
     // Legacy endpoint (superseded by the unified acquisition endpoint);
-    // the first created book is returned when the entry was split.
+    // each plugin book is one independently addressable volume.
     let (book, _file) = st
         .library
         .materialize_plugin_book(&user, &id, &req.book_id)
@@ -297,4 +289,63 @@ pub async fn materialize_book(
             files,
         }),
     ))
+}
+fn search_item(entry: mandara_plugin::CatalogEntry, book_id: Option<String>) -> SearchItem {
+    match entry {
+        mandara_plugin::CatalogEntry::Single(b) => SearchItem {
+            kind: "book",
+            id: b.id,
+            title: b.title,
+            authors: b.authors,
+            description: b.description,
+            cover_url: b.cover_url,
+            book_id,
+        },
+        mandara_plugin::CatalogEntry::Series(s) => SearchItem {
+            kind: "series",
+            id: s.id,
+            title: s.title,
+            authors: s.authors,
+            description: s.description,
+            cover_url: s.cover_url,
+            book_id: None,
+        },
+    }
+}
+
+#[derive(Deserialize)]
+pub struct LookupParams {
+    pub q: String,
+}
+
+pub async fn lookup_plugin(
+    State(st): State<St>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(params): Query<LookupParams>,
+) -> Result<impl IntoResponse, ApiError> {
+    current_user(&st, &headers).await?;
+    if params.q.is_empty() {
+        return Err(ApiError::bad_request("lookup ID must not be empty"));
+    }
+    let plugins = st.library.plugins();
+    let books = if let Some(book) = plugins.get_book(&id, &params.q).await? {
+        vec![book]
+    } else if let Some(series) = plugins.get_series(&id, &params.q).await? {
+        series.books
+    } else {
+        return Err(ApiError::not_found("plugin book or series"));
+    };
+    let mut items = Vec::with_capacity(books.len());
+    for book in books {
+        mandara_core::source::SourceBook::try_from(book.clone())?;
+        items.push(search_item(
+            mandara_plugin::CatalogEntry::Single(book),
+            None,
+        ));
+    }
+    Ok(Json(SearchResponse {
+        total: items.len() as u64,
+        items,
+    }))
 }

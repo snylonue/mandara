@@ -391,8 +391,7 @@ struct ChapterRef {
 struct Volume {
     vol_no: usize,
     /// Raw volume title from the TOC row (empty when wenku8 leaves it
-    /// blank). Used for the WIT `volumes` declaration so the host can
-    /// split acquisition into one library book per 卷.
+    /// blank). Used as the title of the independently addressable book.
     title: String,
     chapters: Vec<ChapterRef>,
 }
@@ -436,8 +435,7 @@ fn parse_toc(html: &str) -> Option<Vec<Volume>> {
         if rel[next..].starts_with("<td class=\"vcss\"") {
             let after = find_after(html, ">", pos)?;
             let end = html[after..].find("</td>")? + after;
-            // volume titles are not representable in the flat plugin TOC;
-            // keep the row text anyway for the WIT `volumes` declaration
+            // Each upstream volume becomes an independently identified book.
             let title = decode_entities(&html[after..end]).trim().to_string();
             vols.push(Volume {
                 vol_no: vols.len() + 1,
@@ -906,7 +904,8 @@ fn parse_book_page(book: &str, html: &str) -> Option<BookEntry> {
         // metadata stays empty (sources can add `extra` any time without
         // host changes).
         extra: None,
-        volumes: None,
+        series: None,
+        volume_no: 0,
     })
 }
 
@@ -927,6 +926,21 @@ fn normalize_book_id(id: &str) -> Option<String> {
 // World exports
 // ---------------------------------------------------------------------------
 
+// Anchor identity does not depend on display order or illustration placement.
+fn volume_anchor(volume: &Volume) -> Option<u32> {
+    volume.chapters.iter().map(|c| c.cid).min()
+}
+
+fn parse_volume_id(id: &str) -> Option<(String, u32)> {
+    let mut parts = id.strip_prefix("wenku8:volume:")?.split(':');
+    let book = normalize_book_id(parts.next()?)?;
+    let anchor = parts.next()?.parse().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((book, anchor))
+}
+
 struct Wenku8Plugin;
 
 impl Guest for Wenku8Plugin {
@@ -940,7 +954,7 @@ impl Guest for Wenku8Plugin {
         SourceInfo {
             kind: "manual-id".into(),
             id_kind: "numeric".into(),
-            id_hint: Some("wenku8 数字书号（如 3617）".into()),
+            id_hint: Some("wenku8 系列书号（如 3617），查找后选择单卷".into()),
             search_hint: None,
         }
     }
@@ -1000,52 +1014,94 @@ impl Guest for Wenku8Plugin {
         }
     }
 
-    fn get_book(book_id: String) -> Option<BookEntry> {
-        let book = normalize_book_id(&book_id)?;
+    fn get_series(series_id: String) -> Option<SeriesResult> {
+        let book = normalize_book_id(
+            series_id
+                .strip_prefix("wenku8:series:")
+                .unwrap_or(&series_id),
+        )?;
         let base = config_string("base-url", DEFAULT_BASE_URL);
-        let url = format!("{base}/book/{book}.htm");
-        let html = fetch_page("get-book", &url, &format!("{base}/"))?;
-        let mut entry = parse_book_page(&book, &html)?;
-        // Multi-volume books (卷-split TOCs) declare their volumes so
-        // the host acquires one library book per 卷 under a series
-        // instead of merging the whole series into one book.
-        if let Some(info) = fetch_toc(&book) {
-            let mut counts = vec![0u32; info.volumes.len()];
-            for c in &info.order {
-                counts[c.volume] += 1;
-            }
-            entry.volumes = Some(
-                info.volumes
-                    .iter()
-                    .enumerate()
-                    .map(|(i, v)| VolumeInfo {
-                        title: if v.title.is_empty() {
-                            format!("第{}卷", v.vol_no)
-                        } else {
-                            v.title.clone()
-                        },
-                        chapter_count: counts[i],
-                    })
-                    .collect(),
-            );
-        }
-        Some(entry)
+        let html = fetch_page(
+            "get-series",
+            &format!("{base}/book/{book}.htm"),
+            &format!("{base}/"),
+        )?;
+        let entry = parse_book_page(&book, &html)?;
+        let series = SeriesEntry {
+            id: format!("wenku8:series:{book}"),
+            title: entry.title,
+            authors: entry.authors,
+            description: entry.description,
+            cover_url: entry.cover_url,
+            extra: None,
+        };
+        let toc = fetch_toc(&book)?;
+        let books = toc
+            .volumes
+            .iter()
+            .filter_map(|v| {
+                let anchor = volume_anchor(v)?;
+                Some(BookEntry {
+                    id: format!("wenku8:volume:{book}:{anchor}"),
+                    title: if v.title.is_empty() {
+                        format!("第{}卷", v.vol_no)
+                    } else {
+                        v.title.clone()
+                    },
+                    authors: series.authors.clone(),
+                    description: series.description.clone(),
+                    cover_url: series.cover_url.clone(),
+                    extra: None,
+                    series: Some(series.clone()),
+                    volume_no: v.vol_no as u32,
+                })
+            })
+            .collect();
+        Some(SeriesResult { series, books })
+    }
+
+    fn get_book(book_id: String) -> Option<BookEntry> {
+        let (book, _) = parse_volume_id(&book_id)?;
+        Self::get_series(book)?
+            .books
+            .into_iter()
+            .find(|b| b.id == book_id)
     }
 
     fn chapter_titles(book_id: String) -> Vec<String> {
-        let Some(book) = normalize_book_id(&book_id) else {
-            return Vec::new();
+        let Some((book, anchor)) = parse_volume_id(&book_id) else {
+            return vec![];
         };
-        fetch_toc(&book)
-            .map(|info| info.order.into_iter().map(|c| c.title).collect())
-            .unwrap_or_default()
+        let Some(info) = fetch_toc(&book) else {
+            return vec![];
+        };
+        let Some(volume) = info
+            .volumes
+            .iter()
+            .position(|v| volume_anchor(v) == Some(anchor))
+        else {
+            return vec![];
+        };
+        info.order
+            .into_iter()
+            .filter(|c| c.volume == volume)
+            .map(|c| c.title)
+            .collect()
     }
 
     fn get_chapter(book_id: String, index: u32) -> Option<Chapter> {
-        let book = normalize_book_id(&book_id)?;
+        let (book, anchor) = parse_volume_id(&book_id)?;
         let base = config_string("base-url", DEFAULT_BASE_URL);
         let info = fetch_toc(&book)?;
-        let entry = info.order.get(index as usize)?;
+        let volume = info
+            .volumes
+            .iter()
+            .position(|v| volume_anchor(v) == Some(anchor))?;
+        let entry = info
+            .order
+            .iter()
+            .filter(|c| c.volume == volume)
+            .nth(index as usize)?;
         let url = chapter_url(&base, &book, entry.cid);
         let html = fetch_page("get-chapter", &url, &toc_url(&base, &book))?;
         let inner = strip_contentdp(&content_div(&html)?);
@@ -1053,7 +1109,7 @@ impl Guest for Wenku8Plugin {
         let content = if is_ill {
             // 插图 chapter: the plate URLs become `<figure><img>`s directly
             // (stored in the host's image store; failures keep the remote
-            // URL). The host stores `format: "html"` bodies verbatim.
+            // URL). The host sanitizes `format: "html"` bodies before storage.
             format_image_list(&stored_urls(&collect_image_urls(&inner)))
         } else {
             // Prose: plain text → final HTML (blank-line paragraphs,
@@ -1135,6 +1191,23 @@ mod tests {
             counts[c.volume] += 1;
         }
         assert_eq!(counts, vec![2, 1]);
+    }
+
+    #[test]
+    fn volume_identity_is_independent_of_illustration_placement() {
+        let html = r#"<td class="vcss">卷一</td><td class="ccss"><a href="reader.php?cid=10">第一章</a></td><td class="ccss"><a href="reader.php?cid=5">插图</a></td>"#;
+        let vols = parse_toc(html).unwrap();
+        let id = volume_anchor(&vols[0]).unwrap();
+        for placement in [Placement::End, Placement::Front, Placement::Skip] {
+            let order = build_order(&vols, placement);
+            assert!(order.iter().any(|c| c.cid == 10));
+            assert_eq!(volume_anchor(&vols[0]), Some(id));
+        }
+        assert_eq!(id, 5);
+        assert_eq!(
+            parse_volume_id("wenku8:volume:3617:5"),
+            Some(("3617".into(), 5))
+        );
     }
 
     #[test]

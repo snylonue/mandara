@@ -91,6 +91,8 @@ diesel::table! {
         created_by -> Nullable<Text>,
         created_at -> Text,
         ext_meta -> Text,
+        meta_source -> Nullable<Text>,
+        meta_external_id -> Nullable<Text>,
     }
 }
 

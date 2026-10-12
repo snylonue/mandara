@@ -209,6 +209,7 @@
     "manualIdPlaceholder": "输入书目 ID",
     "manualIdAlso": "或直接输入条目 ID（需该来源支持 lookup）：",
     "useManualId": "使用该 ID",
+    "browseSeries": "选择单卷",
     "browseSynced": "该来源的书目已同步到书架，无需在此选取。",
     "manageTitle": "插件管理",
     "registerTitle": "注册插件实例",

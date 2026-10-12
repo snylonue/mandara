@@ -1,3 +1,5 @@
+> Historical design: the flat-slice/plugin-pointer model below is superseded by the explicit per-volume book and series protocol v0.9.0 described in `docs/plugins.md`.
+
 # Series & multi-volume acquisition design
 
 Status: **approved 2026-08-23** — owner decisions recorded in §3a:

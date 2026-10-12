@@ -34,10 +34,8 @@ pub struct BookListEntry {
     pub series: Option<SeriesMeta>,
 }
 
-/// Response of one acquisition (`POST /api/books`): the series created by
-/// a volume split (when the source declared >1 volumes) and the books
-/// that entered the library. `books` is non-empty; it has exactly one
-/// element unless the acquisition split volumes.
+/// Response of acquiring one volume book (`POST /api/books`), including
+/// its parent series when present. `books` contains exactly one entry.
 #[derive(Serialize)]
 pub struct AcquireResult {
     pub series: Option<SeriesBrief>,

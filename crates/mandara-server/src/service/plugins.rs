@@ -115,6 +115,7 @@ pub struct DeclaredCatalogBook {
 
 pub struct DeclaredCatalog {
     pub instance: String,
+    pub has_content: bool,
     pub books: Vec<DeclaredCatalogBook>,
 }
 
@@ -516,6 +517,10 @@ impl PluginService {
             .unwrap_or_default();
             out.push(DeclaredCatalog {
                 instance: row.id,
+                has_content: wasm
+                    .capabilities
+                    .iter()
+                    .any(|c| c == "content" || c == "book-file"),
                 books: declared
                     .into_iter()
                     .map(|b| -> Result<_, ApiError> {
@@ -561,6 +566,10 @@ impl PluginService {
             .unwrap_or_default();
             return Ok(Some(DeclaredCatalog {
                 instance: row.id,
+                has_content: wasm
+                    .capabilities
+                    .iter()
+                    .any(|c| c == "content" || c == "book-file"),
                 books: declared
                     .into_iter()
                     .map(|b| -> Result<_, ApiError> {
@@ -609,6 +618,18 @@ impl PluginService {
     }
 
     /// Chapter titles (requires `content`; allowed for disabled instances).
+    pub async fn get_series(
+        &self,
+        id: &str,
+        series_id: &str,
+    ) -> Result<Option<mandara_plugin::SeriesResult>, ApiError> {
+        let series_id = series_id.to_string();
+        self.call(id, true, move |wasm, values| {
+            wasm.get_series(values, &series_id)
+        })
+        .await
+    }
+
     pub async fn chapter_titles(&self, id: &str, book_id: &str) -> Result<Vec<String>, ApiError> {
         let book_id = book_id.to_string();
         self.call(id, false, move |wasm, values| {

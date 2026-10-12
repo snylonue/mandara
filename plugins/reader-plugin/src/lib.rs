@@ -96,17 +96,41 @@ struct JsonEntry {
     description: Option<String>,
     #[serde(default)]
     cover_url: Option<String>,
-    /// Multi-volume structure (WIT volume-info), when the source
-    /// declares it; the host splits acquisition into one book per 卷.
     #[serde(default)]
-    volumes: Option<Vec<JsonVolume>>,
+    series: Option<JsonSeries>,
+    #[serde(default)]
+    volume_no: u32,
 }
 
 #[derive(serde::Deserialize)]
-struct JsonVolume {
+struct JsonSeries {
+    id: String,
     title: String,
-    #[serde(rename = "chapter-count")]
-    chapter_count: u32,
+    #[serde(default)]
+    authors: Vec<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    cover_url: Option<String>,
+}
+
+impl From<JsonSeries> for SeriesEntry {
+    fn from(s: JsonSeries) -> Self {
+        Self {
+            id: s.id,
+            title: s.title,
+            authors: s.authors,
+            description: s.description,
+            cover_url: s.cover_url,
+            extra: None,
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct JsonSeriesResult {
+    series: JsonSeries,
+    books: Vec<JsonEntry>,
 }
 
 impl From<JsonEntry> for BookEntry {
@@ -118,14 +142,8 @@ impl From<JsonEntry> for BookEntry {
             description: e.description,
             cover_url: e.cover_url,
             extra: None,
-            volumes: e.volumes.map(|vs| {
-                vs.into_iter()
-                    .map(|v| VolumeInfo {
-                        title: v.title,
-                        chapter_count: v.chapter_count,
-                    })
-                    .collect()
-            }),
+            series: e.series.map(SeriesEntry::from),
+            volume_no: e.volume_no,
         }
     }
 }
@@ -223,7 +241,11 @@ impl Guest for ReaderPlugin {
             Ok((200, body)) => match serde_json::from_slice::<JsonSearch>(&body) {
                 Ok(result) => SearchResult {
                     total: result.total,
-                    items: result.items.into_iter().map(BookEntry::from).collect(),
+                    items: result
+                        .items
+                        .into_iter()
+                        .map(|e| CatalogEntry::Single(e.into()))
+                        .collect(),
                 },
                 Err(e) => {
                     log_error("search", &url, &format!("json: {e}"));
@@ -329,6 +351,20 @@ impl Guest for ReaderPlugin {
 
     fn identify_upload(_filename: String, _file_hash: String) -> Option<BookEntry> {
         None // no `identify` capability; host never calls this
+    }
+
+    fn get_series(series_id: String) -> Option<SeriesResult> {
+        let base = config_string("base-url", DEFAULT_BASE_URL);
+        let url = format!("{base}/api/series/{}", urlencode(&series_id));
+        match http_get(&url) {
+            Ok((200, body)) => serde_json::from_slice::<JsonSeriesResult>(&body)
+                .ok()
+                .map(|s| SeriesResult {
+                    series: s.series.into(),
+                    books: s.books.into_iter().map(BookEntry::from).collect(),
+                }),
+            _ => None,
+        }
     }
 
     fn get_book_file(book_id: String) -> Option<BookFile> {

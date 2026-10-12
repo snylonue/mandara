@@ -373,6 +373,33 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /api/plugins/{id}/lookup:
+    get:
+      tags: [plugins]
+      summary: Resolve a plugin book or series ID without acquiring it
+      description: Returns one independently addressable book, or the books belonging to a series. IDs are opaque plugin-defined values, not necessarily upstream website IDs.
+      operationId: lookupPlugin
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PluginId"
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Resolved books available for individual selection
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PluginSearchResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /api/plugins/{id}/search:
     get:
       tags: [plugins]
@@ -467,17 +494,10 @@ paths:
         source is independent of the content source: metadata may come
         from plugin A while the content comes from plugin B.
         `title`/`authors`/`description`/`cover_url`/`ext` override the
-        produced metadata (never applied when attaching). When the
-        plugin source declares >1 volumes, the acquisition auto-splits
-        into one series + one book per 卷 (the response carries them all).
-        The split is driven by the CONTENT source's own volume
-        declaration; the content source must declare its volume structure
-        (400 otherwise — an undeclared content source cannot be sliced
-        per volume) and may declare FEWER volumes than the metadata
-        source (metadata-only series entries, e.g. bangumi 系列, may list
-        not-yet-published volumes; those become metadata-only books with
-        no content). A content source declaring MORE volumes than the
-        metadata series is refused (400).
+        produced metadata (never applied when attaching). One plugin book
+        is one volume. Parent series metadata groups independently identified
+        books; the host never slices a flat chapter list or matches volume
+        counts across sources. Select a specific volume in the source picker.
       operationId: uploadBook
       security:
         - bearerAuth: []
@@ -569,7 +589,7 @@ paths:
         "201":
           description: |
             The created series (when a multi-volume source book was
-            split) and the created books, each with its first file
+            parent grouping) and the acquired book, with its first file
             (empty files array for a metadata-only addition).
           content:
             application/json:
@@ -1555,9 +1575,9 @@ components:
           format: date-time
         series_id:
           description: |
-            Series this book is a volume of (null = standalone). Volume
-            splits assign every 卷 its own book entry plus one series
-            row; manual assignment (`PATCH /api/books/{id}`) moves books
+            Series this book is a volume of (null = standalone). Plugins
+            return parent metadata for independently identified books;
+            manual assignment (`PATCH /api/books/{id}`) moves books
             in and out of series.
           type: [string, "null"]
         volume_no:
@@ -1705,16 +1725,15 @@ components:
           format: date-time
         volume_no:
           description: |
-            Volume slice of the source book this file covers (0 = the
-            whole book). A multi-volume plugin book is acquired as one
-            file per 卷.
+            Legacy flat-split marker, retained for existing cached files.
+            New plugin files are complete individual books with value 0.
           type: integer
           minimum: 0
         volume_offset:
           description: |
-            Flat chapter index of this volume's first chapter inside the
-            source (persisted because the plugin is stateless); lazy
-            chapter pulls use `volume_offset + idx`.
+            Legacy flat offset, retained for existing caches. New plugin
+            books use local chapter indices and value 0. Legacy uncached
+            reads require explicit book selection via content rebinding.
           type: integer
           minimum: 0
         original:
@@ -1876,10 +1895,8 @@ components:
     AcquireResult:
       type: object
       description: |
-        Result of one acquisition (`POST /api/books`). When the plugin
-        source declared >1 volumes, `series` is the created series and
-        `books` holds one entry per 卷; otherwise `series` is null and
-        `books` has exactly one entry. Always non-empty.
+        Result of one acquisition (`POST /api/books`). Exactly one volume
+        book is acquired; series identifies its parent grouping when present.
       required: [series, books]
       properties:
         series:
@@ -2257,10 +2274,14 @@ components:
     PluginSearchItem:
       description: One search hit, annotated with the library book it is already synced into
       type: object
-      required: [id, title, authors, book_id]
+      required: [kind, id, title, authors, book_id]
       properties:
+        kind:
+          description: Series hits must be opened through lookup before selecting a member book
+          type: string
+          enum: [book, series]
         id:
-          description: Book id inside the source
+          description: Opaque plugin-defined book or series ID
           type: string
         title:
           type: string

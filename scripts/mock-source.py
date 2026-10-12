@@ -5,8 +5,7 @@ Serves the same book universe the plugins used to hardcode, over plain
 HTTP — the plugins now fetch everything through the host's `http.fetch`
 import. Two namespaces, one server:
 
-  /wiki/...    metadata-only source: w-N entries pointing
-               users select the reader source independently in the host
+  /wiki/...    metadata-only source; users select content independently
   /reader/...  content source: r-N entries with chapter titles/bodies
                and whole epub downloads (file mode)
 
@@ -46,22 +45,7 @@ WIKI_BOOKS = [
     ("w-6", "时间旅人的信", ["迟舟"], "寄信人来自明天。", "r-6"),
     ("w-7", "深海广播", ["韩潮"], "马里亚纳海沟下的电台信号。", "r-7"),
     ("w-8", "第七封印物语", ["陆离"], "第七道封印之后，世界安静得不像话。", "r-8"),
-    # w-9: a multi-volume METADATA source. The 卷 structure is declared by
-    # the metadata source (wiki), NOT by the content source: it points at
-    # the single-volume reader r-8 for content, but declares two 卷 itself.
-    # The host must split by the metadata entry's volumes, not the content
-    # entry's (r-8 declares none) — otherwise w-9 would collapse into one
-    # book. (Multi-volume split is the metadata source's responsibility.)
-    ("w-9", "星海拾遗·外传", ["洛离"], "两卷合一的外传（卷结构由元数据源声明）。", "r-8"),
-    # w-10: a metadata-only multi-volume subject (like a bangumi series
-    # subject): it declares 2 卷 but its content target r-0 carries NO
-    # chapters, so acquisition splits it into a series of metadata-only
-    # books (no files), never a panic.
-    ("w-10", "无正文合集", ["零"], "多卷元数据主题（无内容，仅作系列拆分）。", "r-0"),
-    # w-11: a metadata-only single-volume entry (no declared volumes) whose
-    # content target r-0 carries no chapters — the `(Plugin, New)` path that
-    # plans a bare metadata entry with no file.
-    ("w-11", "无正文单行本", ["零"], "单卷元数据主题（无内容）。", "r-0"),
+    ("w-11", "无正文单行本", ["零"], "单卷元数据主题。", "unused"),
 ]
 
 READER_BOOKS = [
@@ -77,35 +61,22 @@ READER_BOOKS = [
     ("r-6", "时间旅人的信", ["迟舟"], "寄信人来自明天。", ["第一章 明天寄来的明信片", "第二章 错序的邮票", "第三章 末班邮箱"]),
     ("r-7", "深海广播", ["韩潮"], "马里亚纳海沟下的电台信号。", ["第一章 波长 31.4", "第二章 鲸歌应答"]),
     ("r-8", "第七封印物语", ["陆离"], "第七道封印之后，世界安静得不像话。", ["第一章 石门的刻痕", "第二章 无名的守印人", "第三章 封印之下"]),
-    # r-9: multi-volume demo (series split via book-entry.volumes)
-    ("r-9", "星海拾遗·外传", ["洛离"], "两卷合一的多卷示例书（series split 演示）。", ["第一章 相遇", "第二章 洄游", "第三章 觉醒", "第四章 归航"]),
 ]
 
-# Declared volume structure of multi-volume books (WIT volume-info): the
-# flat chapter list of r-9 is the concatenation of these two 卷.
-READER_VOLUMES = {
-    "r-9": [
-        {"title": "第一卷 相遇", "chapter-count": 2},
-        {"title": "第二卷 觉醒", "chapter-count": 2},
-    ],
+# Upstream families are adapted to independently addressable volume books.
+SERIES = {
+    "wiki": {"id": "w-9", "title": "星海拾遗·外传", "authors": ["洛离"], "description": "系列元数据"},
+    "reader": {"id": "r-9", "title": "星海拾遗·外传", "authors": ["洛离"], "description": "阅读源系列"},
 }
-
-# Declared volume structure of multi-volume METADATA entries (WIT
-# volume-info). The metadata source declares its 卷; the content source
-# only supplies the flat chapter stream for each volume's slice. Here
-# w-9 declares two 卷 over reader r-8's three chapters.
-WIKI_VOLUMES = {
-    "w-9": [
-        {"title": "第一卷 相遇", "chapter-count": 1},
-        {"title": "第二卷 觉醒", "chapter-count": 2},
-    ],
-    # w-10: metadata-only subject — declares 2 卷 but its content target
-    # (r-0) has no chapters, so each volume is metadata-only (count 0).
-    "w-10": [
-        {"title": "第一卷 无正文", "chapter-count": 0},
-        {"title": "第二卷 无正文", "chapter-count": 0},
-    ],
-}
+MEMBERS = {"wiki": ["w-alpha", "w-beta"], "reader": ["r-alpha", "r-beta"]}
+WIKI_BOOKS.extend([
+    ("w-alpha", "第一卷 相遇", ["洛离"], "单卷元数据", "unused"),
+    ("w-beta", "第二卷 觉醒", ["洛离"], "单卷元数据", "unused"),
+])
+READER_BOOKS.extend([
+    ("r-alpha", "第一卷 相遇", ["洛离"], "单卷阅读内容", ["第一章 相遇", "第二章 洄游"]),
+    ("r-beta", "第二卷 觉醒", ["洛离"], "单卷阅读内容", ["第三章 觉醒", "第四章 归航"]),
+])
 
 
 def chapter_text(book_id: str, title: str) -> str:
@@ -126,12 +97,9 @@ def wiki_entry(book, site: str):
         "description": f"{desc}（词条由 {site} 提供，全文来自阅读源）",
         "cover_url": None,
     }
-    # The metadata source declares its own 卷 structure (multi-volume is
-    # the metadata source's responsibility, independent of the content
-    # source's book structure).
-    volumes = WIKI_VOLUMES.get(wid)
-    if volumes is not None:
-        entry["volumes"] = volumes
+    if wid in MEMBERS["wiki"]:
+        entry["series"] = SERIES["wiki"]
+        entry["volume_no"] = MEMBERS["wiki"].index(wid) + 1
     return entry
 
 
@@ -144,11 +112,9 @@ def reader_entry(book):
         "description": f"{desc}（阅读源：远程模拟源）",
         "cover_url": None,
     }
-    # Multi-volume books declare their 卷 structure (WIT volume-info);
-    # the host splits acquisition into one book per volume.
-    volumes = READER_VOLUMES.get(rid)
-    if volumes is not None:
-        entry["volumes"] = volumes
+    if rid in MEMBERS["reader"]:
+        entry["series"] = SERIES["reader"]
+        entry["volume_no"] = MEMBERS["reader"].index(rid) + 1
     return entry
 
 
@@ -288,6 +254,11 @@ class Handler(BaseHTTPRequestHandler):
         self.route_namespace(ns, books, rest, query)
 
     def route_namespace(self, ns, books, rest, query):
+        if rest == "/api/series/" + SERIES[ns]["id"]:
+            items = [wiki_entry(b, "维基书源") if ns == "wiki" else reader_entry(b)
+                     for b in books if b[0] in MEMBERS[ns]]
+            self.json({"series": SERIES[ns], "books": items})
+            return
         if rest == "/api/search":
             q = query.get("q", [""])[0].lower()
             page_size = int(query.get("page_size", ["8"])[0])

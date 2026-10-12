@@ -4,14 +4,15 @@
 //! the chapters it returns. The server materializes them into the central
 //! library (unified metadata storage in SQLite) on sync / on demand.
 
-/// One volume of a multi-volume source book (see WIT `volume-info`).
+/// Series metadata advertised by one plugin instance.
 #[derive(Debug, Clone)]
-pub struct SourceVolume {
-    /// Volume title (e.g. `第一卷`); the host falls back to `第N卷` when
-    /// empty.
+pub struct SourceSeries {
+    pub id: String,
     pub title: String,
-    /// Chapters in this volume, in the flat reading order.
-    pub chapter_count: u32,
+    pub authors: Vec<String>,
+    pub description: Option<String>,
+    pub cover_url: Option<String>,
+    pub ext: Option<serde_json::Value>,
 }
 
 /// A book as advertised by a plugin source.
@@ -27,10 +28,8 @@ pub struct SourceBook {
     /// free-form extras; see `docs/metadata-ext-design.md`). Validated at
     /// the storage boundary; `None` = no extended metadata.
     pub ext: Option<serde_json::Value>,
-    /// Volume structure when the source book spans several volumes;
-    /// empty = single volume. The host auto-splits acquisition into one
-    /// series + one library book per volume when >1 volumes are declared.
-    pub volumes: Vec<SourceVolume>,
+    pub series: Option<SourceSeries>,
+    pub volume_no: u32,
 }
 
 /// A chapter as returned by a plugin source.
@@ -39,8 +38,7 @@ pub struct SourceChapter {
     pub title: String,
     /// How `content` is interpreted (the WIT `chapter.format`): `"text"`
     /// (default) = plain text, normalized by the host; `"html"` = the
-    /// plugin's own final HTML, passed through after image-reference
-    /// annotation.
+    /// plugin HTML, sanitized before image-reference annotation.
     pub format: String,
     pub content: String,
 }

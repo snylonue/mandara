@@ -164,6 +164,7 @@ export function SourceSearchPane({
   // clears the stale result page (old pagination does not survive a new
   // search term).
   useEffect(() => {
+    ++seq.current;
     if (!sel || !showSearch) {
       setResult(null);
       setError(null);
@@ -177,8 +178,28 @@ export function SourceSearchPane({
   const total = result?.total ?? 0;
   const shown = result?.items.length ?? 0;
 
+  async function lookup(key: string) {
+    if (!selected) return;
+    const mySeq = ++seq.current;
+    setLoading(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams({ q: key });
+      const r = await api<PluginSearchResponse>(`/plugins/${selected.id}/lookup?${params}`);
+      if (seq.current === mySeq) setResult(r);
+    } catch (e) {
+      if (seq.current === mySeq) {
+        setResult(null);
+        setError(e instanceof Error ? e.message : t("common.failed"));
+      }
+    } finally {
+      if (seq.current === mySeq) setLoading(false);
+    }
+  }
+
   function pick(item: PluginSearchItem) {
     if (!selected) return;
+    if (item.kind === "series") { void lookup(item.id); return; }
     setPickError(null);
     setPicking(item.id);
     Promise.resolve(onPick({ instance: selected, item }))
@@ -209,7 +230,7 @@ export function SourceSearchPane({
 
       {error && <div className="error">{error}</div>}
       {loading && <p className="hint">{t("common.loading")}</p>}
-      {!loading && !error && showSearch && sel && result && result.items.length === 0 && (
+      {!loading && !error && sel && result && result.items.length === 0 && (
         <p className="hint">{t("plugin.noResults")}</p>
       )}
       {showManualId && sel && selected && (
@@ -226,23 +247,8 @@ export function SourceSearchPane({
             {manual.trim() && (
               <button
                 className="btn link"
-                disabled={picking !== null}
-                onClick={() =>
-                  pick({
-                    // A manual id is a *lookup key*, not metadata: the
-                    // entry's title/authors/description are unknown until
-                    // the source resolves the id (via `get-book` on the
-                    // backend). Filling `title` with the id would be sent
-                    // as a metadata override and clobber the real title
-                    // (e.g. the id "50538" would overwrite 游戏人生).
-                    id: manual.trim(),
-                    title: "",
-                    authors: [],
-                    description: null,
-                    cover_url: null,
-                    book_id: null,
-                  })
-                }
+                disabled={picking !== null || loading}
+                onClick={() => void lookup(manual.trim())}
               >
                 {picking !== null ? t("common.loading") : t("plugin.useManualId")}
               </button>
@@ -270,7 +276,7 @@ export function SourceSearchPane({
               disabled={picking !== null}
               onClick={() => pick(item)}
             >
-              {picking === item.id ? t("common.loading") : (pickLabel?.(item) ?? t("plugin.addToShelf"))}
+              {picking === item.id ? t("common.loading") : (item.kind === "series" ? t("plugin.browseSeries") : (pickLabel?.(item) ?? t("plugin.addToShelf")))}
             </button>
           </li>
         ))}

@@ -18,7 +18,7 @@ use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Config, Engine, Store};
 
 use crate::error::{BookEntryError, Error, ImageStoreError, Result};
-use mandara_core::source::{SourceBook, SourceBookFile, SourceChapter, SourceVolume};
+use mandara_core::source::{SourceBook, SourceBookFile, SourceChapter, SourceSeries};
 use wasmtime::error::Context as _;
 
 use crate::http_fetch::{self, FetchPolicy};
@@ -420,9 +420,38 @@ impl WasmPlugin {
         Ok(book.map(SourceBook::try_from).transpose()?)
     }
 
-    /// Fetch a whole book file (`book-file` capability). `None` = the
-    /// source has no file for this book (chapter mode). Bytes are capped
-    /// at [`MAX_BOOK_FILE_BYTES`].
+    /// Resolve a series into individually identified, validated member books.
+    pub fn get_series(
+        &self,
+        config: &[ConfigValue],
+        series_id: &str,
+    ) -> Result<Option<SeriesResult>> {
+        let result = self.call(config, |store, bindings| {
+            bindings.call_get_series(store, series_id)
+        })?;
+        if let Some(series) = &result {
+            SourceSeries::try_from(series.series.clone())?;
+            if series.books.len() > MAX_DECLARE_BOOKS {
+                return Err(BookEntryError::Identity("series member limit exceeded".into()).into());
+            }
+            let mut ids = std::collections::HashSet::new();
+            for book in &series.books {
+                SourceBook::try_from(book.clone())?;
+                if !ids.insert(&book.id)
+                    || book.series.as_ref().map(|s| &s.id) != Some(&series.series.id)
+                {
+                    return Err(BookEntryError::Identity(
+                        "duplicate book ID or mismatched parent series".into(),
+                    )
+                    .into());
+                }
+            }
+        }
+        Ok(result)
+    }
+
+    /// Fetch a whole book file (`book-file` capability). `None` = chapter mode.
+    /// Bytes are capped at [`MAX_BOOK_FILE_BYTES`].
     pub fn get_book_file(
         &self,
         config: &[ConfigValue],
@@ -458,6 +487,14 @@ impl TryFrom<BookEntry> for SourceBook {
     type Error = BookEntryError;
 
     fn try_from(b: BookEntry) -> std::result::Result<Self, Self::Error> {
+        if b.id.is_empty()
+            || (b.series.is_none() && b.volume_no != 0)
+            || (b.series.is_some() && b.volume_no == 0)
+        {
+            return Err(BookEntryError::Identity(
+                "book ID and volume order must agree with series membership".into(),
+            ));
+        }
         let ext = match b.extra {
             None => None,
             Some(raw) => {
@@ -473,15 +510,8 @@ impl TryFrom<BookEntry> for SourceBook {
             description: b.description,
             cover_url: b.cover_url,
             ext,
-            volumes: b
-                .volumes
-                .unwrap_or_default()
-                .into_iter()
-                .map(|v| SourceVolume {
-                    title: v.title,
-                    chapter_count: v.chapter_count,
-                })
-                .collect(),
+            series: b.series.map(SourceSeries::try_from).transpose()?,
+            volume_no: b.volume_no,
         })
     }
 }
@@ -708,4 +738,28 @@ pub fn values_from_config(fields: &[ConfigField], config: &serde_json::Value) ->
             (ConfigKind::ListOfString, _) => ConfigValue::StringList(Vec::new()),
         })
         .collect()
+}
+impl TryFrom<SeriesEntry> for SourceSeries {
+    type Error = BookEntryError;
+    fn try_from(s: SeriesEntry) -> std::result::Result<Self, Self::Error> {
+        if s.id.is_empty() {
+            return Err(BookEntryError::Identity("empty series ID".into()));
+        }
+        let ext = s
+            .extra
+            .map(|raw| -> std::result::Result<_, BookEntryError> {
+                let value = serde_json::from_str(&raw)?;
+                let ext = mandara_core::ext::SeriesExt::from_value(value)?;
+                Ok(serde_json::to_value(ext).expect("series metadata is serializable"))
+            })
+            .transpose()?;
+        Ok(Self {
+            id: s.id,
+            title: s.title,
+            authors: s.authors,
+            description: s.description,
+            cover_url: s.cover_url,
+            ext,
+        })
+    }
 }

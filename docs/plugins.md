@@ -57,17 +57,16 @@ the full design. This guide is for plugin authors.
 ## Interface (WIT)
 
 Interface file: `crates/mandara-plugin/wit/mandara.wit`, world
-`mandara:plugin/mandara-plugin@0.8.0`. Every export is **required**
+`mandara:plugin/mandara-plugin@0.9.0`. Every export is **required**
 (the WIT parser has no optional exports) — unsupported features return
 `none`/empty and are declared via `capabilities()`:
 
 ```wit
 interface types {
-    // multi-volume structure (v0.5.0): when a source book spans several
-    // 卷, the host acquires one library book per volume under a series
-    record volume-info {
-        title: string,          // "第一卷" — host falls back to 第N卷
-        chapter-count: u32,     // chapters in this volume (flat order)
+    record series-entry {
+        id: string, title: string, authors: list<string>,
+        description: option<string>, cover-url: option<string>,
+        extra: option<string>, // SeriesExt JSON
     }
     record book-entry {
         id: string,
@@ -75,13 +74,16 @@ interface types {
         authors: list<string>,
         description: option<string>,
         cover-url: option<string>,
-        // extended metadata (v0.7.0): JSON object, BookExt shape
+        // extended volume metadata: JSON object, BookExt shape
         extra: option<string>,
-        volumes: option<list<volume-info>>,  // none/empty = single volume
+        series: option<series-entry>,
+        volume-no: u32,
     }
-    record chapter { title: string, content: string }  // empty content = lazy body
+    record chapter { title: string, content: string, format: string }  // empty content = lazy body
     record declared-book { book: book-entry, chapters: list<chapter> }
-    record search-result { total: u64, items: list<book-entry> }
+    variant catalog-entry { single(book-entry), series(series-entry) }
+    record search-result { total: u64, items: list<catalog-entry> }
+    record series-result { series: series-entry, books: list<book-entry> }
     record book-file { filename: string, mime: string, bytes: list<u8> }
 }
 
@@ -119,24 +121,41 @@ World exports:
 | `declare()` | always | Small static catalog (`None` for large sources) |
 | `search-books(query, offset, limit)` | `search` | Paginated catalog browsing |
 | `get-book(book-id)` | `lookup` | Single book (materialize on demand, refresh) |
+| `get-series(series-id)` | `lookup` | Series metadata plus independently addressable member books |
 | `chapter-titles(book-id)` | `content` | Titles in reading order |
 | `get-chapter(book-id, index)` | `content` | One chapter body |
 | `identify-upload(filename, file-hash)` | `identify` | Upload recognition |
 | `get-book-file(book-id)` | `book-file` | Whole book file (epub/txt download) |
 
-**Multi-volume books (`book-entry.volumes`, v0.5.0).** A source whose
-TOC groups chapters into 卷 (light-novel series, e.g. wenku8's `vcss`
-rows) should declare the volume structure: `volumes` is a list of
-`volume-info {title, chapter-count}` in order, and the flat
-`chapter-titles` list must be the concatenation of the volumes' chapters
-(`get-chapter` indices stay flat — the host slices titles per volume and
-maps per-volume chapter pulls via a persisted `volume-offset`). The host
-then auto-splits acquisition into **one series + one library book per
-卷** instead of merging the whole series into one book (see
-`docs/series-design.md`). Sources without volumes leave the field
-`none`/empty (single book, previous behavior). Volume counts must match
-`chapter-titles` after the source's own 插图/etc. placement policy; the
-host clamps mismatches defensively.
+**One volume = one book (v0.9.0).** A plugin adapts its source into
+explicit series and individual books. `get-series` returns series metadata
+and member `BookEntry` values; every member ID must work with `get-book`,
+`chapter-titles`, `get-chapter` and/or `get-book-file` as applicable.
+Chapter indices always start at zero within that book. `BookEntry.series`
+carries the parent's metadata; `volume-no` is display order, never identity.
+The host stores one book/file per selection and groups parent series by
+(instance, plugin series ID). It never splits a flat chapter list or matches
+volumes across sources. Users choose both metadata and content books.
+
+IDs are opaque plugin-defined values. A website's raw ID may identify a
+whole series and need not equal any plugin book ID. Host-local database IDs
+are separate UUIDs. IDs must not depend on mutable volume-list positions:
+Wenku8 uses `wenku8:volume:{website-id}:{minimum-chapter-cid}` and
+`wenku8:series:{website-id}`; Bangumi series members use real related
+subject IDs (`bgm:volume:{series-subject}:{member-subject}`), not a
+synthetic book per reported volume count. Removing an anchor/member makes
+that book unavailable; it must not silently resolve to another volume.
+
+Search hits distinguish books from series. The source picker resolves a
+series through `GET /api/plugins/{instance}/lookup?q={id}` and lets the
+user select one member. Manual website IDs go through the same lookup.
+
+**Upgrade:** rebuild all components after the WIT change. Existing cached
+chapters and reading sessions are retained. Legacy flat-split files are
+not automatically rebound: their uncached reads/refresh require explicit
+volume selection. Content rebinding resets the old offset and TOC without
+changing metadata provenance. Legacy numeric-series metadata may need to
+be acquired anew to refresh; no positional ID migration is attempted.
 
 **Extended metadata (`book-entry.extra`, v0.7.0).** A source may
 attach a JSON object with catalog-style fields to every `book-entry`
@@ -158,9 +177,8 @@ attach a JSON object with catalog-style fields to every `book-entry`
   ISBN-10 inputs are converted); an invalid object fails the plugin call
   — bad data never lands. Dates are stored verbatim; formatting is the
   source's job.
-- Multi-volume splits seed both the series (`SeriesExt` subset:
-  `status` `ongoing|completed|hiatus`, `total_volumes`, `tags`) and each
-  volume book from the same object.
+- Series metadata has its own `series-entry.extra` (`SeriesExt`):
+  status, total_volumes, and tags. Book metadata remains volume-specific.
 - Manual acquire overrides (`POST /api/books` multipart field `ext`)
   merge per-key on top of what the source produced; refresh replaces it
   wholesale.
@@ -349,11 +367,9 @@ sync and refresh preserve that user-selected binding.
   subtitle/tags; ISBN checksum-verified guest-side, invalid ones skipped),
   unknown keys preserved under `infobox_misc`. Every request carries a
   descriptive User-Agent as required by the API guidelines. Series lookups
-  declare one metadata volume per upstream volume. If Bangumi leaves
-  `volumes` at zero, lookup counts distinct book subjects linked as
-  单行本 via `GET /v0/subjects/{id}/subjects` (not adaptations).
-  Explicit counts are kept; relation failures are logged and leave the
-  subject metadata usable. Search stays a single paginated request.
+  return real book subjects linked as 单行本 via
+  `GET /v0/subjects/{id}/subjects` (not adaptations). Relation failures
+  never synthesize volumes from a count. Search stays one paginated request.
 - `plugins/reader-plugin/` — reading-site source over HTTP: `search` +
   `lookup` + `content` + `book-file`; chapter mode for `r-N` books, and
   `get-book-file` returning the epub the source serves (file mode wins,
@@ -361,8 +377,8 @@ sync and refresh preserve that user-selected binding.
 - `plugins/wenku8-plugin/` — a **real-world** source: 轻小说文库
   (`https://www.wenku8.net/`, GBK-encoded pages). `lookup` + `content`
   only: wenku8's search and listings are login-walled, so books are
-  materialized by their numeric id (the number in the book URL, e.g.
-  `3617`) — the library source browser's manual-id entry, and the
+  browsed by their numeric series id (the number in the book URL, e.g.
+  `3617`) and acquired by selecting an independently identified volume — the library source browser's manual-id entry, and the
   rebind dialog, support lookup-only sources. Config: `base-url`
   (mirror-switchable), optional `referer` override, and
   `illustration-placement` — wenku8 appends an `插图` (color plates)

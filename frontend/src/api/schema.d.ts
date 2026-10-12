@@ -160,8 +160,8 @@ export interface paths {
          *     basename returned by GET /api/plugins/wasm-files; `config` is
          *     validated against the plugin's config schema (defaults fill the
          *     rest). An explicit `id` becomes the source id used in
-         *     `book_files.source` — stable ids let metadata plugins point their
-         *     `content-source` at a content plugin's instance. A declare-capable
+         *     `book_files.source`; metadata and content sources are selected by
+         *     the user, not linked by plugin entries. A declare-capable
          *     instance is synced right away.
          */
         post: operations["registerInstance"];
@@ -270,6 +270,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/plugins/{id}/lookup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Resolve a plugin book or series ID without acquiring it
+         * @description Returns one independently addressable book, or the books belonging to a series. IDs are opaque plugin-defined values, not necessarily upstream website IDs.
+         */
+        get: operations["lookupPlugin"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/plugins/{id}/search": {
         parameters: {
             query?: never;
@@ -318,17 +338,10 @@ export interface paths {
          *     source is independent of the content source: metadata may come
          *     from plugin A while the content comes from plugin B.
          *     `title`/`authors`/`description`/`cover_url`/`ext` override the
-         *     produced metadata (never applied when attaching). When the
-         *     plugin source declares >1 volumes, the acquisition auto-splits
-         *     into one series + one book per 卷 (the response carries them all).
-         *     The split is driven by the CONTENT source's own volume
-         *     declaration; the content source must declare its volume structure
-         *     (400 otherwise — an undeclared content source cannot be sliced
-         *     per volume) and may declare FEWER volumes than the metadata
-         *     source (metadata-only series entries, e.g. bangumi 系列, may list
-         *     not-yet-published volumes; those become metadata-only books with
-         *     no content). A content source declaring MORE volumes than the
-         *     metadata series is refused (400).
+         *     produced metadata (never applied when attaching). One plugin book
+         *     is one volume. Parent series metadata groups independently identified
+         *     books; the host never slices a flat chapter list or matches volume
+         *     counts across sources. Select a specific volume in the source picker.
          */
         post: operations["uploadBook"];
         delete?: never;
@@ -792,9 +805,9 @@ export interface components {
             /** Format: date-time */
             created_at: string;
             /**
-             * @description Series this book is a volume of (null = standalone). Volume
-             *     splits assign every 卷 its own book entry plus one series
-             *     row; manual assignment (`PATCH /api/books/{id}`) moves books
+             * @description Series this book is a volume of (null = standalone). Plugins
+             *     return parent metadata for independently identified books;
+             *     manual assignment (`PATCH /api/books/{id}`) moves books
              *     in and out of series.
              */
             series_id: string | null;
@@ -885,15 +898,14 @@ export interface components {
             /** Format: date-time */
             created_at: string;
             /**
-             * @description Volume slice of the source book this file covers (0 = the
-             *     whole book). A multi-volume plugin book is acquired as one
-             *     file per 卷.
+             * @description Legacy flat-split marker, retained for existing cached files.
+             *     New plugin files are complete individual books with value 0.
              */
             volume_no: number;
             /**
-             * @description Flat chapter index of this volume's first chapter inside the
-             *     source (persisted because the plugin is stateless); lazy
-             *     chapter pulls use `volume_offset + idx`.
+             * @description Legacy flat offset, retained for existing caches. New plugin
+             *     books use local chapter indices and value 0. Legacy uncached
+             *     reads require explicit book selection via content rebinding.
              */
             volume_offset: number;
             /**
@@ -985,10 +997,8 @@ export interface components {
             books: components["schemas"]["BookDetail"][];
         };
         /**
-         * @description Result of one acquisition (`POST /api/books`). When the plugin
-         *     source declared >1 volumes, `series` is the created series and
-         *     `books` holds one entry per 卷; otherwise `series` is null and
-         *     `books` has exactly one entry. Always non-empty.
+         * @description Result of one acquisition (`POST /api/books`). Exactly one volume
+         *     book is acquired; series identifies its parent grouping when present.
          */
         AcquireResult: {
             series: components["schemas"]["SeriesBrief"];
@@ -1160,7 +1170,12 @@ export interface components {
         };
         /** @description One search hit, annotated with the library book it is already synced into */
         PluginSearchItem: {
-            /** @description Book id inside the source */
+            /**
+             * @description Series hits must be opened through lookup before selecting a member book
+             * @enum {string}
+             */
+            kind: "book" | "series";
+            /** @description Opaque plugin-defined book or series ID */
             id: string;
             title: string;
             authors: string[];
@@ -1617,6 +1632,33 @@ export interface operations {
             404: components["responses"]["NotFound"];
         };
     };
+    lookupPlugin: {
+        parameters: {
+            query: {
+                q: string;
+            };
+            header?: never;
+            path: {
+                /** @description Plugin instance id (source id) */
+                id: components["parameters"]["PluginId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Resolved books available for individual selection */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PluginSearchResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            404: components["responses"]["NotFound"];
+        };
+    };
     searchPlugins: {
         parameters: {
             query?: {
@@ -1760,7 +1802,7 @@ export interface operations {
         responses: {
             /**
              * @description The created series (when a multi-volume source book was
-             *     split) and the created books, each with its first file
+             *     parent grouping) and the acquired book, with its first file
              *     (empty files array for a metadata-only addition).
              */
             201: {

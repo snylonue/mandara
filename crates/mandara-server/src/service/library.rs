@@ -28,12 +28,9 @@ use mandara_core::model::{
     BookMeta, Chapter, ChapterMeta, FileFormat, FileMeta, ImageId, Role, SeriesMeta, TocNode, User,
     Visibility,
 };
-use mandara_core::source::{SourceBook, SourceBookFile, SourceChapter, SourceVolume};
+use mandara_core::source::{SourceBook, SourceBookFile, SourceChapter, SourceSeries};
 use mandara_core::{BookExt, SeriesExt};
 
-/// One volume slice of a multi-volume split: `(volume title, start,
-/// count)` into the content source's flat chapter list.
-type VolumeSlice = (String, u32, u32);
 use mandara_formats::ParsedBook;
 
 // `NULLIF(a, b)` — not built into Diesel's DSL; declared once so upsert
@@ -186,21 +183,17 @@ impl MetadataOverrides {
     }
 }
 
-/// One acquired book + its file, plus the rest of a volume split.
+/// One acquired book and its file.
 type AcquiredBooks = (
     BookMeta,
     Option<FileMeta>,
     Vec<(BookMeta, Option<FileMeta>)>,
 );
 
-/// Result of one acquisition: the series created by a volume split (when
-/// the source declared >1 volumes) plus the books that entered the
-/// library, each with the file stored under it (`None` for a
-/// metadata-only addition, which has no content yet).
-#[derive(Debug, Clone)]
+/// Result of acquiring one independently addressable book and its parent series.
 pub struct AcquireOutcome {
     pub series: Option<SeriesMeta>,
-    /// Non-empty; one element unless the acquisition split volumes.
+    /// Exactly one independently selected book.
     pub books: Vec<(BookMeta, Option<FileMeta>)>,
 }
 
@@ -221,9 +214,7 @@ impl AcquireOutcome {
 
 /// One book produced by the metadata stage, ready to have its content
 /// attached by the content stage. The two stages are orthogonal: stage 1
-/// (a 1-D match on [`AcquireMetadata`]) decides *which* metadata entries
-/// to fill (one, or one per 卷 for a metadata-driven split); stage 2 (a
-/// 1-D match on [`AcquireContent`]) attaches the *content* to each.
+/// resolves one metadata entry; stage 2 attaches independently chosen content.
 struct PlannedBook {
     book_id: String,
     /// How to fill this book's content (agreed between the stages).
@@ -232,27 +223,16 @@ struct PlannedBook {
 
 /// The content-fill recipe for one planned book.
 enum PlannedFill {
-    /// An uploaded file (single book only; a multi-volume split never has
-    /// an upload). `fill_cover` stores a missing cover from the upload —
+    /// An uploaded edition. `fill_cover` stores a missing cover from the upload —
     /// only when attaching to a pre-existing metadata entry.
     Upload { fill_cover: bool },
-    /// A plugin book's content. `volume_no == 0` means a single (non-split)
-    /// book; otherwise this is one 卷 of a metadata-driven split and
-    /// `titles`/`volume_*` seed its virtual file.
-    Plugin(PlannedPlugin),
+    /// Content from one independently addressable plugin book.
+    Plugin,
     /// No content (metadata only).
     None,
 }
 
-struct PlannedPlugin {
-    volume_no: u32,
-    volume_offset: u32,
-    volume_title: String,
-    titles: Vec<String>,
-}
-
-/// The result of the metadata stage: the series created by a metadata-driven
-/// split plus the books to fill.
+/// The result of the metadata stage.
 struct MetadataPlan {
     series: Option<SeriesMeta>,
     books: Vec<PlannedBook>,
@@ -307,6 +287,12 @@ impl Library {
     async fn sync_catalog(&self, catalog: &DeclaredCatalog) -> Result<usize, ApiError> {
         let mut total = 0;
         for book in &catalog.books {
+            if !catalog.has_content {
+                self.resolve_plugin_metadata(&catalog.instance, None, &book.book)
+                    .await?;
+                total += 1;
+                continue;
+            }
             let titles: Vec<String> = book.chapters.iter().map(|c| c.title.clone()).collect();
             let (book_id, file_id) = self
                 .ensure_plugin_book(&catalog.instance, None, &book.book, &titles)
@@ -340,7 +326,7 @@ impl Library {
         query: &str,
         offset: u32,
         limit: u32,
-    ) -> Result<(u64, Vec<(SourceBook, Option<String>)>), ApiError> {
+    ) -> Result<(u64, Vec<(mandara_plugin::CatalogEntry, Option<String>)>), ApiError> {
         let result = self
             .plugins
             .search_books(instance, query, offset, limit)
@@ -349,7 +335,16 @@ impl Library {
         {
             let mut conn = self.diesel_db.get().await?;
             for entry in result.items {
-                let book = SourceBook::try_from(entry)?;
+                let book = match &entry {
+                    mandara_plugin::CatalogEntry::Single(book) => {
+                        SourceBook::try_from(book.clone())?
+                    }
+                    mandara_plugin::CatalogEntry::Series(series) => {
+                        SourceSeries::try_from(series.clone())?;
+                        items.push((entry, None));
+                        continue;
+                    }
+                };
                 let book_id: Option<String> = schema::book_files::table
                     .filter(
                         schema::book_files::source
@@ -360,7 +355,7 @@ impl Library {
                     .first(&mut conn)
                     .await
                     .optional()?;
-                items.push((book, book_id));
+                items.push((entry, book_id));
             }
         }
         Ok((result.total, items))
@@ -499,6 +494,53 @@ impl Library {
     /// (`books.meta_source`/`meta_external_id`, the canonical record of
     /// metadata provenance), claiming it as `owner` when it has no
     /// creator yet. `owner` is `None` for ownerless startup syncs.
+    async fn resolve_plugin_series(
+        &self,
+        source: &str,
+        owner: Option<&str>,
+        series: &SourceSeries,
+    ) -> Result<String, ApiError> {
+        let ext =
+            SeriesExt::from_value(series.ext.clone().unwrap_or_else(|| serde_json::json!({})))?;
+        let id = uuid::Uuid::new_v4().simple().to_string();
+        let authors = serde_json::to_string(&series.authors).unwrap_or_else(|_| "[]".into());
+        diesel::insert_into(schema::series::table)
+            .values((
+                schema::series::id.eq(&id),
+                schema::series::title.eq(&series.title),
+                schema::series::authors.eq(&authors),
+                schema::series::description.eq(&series.description),
+                schema::series::cover_url.eq(&series.cover_url),
+                schema::series::ext_meta.eq(ext.to_column()),
+                schema::series::created_by.eq(owner),
+                schema::series::meta_source.eq(source),
+                schema::series::meta_external_id.eq(&series.id),
+            ))
+            .on_conflict((
+                schema::series::meta_source,
+                schema::series::meta_external_id,
+            ))
+            .do_update()
+            .set((
+                schema::series::title.eq(&series.title),
+                schema::series::authors.eq(&authors),
+                schema::series::description.eq(&series.description),
+                schema::series::cover_url.eq(&series.cover_url),
+                schema::series::ext_meta.eq(ext.to_column()),
+            ))
+            .execute(&mut self.diesel_db.get().await?)
+            .await?;
+        Ok(schema::series::table
+            .filter(
+                schema::series::meta_source
+                    .eq(source)
+                    .and(schema::series::meta_external_id.eq(&series.id)),
+            )
+            .select(schema::series::id)
+            .first(&mut self.diesel_db.get().await?)
+            .await?)
+    }
+
     async fn resolve_plugin_metadata(
         &self,
         source: &str,
@@ -507,6 +549,10 @@ impl Library {
     ) -> Result<String, ApiError> {
         let authors = serde_json::to_string(&book.authors).unwrap_or_else(|_| "[]".into());
         let ext_json = source_ext_column(book.ext.as_ref())?;
+        let series_id = match &book.series {
+            Some(series) => Some(self.resolve_plugin_series(source, owner, series).await?),
+            None => None,
+        };
 
         let existing: Option<String> = schema::books::table
             .filter(
@@ -556,6 +602,8 @@ impl Library {
                 // Refresh replaces the extended metadata wholesale (same
                 // overwrite rule as title/description/cover).
                 schema::books::ext_meta.eq(&ext_json),
+                schema::books::series_id.eq(&series_id),
+                schema::books::volume_no.eq(book.volume_no as i64),
             ))
             .execute(&mut self.diesel_db.get().await?)
             .await?;
@@ -754,9 +802,8 @@ impl Library {
     ///
     /// Two sequential stages (see [`Self::resolve_metadata`] then
     /// [`Self::attach_content`]): the metadata is resolved first into a
-    /// plan — a single book, or one book per 卷 when the metadata source
-    /// declares a multi-volume split — then the content is attached to
-    /// each planned book. The two dimensions stay orthogonal.
+    /// plan for one book, then the content is attached. The two dimensions
+    /// stay orthogonal.
     pub async fn acquire_book(
         &self,
         user: &User,
@@ -766,8 +813,7 @@ impl Library {
         label: &str,
     ) -> Result<AcquireOutcome, ApiError> {
         // Two sequential stages, each a 1-D match: stage 1 resolves the
-        // metadata (a book, or one book per 卷 for a metadata-driven
-        // split) into a plan; stage 2 attaches the content to each planned
+        // metadata into a plan; stage 2 attaches the content to the planned
         // book. The two dimensions stay orthogonal — no 2-D cartesian
         // dispatch; adding a content or metadata type only adds one arm to
         // its own stage.
@@ -783,14 +829,19 @@ impl Library {
                 .ok_or_else(|| ApiError::not_found("book"))?;
             books.push((book, file));
         }
-        Ok(AcquireOutcome {
-            series: plan.series,
-            books,
-        })
+        let series = match books
+            .as_slice()
+            .first()
+            .and_then(|(book, _)| book.series_id.as_deref())
+        {
+            Some(id) => self.get_series(id).await?,
+            None => plan.series,
+        };
+        Ok(AcquireOutcome { series, books })
     }
 
     /// Stage 1: resolve the metadata source into a [`MetadataPlan`] — the
-    /// book(s) to fill plus (for a metadata-driven split) the series. A
+    /// selected book to fill. A
     /// 1-D match on [`AcquireMetadata`]; the `New` branch also matches on
     /// the content type, since auto-metadata genuinely depends on whether
     /// there is an upload to parse/identify or a plugin entry to use.
@@ -823,7 +874,7 @@ impl Library {
                 }
                 let fill = match content {
                     AcquireContent::File { .. } => PlannedFill::Upload { fill_cover: true },
-                    AcquireContent::Plugin { .. } => PlannedFill::Plugin(self.plugin_fill(0)),
+                    AcquireContent::Plugin { .. } => PlannedFill::Plugin,
                     AcquireContent::None => unreachable!("checked above"),
                 };
                 Ok(MetadataPlan {
@@ -842,22 +893,6 @@ impl Library {
                 overrides,
             } => {
                 let meta_entry = self.plugin_book_entry(source, book_id_in_source).await?;
-                // Multi-volume is the METADATA source's responsibility:
-                // split whenever the metadata entry declares >1 卷 (only
-                // with plugin content — an upload is one complete edition).
-                if let AcquireContent::Plugin {
-                    source: content_source,
-                    book_id_in_source: content_book_id,
-                } = content
-                    && meta_entry.volumes.len() > 1
-                    && let Some(plan) = self
-                        .split_plan(user, content_source, content_book_id, &meta_entry, metadata)
-                        .await?
-                {
-                    return Ok(plan);
-                }
-                // Single book. Reuse/create a standalone entry by its
-                // metadata provenance (never a series-volume book).
                 let book_id = self
                     .resolve_plugin_metadata(source, Some(&user.id), &meta_entry)
                     .await?;
@@ -908,25 +943,9 @@ impl Library {
                     book_id_in_source,
                 } => {
                     let entry = self.plugin_book_entry(source, book_id_in_source).await?;
-                    if entry.volumes.len() > 1
-                        && let Some(plan) = self
-                            .split_plan(user, source, book_id_in_source, &entry, metadata)
-                            .await?
-                    {
-                        return Ok(plan);
-                    }
                     // Does the source provide content? File mode always;
                     // otherwise there must be chapter titles (fetched once).
-                    let has_content = if self.plugins.declares(source, "book-file").await? {
-                        true
-                    } else {
-                        let (content_inst, content_id) = (source, entry.id.as_str());
-                        !self
-                            .plugins
-                            .chapter_titles(content_inst, content_id)
-                            .await?
-                            .is_empty()
-                    };
+                    let has_content = self.plugin_book_has_content(source, &entry).await?;
                     let book_id = if has_content {
                         let (content_inst, content_id) = (source, entry.id.as_str());
                         let titles = self
@@ -945,7 +964,7 @@ impl Library {
                     };
                     self.apply_overrides(&book_id, overrides).await?;
                     let fill = if has_content {
-                        PlannedFill::Plugin(self.plugin_fill(0))
+                        PlannedFill::Plugin
                     } else {
                         PlannedFill::None
                     };
@@ -990,17 +1009,7 @@ impl Library {
         }
     }
 
-    /// A single (non-split) plugin-fill recipe from a content source.
-    fn plugin_fill(&self, volume_no: u32) -> PlannedPlugin {
-        PlannedPlugin {
-            volume_no,
-            volume_offset: 0,
-            volume_title: String::new(),
-            titles: Vec::new(),
-        }
-    }
-
-    /// The content-fill recipe for a single (non-split) planned book whose
+    /// The content-fill recipe for the selected book whose
     /// metadata comes from a plugin source. `content` and the metadata
     /// source agree on the content type here.
     async fn content_fill(
@@ -1031,21 +1040,7 @@ impl Library {
                          source instead"
                     )));
                 }
-                // The multi-volume validations live in `split_plan`
-                // (which runs first); this single-book path is only
-                // reached when the metadata is effectively single-volume.
-                // A content source that itself declares multiple volumes
-                // here is incompatible — the metadata has no series to
-                // attach them to.
-                let content_vols = content_entry.volumes.len();
-                if content_vols > 1 {
-                    return Err(ApiError::bad_request(format!(
-                        "content source `{content_source}` declares {content_vols} volumes for \
-                         `{content_book_id}` but the metadata is single-volume; cannot attach \
-                         multi-volume content to one book"
-                    )));
-                }
-                Ok(PlannedFill::Plugin(self.plugin_fill(0)))
+                Ok(PlannedFill::Plugin)
             }
         }
     }
@@ -1091,70 +1086,44 @@ impl Library {
                 source: content_source,
                 book_id_in_source: content_book_id,
             } => {
-                // A metadata-only volume of a metadata-driven split (e.g. a
-                // metadata-only source like bangumi declaring >1 卷) plans
-                // no content file — the fill is `None`, so nothing is
-                // attached here. Only `PlannedFill::Plugin` carries a file.
+                // Metadata-only sources do not create a virtual content file.
                 if matches!(planned.fill, PlannedFill::None) {
                     return Ok(None);
                 }
-                let PlannedFill::Plugin(pf) = &planned.fill else {
-                    unreachable!("stage 1 planned a plugin for a plugin")
-                };
+                debug_assert!(matches!(planned.fill, PlannedFill::Plugin));
                 // The content entry: for a cross-plugin fill it is the
                 // content source's book; for a self-describing fill the
                 // metadata source's own entry (both are the content source).
                 let entry = self
                     .plugin_book_entry(content_source, content_book_id)
                     .await?;
-                if pf.volume_no == 0 {
-                    // Single plugin book under the planned metadata: it
-                    // must not already live under a different metadata
-                    // entry (one plugin book = one library entry).
-                    let existing: Option<String> = schema::book_files::table
-                        .filter(
-                            schema::book_files::source
-                                .eq(content_source)
-                                .and(schema::book_files::external_id.eq(&entry.id)),
-                        )
-                        .select(schema::book_files::book_id)
-                        .first(&mut self.diesel_db.get().await?)
-                        .await
-                        .optional()?;
-                    if let Some(other) = existing
-                        && other != planned.book_id
-                    {
-                        return Err(ApiError::Conflict(format!(
-                            "plugin book `{content_book_id}` is already in the library under \
-                             metadata `{other}`; attach another source instead"
-                        )));
-                    }
-                    self.attach_plugin_file(
-                        content_source,
-                        Some(&user.id),
-                        &entry,
-                        &planned.book_id,
+                // Single plugin book under the planned metadata: it
+                // must not already live under a different metadata
+                // entry (one plugin book = one library entry).
+                let existing: Option<String> = schema::book_files::table
+                    .filter(
+                        schema::book_files::source
+                            .eq(content_source)
+                            .and(schema::book_files::external_id.eq(&entry.id)),
                     )
-                    .await?;
-                    let file = self
-                        .materialize_plugin_content(content_source, &entry, &planned.book_id)
-                        .await?;
-                    Ok(Some(file))
-                } else {
-                    // One 卷 of a metadata-driven split: create the
-                    // volume's virtual file + placeholder rows.
-                    let file = self
-                        .attach_volume_file(
-                            user,
-                            content_source,
-                            &entry,
-                            &planned.book_id,
-                            pf,
-                            visibility,
-                        )
-                        .await?;
-                    Ok(file)
+                    .select(schema::book_files::book_id)
+                    .first(&mut self.diesel_db.get().await?)
+                    .await
+                    .optional()?;
+                if let Some(other) = existing
+                    && other != planned.book_id
+                {
+                    return Err(ApiError::Conflict(format!(
+                        "plugin book `{content_book_id}` is already in the library under \
+                             metadata `{other}`; attach another source instead"
+                    )));
                 }
+                self.attach_plugin_file(content_source, Some(&user.id), &entry, &planned.book_id)
+                    .await?;
+                let file = self
+                    .materialize_plugin_content(content_source, &entry, &planned.book_id)
+                    .await?;
+                Ok(Some(file))
             }
             AcquireContent::None => {
                 debug_assert!(matches!(planned.fill, PlannedFill::None));
@@ -1178,280 +1147,15 @@ impl Library {
         if self.plugins.declares(source, "book-file").await? {
             return Ok(true);
         }
+        if !self.plugins.declares(source, "content").await? {
+            return Ok(false);
+        }
         let (content_inst, content_id) = (source, entry.id.as_str());
         let titles = self
             .plugins
             .chapter_titles(content_inst, content_id)
             .await?;
         Ok(!titles.is_empty())
-    }
-
-    /// Multi-volume plugin acquisition (series split). Returns `Some`
-    /// when the *content* source's `book-entry` declared >1 volumes and
-    /// the split was performed; `None` when the book is effectively
-    /// single-volume.
-    ///
-    /// Only plugin *content* splits (an uploaded file is one complete
-    /// edition and never does): the guard in [`Self::acquire_book`]
-    /// limits this path to `AcquireContent::Plugin` + new/plugin
-    /// metadata. The metadata base is the metadata mode's own entry —
-    /// which may live on another plugin than the content.
-    async fn split_plan(
-        &self,
-        user: &User,
-        content_source: &str,
-        content_book_id: &str,
-        meta_entry: &SourceBook,
-        metadata: &AcquireMetadata<'_>,
-    ) -> Result<Option<MetadataPlan>, ApiError> {
-        // The content entry is the flat chapter stream that gets sliced;
-        // the volume structure that drives the split comes from the
-        // CONTENT entry's own declaration, validated against the
-        // metadata entry's declaration (equal volume counts).
-        let content_entry = self
-            .plugin_book_entry(content_source, content_book_id)
-            .await?;
-        let (base, overrides, meta_keys) = match metadata {
-            AcquireMetadata::New { overrides } => {
-                // Self-describing form: metadata source == content source.
-                (
-                    meta_entry.clone(),
-                    overrides,
-                    (content_source, content_entry.id.as_str()),
-                )
-            }
-            AcquireMetadata::Plugin {
-                source: meta_source,
-                book_id_in_source: meta_book_id,
-                overrides,
-            } => (
-                self.plugin_book_entry(meta_source, meta_book_id).await?,
-                overrides,
-                (*meta_source, *meta_book_id),
-            ),
-            AcquireMetadata::Attach { .. } => unreachable!("guarded by the caller"),
-        };
-        // The metadata source must declare the multi-volume structure
-        // for a split to happen at all; otherwise this is not a series
-        // the metadata source knows about. The volume validation and
-        // slicing live in `plan_volume_slices` (pure + unit-tested).
-        let (content_inst, content_id) = (content_source, content_entry.id.as_str());
-        let titles = self
-            .plugins
-            .chapter_titles(content_inst, content_id)
-            .await?;
-        let slices = plan_volume_slices(
-            &base.volumes,
-            &content_entry.volumes,
-            titles.len() as u32,
-            meta_keys.1,
-            content_source,
-            content_book_id,
-        )?;
-        let Some(slices) = slices else {
-            // Declared volumes collapsed (all empty, or fewer than two):
-            // fall back to today's single-book acquisition.
-            return Ok(None);
-        };
-
-        // One plugin book = one library series: reject materializing the
-        // same source book twice (incl. pre-split merged entries).
-        let existing: Option<String> = schema::book_files::table
-            .filter(
-                schema::book_files::source
-                    .eq(content_source)
-                    .and(schema::book_files::external_id.eq(&content_entry.id)),
-            )
-            .select(schema::book_files::book_id)
-            .first(&mut self.diesel_db.get().await?)
-            .await
-            .optional()?;
-        if let Some(existing_id) = existing {
-            return Err(ApiError::Conflict(format!(
-                "plugin book `{}` is already in the library (as book `{existing_id}`); \
-                 delete the existing entry first to re-acquire it split into volumes",
-                content_entry.id
-            )));
-        }
-
-        let title = overrides
-            .title
-            .clone()
-            .unwrap_or_else(|| base.title.clone());
-        let authors_json =
-            serde_json::to_string(overrides.authors.as_ref().unwrap_or(&base.authors))
-                .unwrap_or_else(|_| "[]".into());
-        let description = overrides
-            .description
-            .clone()
-            .or_else(|| base.description.clone());
-        let cover_url = overrides
-            .cover_url
-            .clone()
-            .or_else(|| base.cover_url.clone());
-        let series_ext = SeriesExt::from_source(base.ext.as_ref())?;
-        // Extended metadata: the metadata entry's object, manual
-        // overrides win per-key. The series keeps its own subset of the
-        // same object.
-        let mut book_ext = match &base.ext {
-            Some(v) => BookExt::from_value(v.clone())?,
-            None => BookExt::default(),
-        };
-        if let Some(o) = &overrides.ext {
-            book_ext.apply_override(o);
-            // Override values are user-supplied; re-sanitize (trim,
-            // ISBN normalization) so they land normalized like every
-            // other create path.
-            book_ext.sanitize()?;
-        }
-        let book_ext_json = book_ext.to_column();
-
-        let series_id = uuid::Uuid::new_v4().simple().to_string();
-
-        // Series + volume book rows (the volume files + placeholder rows
-        // are attached in stage 2). Note: these run in autocommit (a
-        // mid-loop failure leaves partial volumes behind; deleting the
-        // series cleans them up). The diesel-async transaction closure
-        // fights higher-ranked inference with loops, so we keep it simple.
-        let mut conn = self.diesel_db.get().await?;
-        diesel::insert_into(schema::series::table)
-            .values((
-                schema::series::id.eq(&series_id),
-                schema::series::title.eq(&title),
-                schema::series::authors.eq(&authors_json),
-                schema::series::description.eq(&description),
-                schema::series::cover_url.eq(&cover_url),
-                schema::series::ext_meta.eq(series_ext.to_column()),
-                schema::series::created_by.eq(&user.id),
-            ))
-            .execute(&mut conn)
-            .await?;
-
-        let mut planned = Vec::with_capacity(slices.len());
-        for (index, (vol_title, start, count)) in slices.iter().enumerate() {
-            let volume_no = (index + 1) as u32;
-            let book_id = uuid::Uuid::new_v4().simple().to_string();
-            diesel::insert_into(schema::books::table)
-                .values((
-                    schema::books::id.eq(&book_id),
-                    schema::books::title.eq(&title),
-                    schema::books::authors.eq(&authors_json),
-                    schema::books::description.eq(&description),
-                    schema::books::cover_url.eq(&cover_url),
-                    schema::books::series_id.eq(&series_id),
-                    schema::books::volume_no.eq(volume_no as i64),
-                    schema::books::ext_meta.eq(&book_ext_json),
-                    schema::books::meta_source.eq(meta_keys.0),
-                    schema::books::meta_external_id.eq(meta_keys.1),
-                    schema::books::created_by.eq(&user.id),
-                ))
-                .execute(&mut conn)
-                .await?;
-
-            // The volume's slice of the source's flat chapter list; the
-            // file's `get-chapter` maps via `volume_offset + idx`.
-            let slice = if *count > 0 {
-                &titles[*start as usize..(*start + *count) as usize]
-            } else {
-                &[][..]
-            };
-            let file_label = if vol_title.is_empty() {
-                format!("第{volume_no}卷")
-            } else {
-                vol_title.clone()
-            };
-            planned.push(PlannedBook {
-                book_id,
-                fill: if *count > 0 {
-                    PlannedFill::Plugin(PlannedPlugin {
-                        volume_no,
-                        volume_offset: *start,
-                        volume_title: file_label,
-                        titles: slice.to_vec(),
-                    })
-                } else {
-                    // Metadata-only volume (bangumi series subjects:
-                    // count == 0): no file — a bare metadata book content
-                    // can be attached to later.
-                    PlannedFill::None
-                },
-            });
-        }
-        drop(conn);
-
-        let series = SeriesMeta {
-            id: series_id,
-            title: title.clone(),
-            authors: parse_authors(&authors_json),
-            description: description.clone(),
-            cover_url: cover_url.clone(),
-            ext: series_ext,
-            created_by: Some(user.id.clone()),
-            created_at: chrono::Utc::now(),
-        };
-        info!(
-            source = %content_source,
-            book = %content_entry.id,
-            volumes = planned.len(),
-            series = %series.id,
-            "acquired multi-volume plugin book as a series"
-        );
-        Ok(Some(MetadataPlan {
-            series: Some(series),
-            books: planned,
-        }))
-    }
-
-    /// Stage 2 for one 卷 of a metadata-driven split: create the volume's
-    /// virtual chapter-mode file row + title-only placeholder rows. The
-    /// volume's chapter range is a slice of the source's flat list, so
-    /// lazy `get-chapter(source, volume_offset + idx)` works.
-    async fn attach_volume_file(
-        &self,
-        user: &User,
-        source: &str,
-        entry: &SourceBook,
-        book_id: &str,
-        pf: &PlannedPlugin,
-        visibility: Visibility,
-    ) -> Result<Option<FileMeta>, ApiError> {
-        if pf.titles.is_empty() {
-            return Ok(None); // metadata-only volume — no file
-        }
-        let file_id = uuid::Uuid::new_v4().simple().to_string();
-        diesel::insert_into(schema::book_files::table)
-            .values((
-                schema::book_files::id.eq(&file_id),
-                schema::book_files::book_id.eq(book_id),
-                schema::book_files::source.eq(source),
-                schema::book_files::external_id.eq(&entry.id),
-                schema::book_files::format.eq(FileFormat::Plugin.as_ref()),
-                schema::book_files::label.eq(&pf.volume_title),
-                schema::book_files::visibility.eq(visibility.as_ref()),
-                schema::book_files::owner_id.eq(&user.id),
-                schema::book_files::chapter_count.eq(pf.titles.len() as i64),
-                schema::book_files::volume_no.eq(pf.volume_no as i64),
-                schema::book_files::volume_offset.eq(pf.volume_offset as i64),
-            ))
-            .execute(&mut self.diesel_db.get().await?)
-            .await?;
-        // Title-only placeholder rows for this volume's slice.
-        for (idx, t) in pf.titles.iter().enumerate() {
-            diesel::insert_into(schema::chapters::table)
-                .values((
-                    schema::chapters::file_id.eq(&file_id),
-                    schema::chapters::idx.eq(idx as i64),
-                    schema::chapters::title.eq(t.trim()),
-                    schema::chapters::content.eq(""),
-                ))
-                .execute(&mut self.diesel_db.get().await?)
-                .await?;
-        }
-        let file = self
-            .get_file(&file_id)
-            .await?
-            .ok_or_else(|| ApiError::not_found("file"))?;
-        Ok(Some(file))
     }
 
     /// Fetch one entry from a plugin source by id (`lookup` capability).
@@ -1514,6 +1218,15 @@ impl Library {
         entry: &SourceBook,
         book_id: &str,
     ) -> Result<FileMeta, ApiError> {
+        if let Some(file) = self.plugin_file(source, &entry.id).await?
+            && file.content_source.is_some()
+        {
+            self.ensure_titles(&file).await?;
+            return self
+                .get_file(&file.id)
+                .await?
+                .ok_or_else(|| ApiError::not_found("file"));
+        }
         if self.plugins.declares(source, "book-file").await?
             && let Some(book_file) = self.plugins.get_book_file(source, &entry.id).await?
         {
@@ -2041,6 +1754,13 @@ impl Library {
             let entry = SourceBook::try_from(entry)?;
             let authors = serde_json::to_string(&entry.authors).unwrap_or_else(|_| "[]".into());
             let ext_json = source_ext_column(entry.ext.as_ref())?;
+            let series_id = match &entry.series {
+                Some(series) => Some(
+                    self.resolve_plugin_series(meta_src, Some(&user.id), series)
+                        .await?,
+                ),
+                None => None,
+            };
             diesel::update(schema::books::table.find(book_id))
                 .set((
                     schema::books::title.eq(&entry.title),
@@ -2049,6 +1769,8 @@ impl Library {
                     schema::books::cover_url.eq(&entry.cover_url),
                     // Refresh replaces the extended metadata wholesale.
                     schema::books::ext_meta.eq(ext_json),
+                    schema::books::series_id.eq(&series_id),
+                    schema::books::volume_no.eq(entry.volume_no as i64),
                 ))
                 .execute(&mut self.diesel_db.get().await?)
                 .await?;
@@ -2058,9 +1780,18 @@ impl Library {
         // 2) Chapter-title placeholders / content pointers per file, from
         //    each file's own (content) source. Book metadata is untouched
         //    here — a file's plugin never overwrites it.
-        for (file_id, source_id, external_id, volume_no, volume_offset, chapter_count) in
+        for (file_id, source_id, external_id, volume_no, volume_offset, _chapter_count) in
             &plugin_files
         {
+            let file = self
+                .get_file(file_id)
+                .await?
+                .ok_or_else(|| ApiError::not_found("file"))?;
+            if file.content_source.is_none() && (*volume_no != 0 || *volume_offset != 0) {
+                return Err(ApiError::bad_request(
+                    "legacy split file: rebind to an explicit book ID before refreshing",
+                ));
+            }
             let entry = self.plugins.get_book(source_id, external_id).await?;
             let entry = entry.ok_or_else(|| {
                 ApiError::NotFound(format!(
@@ -2080,20 +1811,13 @@ impl Library {
                 });
 
             // Refresh the chapter-title placeholder rows (never overwrite
-            // materialized chapter content). A volume file only owns its
-            // slice of the source's flat list.
-            let slice = title_slice(
-                &titles,
-                *volume_no as u32,
-                *volume_offset as u32,
-                *chapter_count as u32,
-            );
+            // materialized chapter content). All indices are book-local.
             diesel::update(schema::book_files::table.find(file_id))
-                .set((schema::book_files::chapter_count.eq(slice.len() as i64),))
+                .set((schema::book_files::chapter_count.eq(titles.len() as i64),))
                 .execute(&mut self.diesel_db.get().await?)
                 .await?;
-            if !slice.is_empty() {
-                self.upsert_placeholder_titles(file_id, slice).await?;
+            if !titles.is_empty() {
+                self.upsert_placeholder_titles(file_id, &titles).await?;
             }
             info!(book = %book_id, source = %source_id, "file chapter titles refreshed from content source");
         }
@@ -2587,6 +2311,9 @@ impl Library {
             .set((
                 schema::book_files::content_source.eq(content_source),
                 schema::book_files::content_external_id.eq(content_external_id),
+                schema::book_files::volume_offset.eq(0),
+                schema::book_files::chapter_count.eq(0),
+                schema::book_files::toc.eq(""),
             ))
             .execute(&mut self.diesel_db.get().await?)
             .await?;
@@ -2601,7 +2328,9 @@ impl Library {
             .await?
             .ok_or_else(|| ApiError::not_found("file"))?;
         self.ensure_titles(&file).await?;
-        Ok(file)
+        self.get_file(file_id)
+            .await?
+            .ok_or_else(|| ApiError::not_found("file"))
     }
 
     /// Re-materialize a plugin file's chapter bodies: clear the stored
@@ -2756,11 +2485,11 @@ impl Library {
         // whole book files is materialized *as a file* on first read
         // (once; the DB becomes the source of truth afterwards). The
         // upload parser gives it a real TOC + sanitized HTML for free.
-        // Volume files (multi-volume splits) stay chapter-mode: their
-        // `volume_offset` slices of the source's flat list are only valid
-        // in chapter mode — a whole-book file rewrite would merge the
-        // volumes back together.
-        if file.format == FileFormat::Plugin && file.content_source.is_none() && file.volume_no == 0
+        // Legacy flat-split caches must not be replaced by a whole-series file.
+        if file.format == FileFormat::Plugin
+            && file.content_source.is_none()
+            && file.volume_no == 0
+            && file.volume_offset == 0
         {
             let entry = self
                 .plugins
@@ -2898,14 +2627,18 @@ impl Library {
             return Ok(Some(row.into_model()));
         }
 
+        if file.content_source.is_none() && (file.volume_no != 0 || file.volume_offset != 0) {
+            return Err(ApiError::bad_request(
+                "legacy split file: select an explicit volume book ID via content rebinding",
+            ));
+        }
         // Chapter mode (lazy per-chapter pulls from the content source).
-        // For a volume file, the plugin index is the volume's chapter
-        // shifted by the persisted flat `volume_offset`. Plugin text is
+        // Plugin indices are book-local. Plugin text is
         // normalized to canonical HTML at the ingest boundary (including
         // the illustration conventions; see mandara_formats::htmlize).
         let Some(chapter) = self
             .plugins
-            .get_chapter(source_id, external_id, idx + file.volume_offset)
+            .get_chapter(source_id, external_id, idx)
             .await?
         else {
             return Ok(None);
@@ -2988,11 +2721,14 @@ impl Library {
     /// `chapter_titles` works for books never read yet). Titles come from
     /// the file's *content* instance.
     pub async fn ensure_titles(&self, file: &FileMeta) -> Result<(), ApiError> {
-        if file.chapter_count == 0 {
+        if file.chapter_count == 0 && file.content_source.is_none() {
             return Ok(());
         }
         let (source_id, external_id) = file_content_target(file);
         if source_id == "local" {
+            return Ok(());
+        }
+        if file.content_source.is_none() && (file.volume_no != 0 || file.volume_offset != 0) {
             return Ok(());
         }
         let titles = self
@@ -3006,19 +2742,12 @@ impl Library {
         if titles.is_empty() {
             return Ok(());
         }
-        // A volume file only owns its slice of the source's flat chapter
-        // list; ensure_titles must not import the other volumes.
-        let slice = title_slice(
-            &titles,
-            file.volume_no,
-            file.volume_offset,
-            file.chapter_count,
-        );
-        if slice.is_empty() {
+        // The plugin returns only this book's chapter titles.
+        if titles.is_empty() {
             return Ok(());
         }
-        self.upsert_placeholder_titles(&file.id, slice).await?;
-        // Placeholder rows beyond the volume's range are stale (previous
+        self.upsert_placeholder_titles(&file.id, &titles).await?;
+        // Placeholder rows beyond the book's range are stale (previous
         // content source, or a chapter count that shrank); drop the
         // empty ones. Materialized bodies stay untouched.
         diesel::delete(
@@ -3026,14 +2755,14 @@ impl Library {
                 schema::chapters::file_id
                     .eq(&file.id)
                     .and(schema::chapters::content.eq(""))
-                    .and(schema::chapters::idx.ge(slice.len() as i64)),
+                    .and(schema::chapters::idx.ge(titles.len() as i64)),
             ),
         )
         .execute(&mut self.diesel_db.get().await?)
         .await?;
-        if slice.len() != file.chapter_count as usize {
+        if titles.len() != file.chapter_count as usize {
             diesel::update(schema::book_files::table.find(&file.id))
-                .set(schema::book_files::chapter_count.eq(slice.len() as i64))
+                .set(schema::book_files::chapter_count.eq(titles.len() as i64))
                 .execute(&mut self.diesel_db.get().await?)
                 .await?;
         }
@@ -3059,138 +2788,6 @@ fn detect_format(filename: &str) -> FileFormat {
     } else {
         FileFormat::Txt
     }
-}
-
-/// The flat chapter list of a plugin book, restricted to the range a file
-/// owns: `[volume_offset, volume_offset + chapter_count)` for volume
-/// files, the whole list otherwise. Clamped defensively (a source may
-/// have restructured since acquisition).
-fn title_slice(
-    titles: &[String],
-    volume_no: u32,
-    volume_offset: u32,
-    chapter_count: u32,
-) -> &[String] {
-    if volume_no == 0 {
-        return titles;
-    }
-    let start = (volume_offset as usize).min(titles.len());
-    let end = start
-        .saturating_add(chapter_count as usize)
-        .min(titles.len());
-    &titles[start..end]
-}
-
-/// Consecutive volume slices of a source book's flat chapter list:
-/// `(volume title, start, count)`. Defensive: zero-chapter volumes
-/// collapse, declared counts are clamped to the flat list, and leftover
-/// chapters (declarations running out early) extend the last volume.
-/// Returns `None` when the book is effectively single-volume.
-fn volume_slices(volumes: &[SourceVolume], total: u32) -> Option<Vec<(String, u32, u32)>> {
-    if volumes.is_empty() {
-        return None;
-    }
-    let mut out = Vec::new();
-    let mut start = 0u32;
-    for v in volumes {
-        let count = v.chapter_count.min(total.saturating_sub(start));
-        if count > 0 {
-            out.push((v.title.clone(), start, count));
-            start += count;
-        }
-    }
-    if out.len() < 2 || start == 0 {
-        return None;
-    }
-    if start < total
-        && let Some(last) = out.last_mut()
-    {
-        last.2 += total - start;
-    }
-    Some(out)
-}
-
-/// The volume-split plan for a multi-volume acquisition:
-///
-/// - a multi-volume metadata source requires the content source to
-///   declare volumes at all; an undeclared content source is refused;
-/// - the content source may declare FEWER volumes than the metadata
-///   source (the metadata series may list not-yet-published volumes,
-///   e.g. bangumi 系列条目); each missing volume becomes an empty
-///   (metadata-only) slice that the caller materializes as a book
-///   without content. More content volumes than metadata are refused;
-/// - per-volume chapter counts may differ (the content source's own
-///   counts drive the slices, so mismatches cannot misalign content);
-/// - the slices are cut along the CONTENT source's declared volumes,
-///   never the metadata source's.
-///
-/// `meta_vols` is the metadata source's declaration, `content_vols` the
-/// content source's, `flat_len` the length of the content source's flat
-/// `chapter_titles` list. Returns `Err` (400) on declaration violations,
-/// `Ok(None)` when the acquisition is effectively single-volume, and
-/// `Ok(Some(slices))` with one slice per METADATA volume (empty slices
-/// for volumes the content source does not cover).
-fn plan_volume_slices(
-    meta_vols: &[SourceVolume],
-    content_vols: &[SourceVolume],
-    flat_len: u32,
-    meta_book_id: &str,
-    content_source: &str,
-    content_book_id: &str,
-) -> Result<Option<Vec<VolumeSlice>>, ApiError> {
-    // The metadata source must declare the multi-volume structure for a
-    // split to happen at all.
-    if meta_vols.len() <= 1 {
-        return Ok(None);
-    }
-    // A multi-volume metadata source requires an undeclared content
-    // source to be refused: without a per-volume declaration the flat
-    // chapter list cannot be sliced.
-    if content_vols.len() <= 1 {
-        return Err(ApiError::bad_request(format!(
-            "metadata source declares {} volumes for `{meta_book_id}` but content source \
-             `{content_source}` does not declare the per-volume structure (book \
-             `{content_book_id}`); pick a content source that declares the same volumes",
-            meta_vols.len()
-        )));
-    }
-    // The content source may cover only the published volumes: its
-    // volume count must not EXCEED the metadata source's (bangumi 系列
-    // 条目 lists volumes that are not yet published).
-    if content_vols.len() > meta_vols.len() {
-        return Err(ApiError::bad_request(format!(
-            "metadata source declares {} volumes for `{meta_book_id}` but content source \
-             `{content_source}` declares {} volumes for `{content_book_id}`; the content \
-             covers more volumes than the metadata series",
-            meta_vols.len(),
-            content_vols.len()
-        )));
-    }
-    // Cut along the content source's own volumes. When the content
-    // source offers no chapters at all (flat_len == 0 — a metadata-only
-    // source like bangumi 系列条目), each declared volume still becomes
-    // a metadata-only book (no file), content attachable later.
-    let slices = if flat_len == 0 {
-        content_vols
-            .iter()
-            .map(|v| (v.title.clone(), 0u32, 0u32))
-            .collect::<Vec<_>>()
-    } else {
-        let Some(slices) = volume_slices(content_vols, flat_len) else {
-            // Declared volumes collapsed (all empty, or fewer than two):
-            // fall back to today's single-book acquisition.
-            return Ok(None);
-        };
-        slices
-    };
-    // Pad with the metadata volumes the content source does not cover
-    // (not yet published): an empty slice whose caller materializes a
-    // book without content. Titles come from the metadata source.
-    let mut out = slices;
-    for extra in &meta_vols[out.len()..] {
-        out.push((extra.title.clone(), 0, 0));
-    }
-    Ok(Some(out))
 }
 
 /// Disk path of a file's retained original bytes
@@ -3471,11 +3068,6 @@ pub async fn reparse_originals(db: &DieselDb, files_dir: &Path) -> anyhow::Resul
     Ok((ok, failed))
 }
 
-/// Parse a stored `authors` JSON array (as read back from the DB).
-fn parse_authors(json: &str) -> Vec<String> {
-    serde_json::from_str(json).unwrap_or_default()
-}
-
 /// Lowercase hex sha-256 digest, passed to plugins for upload
 /// identification.
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -3490,6 +3082,87 @@ fn sha256_hex(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use mandara_formats::ParsedImage;
+
+    #[tokio::test]
+    async fn explicit_series_groups_books_by_instance_and_opaque_series_id() {
+        let dir = std::env::temp_dir().join(format!("mandara-series-{}", uuid::Uuid::new_v4()));
+        let path = dir.join("library.db");
+        crate::db::run_migrations(&path).await.unwrap();
+        let db = crate::db::connect_diesel(&path).unwrap();
+        let library = Library::new(
+            db.clone(),
+            Arc::new(PluginService::new(db.clone(), vec![])),
+            dir.join("files"),
+        );
+        let mut book = SourceBook {
+            id: "opaque-volume-alpha".into(),
+            title: "第一卷".into(),
+            authors: vec![],
+            description: None,
+            cover_url: None,
+            ext: None,
+            series: Some(SourceSeries {
+                id: "opaque-series".into(),
+                title: "系列".into(),
+                authors: vec![],
+                description: None,
+                cover_url: None,
+                ext: None,
+            }),
+            volume_no: 1,
+        };
+        let first = library
+            .resolve_plugin_metadata("source-a", None, &book)
+            .await
+            .unwrap();
+        book.id = "opaque-volume-beta".into();
+        book.title = "第二卷".into();
+        book.volume_no = 2;
+        let second = library
+            .resolve_plugin_metadata("source-a", None, &book)
+            .await
+            .unwrap();
+        let other = library
+            .resolve_plugin_metadata("source-b", None, &book)
+            .await
+            .unwrap();
+        let first = library.get_book(&first).await.unwrap().unwrap();
+        let second = library.get_book(&second).await.unwrap().unwrap();
+        let other = library.get_book(&other).await.unwrap().unwrap();
+        assert_ne!(first.id, second.id);
+        assert_eq!(first.series_id, second.series_id);
+        assert_ne!(first.series_id, other.series_id);
+        assert_ne!(first.id, "opaque-volume-alpha");
+        assert_eq!(second.volume_no, 2);
+        let count: i64 = schema::book_files::table
+            .filter(schema::book_files::book_id.eq(&second.id))
+            .count()
+            .get_result(&mut db.get().await.unwrap())
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+        let count = library
+            .sync_catalog(&DeclaredCatalog {
+                instance: "metadata-only".into(),
+                has_content: false,
+                books: vec![crate::service::plugins::DeclaredCatalogBook {
+                    book,
+                    chapters: vec![],
+                }],
+            })
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
+        let count: i64 = schema::book_files::table
+            .count()
+            .get_result(&mut db.get().await.unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            count, 0,
+            "declared metadata books do not invent a content file"
+        );
+    }
 
     #[tokio::test]
     async fn sync_preserves_user_selected_content_binding() {
@@ -3509,7 +3182,8 @@ mod tests {
             description: None,
             cover_url: None,
             ext: None,
-            volumes: vec![],
+            series: None,
+            volume_no: 0,
         };
         let (_, file_id) = library
             .ensure_plugin_book("metadata", None, &book, &["目录".into()])
@@ -3526,6 +3200,7 @@ mod tests {
         library
             .sync_catalog(&DeclaredCatalog {
                 instance: "metadata".into(),
+                has_content: true,
                 books: vec![crate::service::plugins::DeclaredCatalogBook {
                     book,
                     chapters: vec![SourceChapter {
@@ -3552,288 +3227,6 @@ mod tests {
             count, 0,
             "sync must not inject the original source's bodies after rebinding"
         );
-    }
-
-    fn vol(title: &str, n: u32) -> SourceVolume {
-        SourceVolume {
-            title: title.into(),
-            chapter_count: n,
-        }
-    }
-
-    fn plan(
-        meta: &[SourceVolume],
-        content: &[SourceVolume],
-        flat: u32,
-    ) -> Result<Option<Vec<VolumeSlice>>, ApiError> {
-        plan_volume_slices(
-            meta,
-            content,
-            flat,
-            "meta-book",
-            "content-src",
-            "content-book",
-        )
-    }
-
-    #[test]
-    fn plan_single_volume_metadata_never_splits() {
-        // single-volume metadata → no split, regardless of content
-        assert!(
-            plan(&[], &[vol("一", 3), vol("二", 3)], 6)
-                .unwrap()
-                .is_none()
-        );
-        assert!(plan(&[vol("一", 6)], &[], 6).unwrap().is_none());
-        assert!(plan(&[vol("一", 6)], &[vol("一", 6)], 6).unwrap().is_none());
-    }
-
-    #[test]
-    fn plan_undeclared_content_is_refused() {
-        // multi-volume metadata + undeclared content → 400
-        let err = plan(&[vol("一", 2), vol("二", 3)], &[], 5).unwrap_err();
-        assert!(matches!(err, ApiError::BadRequest(_)));
-        // single volume declared by content is still undeclared
-        let err = plan(&[vol("一", 2), vol("二", 3)], &[vol("一", 5)], 5).unwrap_err();
-        assert!(matches!(err, ApiError::BadRequest(_)));
-    }
-
-    #[test]
-    fn plan_content_more_volumes_than_metadata_is_refused() {
-        // metadata 2 volumes, content 3 → 400 (content covers MORE
-        // volumes than the metadata series)
-        let err = plan(
-            &[vol("一", 2), vol("二", 3)],
-            &[vol("一", 2), vol("二", 1), vol("三", 2)],
-            5,
-        )
-        .unwrap_err();
-        assert!(matches!(err, ApiError::BadRequest(_)));
-    }
-
-    #[test]
-    fn plan_content_fewer_volumes_than_metadata_pads_empty() {
-        // bangumi 系列条目 may list not-yet-published volumes: the
-        // content source covers fewer — the extra metadata volumes
-        // become empty (metadata-only) slices.
-        let slices = plan(
-            &[vol("一", 2), vol("二", 3), vol("三", 1)], // metadata 3 vols
-            &[vol("一", 2), vol("二", 3)],               // content 2 vols
-            5,
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!(
-            slices,
-            vec![
-                ("一".to_string(), 0, 2),
-                ("二".to_string(), 2, 3),
-                ("三".to_string(), 0, 0), // unpublished: no content
-            ]
-        );
-        // title of the padded volume comes from the metadata source
-        let slices = plan(
-            &[vol("第一卷", 2), vol("第二卷", 3), vol("第三卷", 1)],
-            &[vol("第一卷", 2), vol("第二卷", 3)],
-            5,
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!(slices[2], ("第三卷".to_string(), 0, 0));
-    }
-
-    #[test]
-    fn plan_matching_volume_counts_but_different_chapter_counts_ok() {
-        // Only volume counts are compared, not per-volume chapter
-        // counts — content drives the slices.
-        let slices = plan(
-            &[vol("一", 5), vol("二", 5)], // metadata says 5+5
-            &[vol("一", 2), vol("二", 3)], // content says 2+3
-            5,
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!(
-            slices,
-            vec![("一".to_string(), 0, 2), ("二".to_string(), 2, 3)]
-        );
-    }
-
-    #[test]
-    fn plan_slices_follow_content_volumes() {
-        // slices come from the content source's own counts
-        let slices = plan(
-            &[vol("meta1", 2), vol("meta2", 3)],
-            &[vol("c1", 3), vol("c2", 2)],
-            5,
-        )
-        .unwrap()
-        .unwrap();
-        // titles come from the content source too
-        assert_eq!(
-            slices,
-            vec![("c1".to_string(), 0, 3), ("c2".to_string(), 3, 2)]
-        );
-    }
-
-    #[test]
-    fn plan_metadata_only_content_still_splits_empty_volumes() {
-        // flat_len == 0 (content source offers no chapters, e.g. a
-        // bangumi 系列 subject): each declared volume becomes a
-        // metadata-only book (empty slice), content attachable later.
-        let slices = plan(
-            &[vol("一", 2), vol("二", 3), vol("三", 1)], // metadata 3 vols
-            &[vol("一", 2), vol("二", 3)],               // content 2 vols, no chapters
-            0,
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!(
-            slices,
-            vec![
-                ("一".to_string(), 0, 0),
-                ("二".to_string(), 0, 0),
-                ("三".to_string(), 0, 0), // unpublished: padded
-            ]
-        );
-    }
-
-    #[test]
-    fn plan_collapsed_volumes_fall_back_to_single() {
-        // content declares 2 volumes but they collapse (all empty) →
-        // single-volume acquisition
-        assert!(
-            plan(
-                &[vol("一", 2), vol("二", 3)],
-                &[vol("一", 0), vol("二", 0)],
-                5
-            )
-            .unwrap()
-            .is_none()
-        );
-        // content declares 2 but flat list is shorter than 2 chapters
-        // (one volume swallows everything) → no split
-        assert!(
-            plan(
-                &[vol("一", 2), vol("二", 3)],
-                &[vol("一", 9), vol("二", 9)],
-                5
-            )
-            .unwrap()
-            .is_none()
-        );
-    }
-
-    #[test]
-    fn single_volume_declaration_does_not_split() {
-        assert!(volume_slices(&[], 10).is_none());
-        assert!(volume_slices(&[vol("", 10)], 10).is_none());
-    }
-
-    #[test]
-    fn two_volumes_split_flat_list() {
-        let slices = volume_slices(&[vol("第一卷", 2), vol("第二卷", 3)], 5).unwrap();
-        assert_eq!(
-            slices,
-            vec![("第一卷".to_string(), 0, 2), ("第二卷".to_string(), 2, 3)]
-        );
-    }
-
-    #[test]
-    fn declared_counts_are_clamped_to_the_flat_list() {
-        // declarations claim more than the source offers: one volume
-        // swallows everything → no split
-        assert!(volume_slices(&[vol("一", 9), vol("二", 9)], 5).is_none());
-        // declarations claim less: the last volume absorbs the rest
-        let slices = volume_slices(&[vol("一", 2), vol("二", 1)], 7).unwrap();
-        assert_eq!(
-            slices,
-            vec![("一".to_string(), 0, 2), ("二".to_string(), 2, 5)]
-        );
-    }
-
-    #[test]
-    fn zero_chapter_volumes_collapse() {
-        let slices = volume_slices(&[vol("一", 0), vol("二", 3), vol("三", 2)], 5).unwrap();
-        assert_eq!(
-            slices,
-            vec![("二".to_string(), 0, 3), ("三".to_string(), 3, 2)]
-        );
-        // enough zeroes → effectively single volume → no split
-        assert!(volume_slices(&[vol("一", 0), vol("二", 0)], 5).is_none());
-        assert!(volume_slices(&[vol("一", 5), vol("二", 0)], 5).is_none());
-        assert!(volume_slices(&[vol("一", 0), vol("二", 5)], 5).is_none());
-    }
-
-    #[test]
-    fn title_slice_is_the_volume_range() {
-        let titles: Vec<String> = (0..6).map(|i| format!("c{i}")).collect();
-        let whole = FileMeta {
-            volume_no: 0,
-            volume_offset: 0,
-            chapter_count: 6,
-            ..dummy_file()
-        };
-        assert_eq!(
-            title_slice(
-                &titles,
-                whole.volume_no,
-                whole.volume_offset,
-                whole.chapter_count
-            ),
-            &titles[..]
-        );
-        let vol2 = FileMeta {
-            volume_no: 2,
-            volume_offset: 3,
-            chapter_count: 2,
-            ..dummy_file()
-        };
-        assert_eq!(
-            title_slice(
-                &titles,
-                vol2.volume_no,
-                vol2.volume_offset,
-                vol2.chapter_count
-            ),
-            &["c3", "c4"]
-        );
-        // clamped when the source shrank
-        let vol2shrank = FileMeta {
-            volume_no: 2,
-            volume_offset: 4,
-            chapter_count: 3,
-            ..dummy_file()
-        };
-        assert_eq!(
-            title_slice(
-                &titles,
-                vol2shrank.volume_no,
-                vol2shrank.volume_offset,
-                vol2shrank.chapter_count
-            ),
-            &["c4", "c5"]
-        );
-    }
-
-    fn dummy_file() -> FileMeta {
-        FileMeta {
-            id: String::new(),
-            book_id: String::new(),
-            source: String::new(),
-            external_id: String::new(),
-            content_source: None,
-            content_external_id: None,
-            format: FileFormat::Plugin,
-            label: String::new(),
-            visibility: Visibility::Public,
-            owner_id: None,
-            chapter_count: 0,
-            created_at: chrono::Utc::now(),
-            volume_no: 0,
-            volume_offset: 0,
-            original: None,
-        }
     }
 
     #[tokio::test]
