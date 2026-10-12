@@ -18,14 +18,9 @@ impl mandara_plugin::host::ImageStore for NoImages {
 
 #[test]
 fn introspection_is_stable_under_epoch_pump() {
-    for file in [
-        "../../plugins-built/hello.wasm",
-        "../../plugins-built/wiki.wasm",
-        "../../plugins-built/reader.wasm",
-        "../../plugins-built/wenku8.wasm",
-        "../../plugins-built/bangumi.wasm",
-    ] {
-        let wasm = std::fs::read(file).expect("read");
+    {
+        let file = "fixture.wasm";
+        let wasm = include_bytes!("fixtures/hello.wasm").to_vec();
         let plugin = mandara_plugin::WasmPlugin::load(
             "t.wasm",
             wasm,
