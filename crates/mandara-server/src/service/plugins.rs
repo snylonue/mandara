@@ -11,7 +11,7 @@
 //!   2. converts the stored config into the WIT `config-value` list in
 //!      schema order,
 //!   3. calls the export with a fresh store (statelessness, design R2),
-//!      injected config (R3) and epoch-guarded execution,
+//!      injected config (R3) and fuel-metered execution,
 //!   4. enforces capability policy (`capabilities()` decides which exports
 //!      may be called).
 //!
@@ -763,8 +763,8 @@ impl From<ConfigErrors> for ApiError {
 
 /// Run a sync call into a compiled plugin on a blocking thread, so a slow
 /// plugin (e.g. one waiting on `http.fetch`) never stalls a tokio worker.
-/// The plugin's epoch deadline still traps runaway guest code; a fetch
-/// blocked on the network outlives the deadline but never a worker.
+/// Guest computation is fuel-metered; each HTTP request has its own timeout.
+/// There is no aggregate wall-clock deadline for a plugin call.
 async fn run_wasm<T: Send + 'static>(
     wasm: Arc<WasmPlugin>,
     values: Vec<ConfigValue>,

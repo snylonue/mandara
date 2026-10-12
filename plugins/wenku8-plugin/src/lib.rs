@@ -104,9 +104,9 @@ fn log_error(context: &str, url: &str, err: &(impl std::fmt::Display + ?Sized)) 
 /// One remote `http.fetch` with a browser UA and an optional same-host
 /// `Referer` (wenku8's reader.php returns 403 without one).
 ///
-/// Transient problems (transport errors, 5xx, anti-bot 403 spikes) are
-/// retried once — see the retry guidance in docs/plugin-http-api-design.md
-/// §4.3; the call budget covers two attempts.
+/// Transient transport errors and 403/429/5xx responses are retried up to
+/// three attempts. Each fetch has its own timeout; there is no aggregate
+/// export deadline. See docs/plugin-http-api-design.md §4.3.
 fn http_get(url: &str, referer: &str) -> Result<(u16, Vec<u8>), mandara::plugin::http::FetchError> {
     let user_agent = config_string("user-agent", DEFAULT_UA);
     let mut attempt = 0;

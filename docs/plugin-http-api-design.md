@@ -201,11 +201,12 @@ Materialization rules (host side, extending §6 of the v2 design):
 
 ### 4.3 Retry guidance for plugin authors
 
-Transient `fetch-error`s (timeout, transport) should be retried with small
-backoff inside the export (the epoch deadline allows a few hundred ms of
-work per call — do a bounded retry, or return `none`/empty and let the
-user retrigger via refresh/materialize). Permanent errors should surface
-as `none`/empty results (the host logs the underlying error).
+Use bounded retries for transient `fetch-error`s (timeout, transport).
+Each HTTP request has its own timeout; exports have no aggregate
+wall-clock deadline, and network waits do not consume guest fuel. When
+retries are exhausted, return `none`/empty and let the user retry via
+refresh/materialize. Permanent errors should surface as `none`/empty
+results (the host logs the underlying error).
 
 ## 5. Security review (summary)
 
@@ -213,9 +214,9 @@ as `none`/empty results (the host logs the underlying error).
    caps are timeout, size and redirect count.
 2. No ambient credentials: the host never forwards host cookies to
    plugin requests (only the headers the plugin sets are sent).
-3. Response size caps keep one plugin from exhausting memory; the epoch
-   deadline keeps one call from dominating a worker; `spawn_blocking`
-   keeps the async runtime healthy.
+3. Response size caps bound fetched payloads; fuel metering bounds guest
+   computation without charging network waits. Per-request timeouts bound
+   individual HTTP waits, and `spawn_blocking` keeps them off tokio workers.
 4. Logs are query-stripped; API keys live in plugin config (already
    admin-only in `GET /api/plugins/{id}/config-schema`).
 

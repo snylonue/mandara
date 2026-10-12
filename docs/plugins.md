@@ -186,14 +186,12 @@ attach a JSON object with catalog-style fields to every `book-entry`
 Host caps: `search-books` limit ≤ 50 / offset ≤ 10 000 (400 beyond);
 `declare` ≤ 10 000 books / 100 000 chapters (error beyond, warn past 90%);
 chapter content ≤ 2 MiB per call; book files ≤ 256 MiB (the http size cap
-usually applies first). Runaway plugins are trapped by the epoch deadline:
-per call, a plugin may run for at most the fetch-timeout budget
-(`MANDARA_PLUGIN_FETCH_TIMEOUT_MS`, default 30 s — network waits
-count, they are bounded by that same cap) plus a few 200 ms pump ticks;
-compute-only calls (e.g. `declare` sync) keep that minimum. A call that
-exceeds the budget is interrupted at the next wasm backedge — keep
-catalog/chapter generation fast, or split it across calls. Plugin
-calls run on blocking threads, so a slow source never stalls a worker.
+usually applies first). Guest computation is bounded by 1 billion Wasmtime
+fuel units per call; a runaway guest traps when its fuel is exhausted. Host
+I/O does not consume fuel, and calls have **no aggregate wall-clock
+deadline**. `MANDARA_PLUGIN_FETCH_TIMEOUT_MS` (default 30 s) caps each
+individual HTTP request, not the sum of requests in an export. Plugin
+calls run on blocking threads, so a slow source never stalls a tokio worker.
 
 ### Chapter content: `text` vs `html`
 
@@ -258,11 +256,12 @@ re-anchoring while scrolling. Dimensions are looked up at chapter read
 time too, so chapters materialized before this existed get annotated on
 the fly.
 
-**Epoch budget note.** Every `fetch` (pages *and* images) spends the
-same call budget (`MANDARA_PLUGIN_FETCH_TIMEOUT_MS`, default 30 s).
-A plate-heavy chapter fetched over a slow CDN can need more: the wenku8
-verification measured ~7 s per plate, ≈2 min for a 16-plate 插图 chapter.
-Sources that store images should run with a raised fetch-timeout cap.
+**Image latency note.** Serial page and image requests do not share a
+wall-clock deadline. Each `fetch` has its own timeout, but synchronous
+image downloads still delay the chapter response: Wenku8 verification
+measured ~7 s per plate, approximately 2 min for a 16-plate illustration
+chapter. Removing the aggregate deadline does not make image storage
+asynchronous.
 
 ## HTTP acquisition (`http.fetch`)
 
@@ -350,7 +349,7 @@ sync and refresh preserve that user-selected binding.
 
 - `plugins/hello-plugin/` — small `declare` + `identify` + `content`
   plugin; config-driven (site name, content variant, verbose logging, a
-  deliberate infinite-loop switch for testing the epoch timeout).
+  deliberate infinite-loop switch for testing fuel exhaustion).
 - `plugins/wiki-plugin/` — metadata-only over HTTP: `search` + `lookup`,
   config `base-url`/`api-key`/`site-name`/`page-size`; users choose
   the reader source separately. Try it with `scripts/mock-source.py`.

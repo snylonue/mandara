@@ -220,10 +220,8 @@ fn upload_identification() {
 }
 
 #[test]
-fn runaway_plugin_is_trapped_by_epoch_deadline() {
-    // A tight fetch-timeout cap keeps the call deadline small (the guard
-    // scales with the network budget, see `call_deadline_ticks`), so the
-    // spin loop traps after a few pump intervals instead of ~30 s.
+fn runaway_plugin_is_trapped_by_fuel() {
+    // Guest computation is bounded independently of the HTTP timeout.
     let plugin = Arc::new(
         WasmPlugin::load(
             "hello.wasm",
@@ -250,13 +248,7 @@ fn runaway_plugin_is_trapped_by_epoch_deadline() {
     match err {
         Error::Runtime(source) => {
             let msg = format!("{source:#}");
-            assert!(
-                msg.contains("interrupt")
-                    || msg.contains("epoch")
-                    || msg.contains("deadline")
-                    || msg.contains("backtrace"),
-                "unexpected message: {msg}"
-            );
+            assert!(msg.contains("fuel"), "unexpected message: {msg}");
         }
         other => panic!("expected plugin error, got {other:?}"),
     }

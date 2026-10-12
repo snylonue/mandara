@@ -17,7 +17,7 @@ impl mandara_plugin::host::ImageStore for NoImages {
 }
 
 #[test]
-fn introspection_is_stable_under_epoch_pump() {
+fn introspection_is_stable_under_fuel_metering() {
     {
         let file = "fixture.wasm";
         let wasm = include_bytes!("fixtures/hello.wasm").to_vec();

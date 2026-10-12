@@ -1,6 +1,6 @@
 //! Mandara plugin host: loads wasm components implementing the
 //! `mandara:plugin/mandara-plugin` world and exposes per-instance
-//! calls with configuration injection and epoch timeouts.
+//! calls with configuration injection and guest instruction metering.
 //!
 //! See `wit/mandara.wit` for the plugin interface definition,
 //! `docs/plugin-v2-design.md` for the design, and `docs/plugins.md` for

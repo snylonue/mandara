@@ -7,12 +7,11 @@
 //!
 //! Calls into a plugin are synchronous and stateless: a fresh
 //! [`wasmtime::Store`] is created per call, the instance's configuration
-//! is injected through the `config::configure` import, and an
-//! epoch-deadline guards against runaway plugins.
+//! is injected through the `config::configure` import. Fuel bounds guest
+//! computation without imposing a wall-clock deadline on network waits.
 
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
 use tracing::{info, warn};
 use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Config, Engine, Store};
@@ -64,29 +63,10 @@ pub const MAX_IMAGE_BYTES: usize = 20 * 1024 * 1024;
 /// worth of plates.
 pub const MAX_CALL_IMAGE_BYTES: usize = 96 * 1024 * 1024;
 
-/// The epoch pump fires every `EPOCH_PUMP_MS`; a guest that keeps running
-/// past its per-call epoch deadline gets trapped.
-///
-/// The deadline is measured in pump ticks from the start of the call, so
-/// a call shorter than one full pump interval can never be trapped (a
-/// trap needs the deadline to be exceeded at a wasm backedge).
-const EPOCH_PUMP_MS: u64 = 200;
-
-/// Minimum deadline offset in ticks beyond the current epoch (see
-/// [`WasmPlugin::call`]).
-const EPOCH_DEADLINE_TICKS: u64 = 2;
-
-/// A call's epoch deadline in pump ticks: the network budget plus the
-/// minimum offset. `http.fetch` waits are the dominant legitimate cost of
-/// a real-world source (wenku8 etc. answer in ~1 s), and they are already
-/// bounded by the policy's fetch timeout — so the guard bounds the *whole
-/// call* (compute + network) at roughly that budget, while keeping calls
-/// that never fetch (e.g. `declare` sync, pure-compute plugins) on the
-/// tight minimum.
-fn call_deadline_ticks(policy: &FetchPolicy) -> u64 {
-    let fetch_budget = policy.timeout_ms.div_ceil(EPOCH_PUMP_MS);
-    fetch_budget + EPOCH_DEADLINE_TICKS
-}
+/// Per-call guest instruction budget. Host I/O does not consume fuel, so
+/// serial network requests have no aggregate wall-clock deadline. A spinning
+/// guest still traps instead of consuming a blocking worker indefinitely.
+const MAX_CALL_FUEL: u64 = 1_000_000_000;
 
 /// Sink for the `store-image` import: implemented by the server (which
 /// owns the DB pool and the files directory) and handed to every plugin
@@ -239,7 +219,7 @@ impl WasmPlugin {
         let file = file.into();
         let mut config = Config::new();
         config.wasm_component_model(true);
-        config.epoch_interruption(true);
+        config.consume_fuel(true);
         let engine = Engine::new(&config)?;
         let component = Component::new(&engine, &wasm)
             .with_context(|| format!("{file} is not a valid wasm component"))?;
@@ -253,24 +233,10 @@ impl WasmPlugin {
             policy,
             images,
         })
-        .inspect(|plugin| plugin.start_epoch_pump())
     }
 
     pub fn file(&self) -> &str {
         &self.file
-    }
-
-    /// Start the epoch pump: a background thread increments the engine's
-    /// epoch every few ms, so any call whose deadline expired gets
-    /// trapped at the next wasm backedge.
-    fn start_epoch_pump(&self) {
-        let engine = self.engine.clone();
-        std::thread::spawn(move || {
-            loop {
-                std::thread::sleep(Duration::from_millis(EPOCH_PUMP_MS));
-                engine.increment_epoch();
-            }
-        });
     }
 
     /// Instantiate the component in a fresh store and run `f` against the
@@ -290,12 +256,8 @@ impl WasmPlugin {
                 image_bytes_stored: 0,
             },
         );
-        // Epoch deadline: calls shorter than one pump interval are never
-        // trapped; a runaway plugin is interrupted within a few intervals.
-        // The budget scales with the fetch-timeout cap, so real-world
-        // sources (whose `http.fetch` waits dominate the call) are not
-        // interrupted mid-network — see `call_deadline_ticks`.
-        store.set_epoch_deadline(call_deadline_ticks(&self.policy));
+        // Meter guest work, not the elapsed time of host imports.
+        store.set_fuel(MAX_CALL_FUEL)?;
         let bindings = MandaraPlugin::instantiate(&mut store, &self.component, &self.linker)
             .with_context(|| format!("instantiate `{}`", self.file))?;
         Ok(f(&mut store, &bindings).with_context(|| format!("call into `{}`", self.file))?)
