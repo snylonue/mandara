@@ -2044,7 +2044,6 @@ dependencies = [
  "thiserror 2.0.20",
  "tracing",
  "ureq",
- "url",
  "wasmtime",
 ]
 
