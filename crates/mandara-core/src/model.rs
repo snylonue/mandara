@@ -5,6 +5,21 @@ use crate::ext::{BookExt, SeriesExt};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+/// Invalid textual representations of domain values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum ModelError {
+    #[error("unknown role")]
+    Role,
+    #[error("unknown visibility")]
+    Visibility,
+    #[error("unknown file format")]
+    FileFormat,
+    #[error("unknown share kind")]
+    ShareKind,
+    #[error("invalid image id")]
+    ImageId,
+}
+
 /// User role. Administrators can manage every book and every file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -29,13 +44,13 @@ impl std::fmt::Display for Role {
 }
 
 impl std::str::FromStr for Role {
-    type Err = String;
+    type Err = ModelError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "admin" => Ok(Role::Admin),
             "user" => Ok(Role::User),
-            _ => Err(format!("unknown role: {s}")),
+            _ => Err(ModelError::Role),
         }
     }
 }
@@ -65,13 +80,13 @@ impl std::fmt::Display for Visibility {
 }
 
 impl std::str::FromStr for Visibility {
-    type Err = String;
+    type Err = ModelError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "private" => Ok(Visibility::Private),
             "public" => Ok(Visibility::Public),
-            _ => Err(format!("unknown visibility: {s}")),
+            _ => Err(ModelError::Visibility),
         }
     }
 }
@@ -179,14 +194,17 @@ pub struct ImageId(String);
 
 impl ImageId {
     /// Validate raw sha-256 hex output (exactly 64 lowercase hex chars).
-    /// Returns the rejected input on failure.
-    pub fn from_sha256_hex(id: impl Into<String>) -> Result<Self, String> {
+    pub fn from_sha256_hex(id: impl Into<String>) -> Result<Self, ModelError> {
         let id = id.into();
         let is_lower_hex = id.len() == 64
             && id
                 .bytes()
                 .all(|b| b.is_ascii_digit() || matches!(b, b'a'..=b'f'));
-        if is_lower_hex { Ok(Self(id)) } else { Err(id) }
+        if is_lower_hex {
+            Ok(Self(id))
+        } else {
+            Err(ModelError::ImageId)
+        }
     }
 
     pub fn as_str(&self) -> &str {
@@ -201,10 +219,10 @@ impl std::fmt::Display for ImageId {
 }
 
 impl std::str::FromStr for ImageId {
-    type Err = String;
+    type Err = ModelError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::from_sha256_hex(s.to_owned()).map_err(|bad| format!("invalid image id: {bad}"))
+        Self::from_sha256_hex(s)
     }
 }
 
@@ -297,14 +315,14 @@ impl std::fmt::Display for FileFormat {
 }
 
 impl std::str::FromStr for FileFormat {
-    type Err = String;
+    type Err = ModelError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "epub" => Ok(FileFormat::Epub),
             "txt" => Ok(FileFormat::Txt),
             "plugin" => Ok(FileFormat::Plugin),
-            _ => Err(format!("unknown file format: {s}")),
+            _ => Err(ModelError::FileFormat),
         }
     }
 }
@@ -376,13 +394,13 @@ impl std::fmt::Display for ShareKind {
 }
 
 impl std::str::FromStr for ShareKind {
-    type Err = String;
+    type Err = ModelError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "book" => Ok(ShareKind::Book),
             "session" => Ok(ShareKind::Session),
-            _ => Err(format!("unknown share kind: {s}")),
+            _ => Err(ModelError::ShareKind),
         }
     }
 }

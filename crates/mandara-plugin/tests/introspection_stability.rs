@@ -2,8 +2,17 @@
 struct NoImages;
 
 impl mandara_plugin::host::ImageStore for NoImages {
-    fn store_image(&self, _bytes: &[u8], _mime: &str) -> Result<String, String> {
-        Err("not available in this test".into())
+    fn store_image(
+        &self,
+        _bytes: &[u8],
+        _mime: &str,
+    ) -> Result<String, mandara_plugin::ImageStoreError> {
+        Err(mandara_plugin::ImageStoreError::Backend(Box::new(
+            std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "not available in this test",
+            ),
+        )))
     }
 }
 

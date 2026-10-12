@@ -185,12 +185,18 @@ impl<'a> AcquisitionRequest<'a> {
     }
 }
 
-async fn field_text(field: axum::extract::multipart::Field<'_>) -> Result<String, ApiError> {
-    field
-        .text()
-        .await
-        .map(|s| s.trim().to_string())
-        .map_err(|e| ApiError::bad_request(format!("field read: {e}")))
+#[derive(Debug, thiserror::Error)]
+pub enum UploadError {
+    #[error("multipart: {0}")]
+    Multipart(#[from] axum::extract::multipart::MultipartError),
+    #[error("authors must be a JSON string array: {0}")]
+    Authors(#[source] serde_json::Error),
+    #[error("`ext` must be a JSON object: {0}")]
+    Ext(#[source] serde_json::Error),
+}
+
+async fn field_text(field: axum::extract::multipart::Field<'_>) -> Result<String, UploadError> {
+    Ok(field.text().await?.trim().to_string())
 }
 
 /// Read a multipart addition form: `file` (optional — plugin sources
@@ -208,20 +214,12 @@ async fn read_upload(
     let mut label = String::new();
     let mut fields = UploadFields::default();
 
-    while let Some(mut field) = multipart
-        .next_field()
-        .await
-        .map_err(|e| ApiError::bad_request(format!("multipart: {e}")))?
-    {
+    while let Some(mut field) = multipart.next_field().await? {
         match field.name() {
             Some("file") => {
                 filename = field.file_name().map(|s| s.to_string());
                 let mut buf: Vec<u8> = Vec::new();
-                while let Some(chunk) = field
-                    .chunk()
-                    .await
-                    .map_err(|e| ApiError::bad_request(format!("upload read: {e}")))?
-                {
+                while let Some(chunk) = field.chunk().await? {
                     buf.extend_from_slice(&chunk);
                 }
                 bytes = Some(buf);
@@ -245,11 +243,8 @@ async fn read_upload(
             Some("authors") => {
                 let raw = field_text(field).await?;
                 if !raw.is_empty() {
-                    fields.authors = Some(serde_json::from_str(&raw).map_err(|e| {
-                        ApiError::bad_request(format!(
-                            "authors must be a JSON string array, got `{raw}`: {e}"
-                        ))
-                    })?);
+                    fields.authors =
+                        Some(serde_json::from_str(&raw).map_err(UploadError::Authors)?);
                 }
             }
             Some("description") => {
@@ -267,9 +262,8 @@ async fn read_upload(
             Some("ext") => {
                 let raw = field_text(field).await?;
                 if !raw.is_empty() {
-                    let value: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
-                        ApiError::bad_request(format!("`ext` must be a JSON object: {e}"))
-                    })?;
+                    let value: serde_json::Value =
+                        serde_json::from_str(&raw).map_err(UploadError::Ext)?;
                     if !value.is_object() {
                         return Err(ApiError::bad_request("`ext` must be a JSON object"));
                     }
@@ -304,7 +298,7 @@ fn overrides(fields: &UploadFields) -> Result<MetadataOverrides, ApiError> {
         cover_url: fields.cover_url.clone(),
         ext: match &fields.ext {
             None => None,
-            Some(raw) => Some(BookExt::from_value(raw.clone()).map_err(ApiError::bad_request)?),
+            Some(raw) => Some(BookExt::from_value(raw.clone())?),
         },
     })
 }

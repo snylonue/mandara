@@ -6,9 +6,11 @@
 //! `docs/plugin-v2-design.md` for the design, and `docs/plugins.md` for
 //! how to write and build a plugin.
 
+pub mod error;
 pub mod host;
 pub mod http_fetch;
 
+pub use error::ImageStoreError;
 pub use host::{
     BookEntry, ConfigErrors, ConfigField, ConfigFieldError, ConfigKind, ConfigValue, DeclaredBook,
     ImageStore, MAX_BOOK_FILE_BYTES, MAX_CALL_IMAGE_BYTES, MAX_CHAPTER_CONTENT_BYTES,

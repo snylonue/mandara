@@ -48,7 +48,7 @@ pub async fn register(
     if !st.auth.allow_register() {
         return Err(ApiError::Forbidden);
     }
-    let username: Username = req.username.parse().map_err(ApiError::bad_request)?;
+    let username: Username = req.username.parse()?;
     if req.password.chars().count() < 8 {
         return Err(ApiError::bad_request(
             "password must be at least 8 characters",
@@ -158,19 +158,27 @@ pub async fn me(State(st): State<St>, headers: HeaderMap) -> Result<impl IntoRes
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Username(String);
 
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum UsernameError {
+    #[error("username must be 3-32 characters")]
+    Length,
+    #[error("username may only contain letters, digits, '_' and '-'")]
+    Characters,
+}
+
 impl std::str::FromStr for Username {
-    type Err = String;
+    type Err = UsernameError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let len = s.chars().count();
         if !(3..=32).contains(&len) {
-            return Err("username must be 3-32 characters".into());
+            return Err(UsernameError::Length);
         }
         if !s
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
         {
-            return Err("username may only contain letters, digits, '_' and '-'".into());
+            return Err(UsernameError::Characters);
         }
         Ok(Username(s.to_string()))
     }

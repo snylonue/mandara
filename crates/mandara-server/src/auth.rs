@@ -20,6 +20,14 @@ use diesel::QueryDsl as _;
 use diesel::prelude::SelectableHelper as _;
 use diesel_async::RunQueryDsl as _;
 
+#[derive(Debug, thiserror::Error)]
+pub enum AuthError {
+    #[error("password hashing failed: {0}")]
+    PasswordHash(#[from] argon2::password_hash::Error),
+    #[error("token encoding failed: {0}")]
+    Token(#[from] jsonwebtoken::errors::Error),
+}
+
 /// Name of the session cookie carrying the JWT (HttpOnly — the browser
 /// sends it automatically, so a page refresh never drops the login).
 pub const TOKEN_COOKIE: &str = "mandara_token";
@@ -76,12 +84,11 @@ impl AuthService {
         self.allow_register
     }
 
-    pub fn hash_password(&self, password: &str) -> Result<String, ApiError> {
+    pub fn hash_password(&self, password: &str) -> Result<String, AuthError> {
         let salt = SaltString::generate(&mut OsRng);
-        Argon2::default()
-            .hash_password(password.as_bytes(), &salt)
-            .map(|h| h.to_string())
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e)))
+        Ok(Argon2::default()
+            .hash_password(password.as_bytes(), &salt)?
+            .to_string())
     }
 
     pub fn verify_password(&self, password: &str, hash: &str) -> bool {
@@ -95,7 +102,7 @@ impl AuthService {
             .unwrap_or(false)
     }
 
-    pub fn issue_token(&self, user: &User) -> Result<String, ApiError> {
+    pub fn issue_token(&self, user: &User) -> Result<String, AuthError> {
         let now = Utc::now().timestamp() as usize;
         let claims = Claims {
             sub: user.id.clone(),
@@ -104,12 +111,11 @@ impl AuthService {
             iat: now,
             exp: now + TOKEN_TTL_SECS,
         };
-        encode(
+        Ok(encode(
             &Header::default(),
             &claims,
             &EncodingKey::from_secret(self.secret.as_bytes()),
-        )
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e)))
+        )?)
     }
 
     /// Resolve the current user from the Authorization header, falling
@@ -138,7 +144,7 @@ impl AuthService {
             .first::<UserRow>(&mut conn)
             .await
             .optional()?;
-        row.map(UserRow::into_model).ok_or(ApiError::Unauthorized)?
+        UserRow::into_model(row.ok_or(ApiError::Unauthorized)?)
     }
 
     pub fn require_admin(user: &User) -> Result<(), ApiError> {

@@ -9,36 +9,59 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum IsbnError {
+    #[error("invalid ISBN digits")]
+    InvalidDigits,
+    #[error("ISBN checksum mismatch")]
+    Checksum,
+    #[error("ISBN must contain 10 or 13 characters")]
+    InvalidLength,
+}
+
+/// Validation failures for extended metadata, retaining parser errors.
+#[derive(Debug, thiserror::Error)]
+pub enum MetadataError {
+    #[error("invalid extended metadata object: {0}")]
+    Json(#[from] serde_json::Error),
+    #[error("{0}")]
+    Isbn(#[from] IsbnError),
+    #[error("unknown series status (ongoing | completed | hiatus)")]
+    SeriesStatus,
+}
+
 /// Normalize an ISBN for storage: strip separators, verify the checksum,
 /// convert valid ISBN-10 to its canonical ISBN-13 form. Returns the
 /// hyphenless ISBN-13 or a descriptive error — invalid input never lands.
-pub fn normalize_isbn(raw: &str) -> Result<String, String> {
+pub fn normalize_isbn(raw: &str) -> Result<String, IsbnError> {
     let cleaned: String = raw.chars().filter(|c| !matches!(c, '-' | ' ')).collect();
     match cleaned.len() {
         13 => {
             if !cleaned.bytes().all(|b| b.is_ascii_digit()) {
-                return Err(format!("invalid ISBN-13 `{raw}`"));
+                return Err(IsbnError::InvalidDigits);
             }
             if isbn13_check(&cleaned) != cleaned.as_bytes()[12] - b'0' {
-                return Err(format!("ISBN-13 checksum mismatch: `{raw}`"));
+                return Err(IsbnError::Checksum);
             }
             Ok(cleaned)
         }
         10 => {
             let bytes = cleaned.as_bytes();
-            let digits: Result<Vec<u8>, String> = bytes[..9]
+            let digits: Result<Vec<u8>, IsbnError> = bytes[..9]
                 .iter()
                 .map(|b| {
                     b.checked_sub(b'0')
                         .filter(|d| *d <= 9)
-                        .ok_or_else(|| format!("invalid ISBN-10 `{raw}`"))
+                        .ok_or(IsbnError::InvalidDigits)
                 })
                 .collect();
             let digits = digits?;
             let check = match bytes[9] {
                 b'X' => 10,
                 b if b.is_ascii_digit() => b - b'0',
-                _ => return Err(format!("invalid ISBN-10 `{raw}`")),
+                _ => {
+                    return Err(IsbnError::InvalidDigits);
+                }
             };
             let sum: u32 = digits
                 .iter()
@@ -47,14 +70,14 @@ pub fn normalize_isbn(raw: &str) -> Result<String, String> {
                 .sum::<u32>()
                 + check as u32;
             if !sum.is_multiple_of(11) {
-                return Err(format!("ISBN-10 checksum mismatch: `{raw}`"));
+                return Err(IsbnError::Checksum);
             }
             // Canonicalize to ISBN-13: 978 prefix + first 9 digits + new check.
             let mut base = format!("978{}", &cleaned[..9]);
             base.push_str(&(isbn13_check(&base)).to_string());
             Ok(base)
         }
-        _ => Err(format!("not an ISBN-10/13: `{raw}`")),
+        _ => Err(IsbnError::InvalidLength),
     }
 }
 
@@ -129,9 +152,8 @@ impl BookExt {
     /// Parse a raw JSON object (plugin `extra`, stored column) into a
     /// validated, normalized `BookExt`. Fails on non-objects and invalid
     /// ISBNs — bad data never lands.
-    pub fn from_value(value: Value) -> Result<Self, String> {
-        let this: Self = serde_json::from_value(value)
-            .map_err(|e| format!("invalid extended metadata object: {e}"))?;
+    pub fn from_value(value: Value) -> Result<Self, MetadataError> {
+        let this: Self = serde_json::from_value(value)?;
         let mut this = this;
         this.sanitize()?;
         Ok(this)
@@ -139,7 +161,7 @@ impl BookExt {
 
     /// Trim strings (empty → `None`), normalize the ISBN, drop null
     /// passthrough entries.
-    pub fn sanitize(&mut self) -> Result<(), String> {
+    pub fn sanitize(&mut self) -> Result<(), MetadataError> {
         opt_trim(&mut self.subtitle);
         opt_trim(&mut self.original_title);
         self.isbn = match self.isbn.as_deref().map(str::trim) {
@@ -253,16 +275,14 @@ impl std::fmt::Display for SeriesStatus {
 }
 
 impl std::str::FromStr for SeriesStatus {
-    type Err = String;
+    type Err = MetadataError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "ongoing" => Ok(SeriesStatus::Ongoing),
             "completed" => Ok(SeriesStatus::Completed),
             "hiatus" => Ok(SeriesStatus::Hiatus),
-            _ => Err(format!(
-                "unknown series status: `{s}` (ongoing | completed | hiatus)"
-            )),
+            _ => Err(MetadataError::SeriesStatus),
         }
     }
 }
@@ -299,14 +319,13 @@ pub struct SeriesExt {
 
 impl SeriesExt {
     /// Parse a raw JSON object into a validated `SeriesExt`.
-    pub fn from_value(value: Value) -> Result<Self, String> {
-        let mut this: Self = serde_json::from_value(value)
-            .map_err(|e| format!("invalid extended metadata object: {e}"))?;
+    pub fn from_value(value: Value) -> Result<Self, MetadataError> {
+        let mut this: Self = serde_json::from_value(value)?;
         this.sanitize()?;
         Ok(this)
     }
 
-    pub fn sanitize(&mut self) -> Result<(), String> {
+    pub fn sanitize(&mut self) -> Result<(), MetadataError> {
         opt_trim(&mut self.original_title);
         opt_trim(&mut self.publisher);
         opt_trim(&mut self.pub_date);
@@ -355,7 +374,7 @@ impl SeriesExt {
     /// Extract the series-relevant subset from a plugin source's ext
     /// object (the same object a book entry carries; keys resolve through
     /// both shapes' shared passthrough).
-    pub fn from_source(value: Option<&Value>) -> Result<Self, String> {
+    pub fn from_source(value: Option<&Value>) -> Result<Self, MetadataError> {
         match value {
             None => Ok(Self::default()),
             Some(v) => Self::from_value(v.clone()),

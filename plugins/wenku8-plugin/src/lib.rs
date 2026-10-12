@@ -98,7 +98,7 @@ fn placement() -> Placement {
     }
 }
 
-fn log_error(context: &str, url: &str, err: &str) {
+fn log_error(context: &str, url: &str, err: &(impl std::fmt::Display + ?Sized)) {
     mandara::plugin::store::log(&format!("{context} `{url}` failed: {err}"));
 }
 
@@ -112,7 +112,7 @@ fn log_error(context: &str, url: &str, err: &str) {
 /// Transient problems (transport errors, 5xx, anti-bot 403 spikes) are
 /// retried up to two times — see the retry guidance in
 /// docs/plugin-http-api-design.md §4.3; the call budget covers three attempts.
-fn http_get(url: &str, referer: &str) -> Result<(u16, Vec<u8>), String> {
+fn http_get(url: &str, referer: &str) -> Result<(u16, Vec<u8>), mandara::plugin::http::FetchError> {
     let mut attempt = 0;
     loop {
         attempt += 1;
@@ -152,7 +152,7 @@ fn http_get(url: &str, referer: &str) -> Result<(u16, Vec<u8>), String> {
             }
             Ok(resp) => return Ok((resp.status, resp.body)),
             Err(_) if attempt < 3 => continue,
-            Err(e) => return Err(format!("{e:?}")),
+            Err(e) => return Err(e),
         }
     }
 }

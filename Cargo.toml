@@ -52,7 +52,7 @@ diesel = { version = "2.3", features = ["sqlite"] }
 diesel-async = { version = "0.9", features = ["sqlite", "deadpool", "sync-connection-wrapper"] }
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
 jsonwebtoken = { version = "11", features = ["rust_crypto"] }
-argon2 = "0.5"
+argon2 = { version = "0.5", features = ["std"] }
 clap = { version = "4", features = ["derive", "env"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }

@@ -220,6 +220,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "thiserror 2.0.20",
  "wit-bindgen 0.60.0",
 ]
 
@@ -2026,6 +2027,7 @@ dependencies = [
  "roxmltree",
  "scraper",
  "serde_json",
+ "thiserror 2.0.20",
  "url",
  "uuid",
  "zip",
@@ -2039,6 +2041,7 @@ dependencies = [
  "mandara-core",
  "serde",
  "serde_json",
+ "thiserror 2.0.20",
  "tracing",
  "ureq",
  "url",

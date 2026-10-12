@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+thiserror.workspace = true
 mandara-core = { path = "../mandara-core" }
 encoding_rs = { workspace = true }
 epub = { workspace = true }

@@ -22,8 +22,8 @@ use std::sync::Arc;
 
 use serde::Serialize;
 
-use mandara_core::error::Error as CoreError;
 use mandara_core::source::{SourceBook, SourceBookFile, SourceChapter};
+use mandara_plugin::error::Error as PluginError;
 use mandara_plugin::{
     BookEntry, ConfigErrors, ConfigField, ConfigKind, ConfigValue, SearchResult, SourceInfo,
     WasmPlugin, validate_config, values_from_config,
@@ -288,7 +288,7 @@ impl PluginService {
         wasm: &WasmInfo,
         input: &serde_json::Value,
     ) -> Result<serde_json::Value, ApiError> {
-        validate_config(&wasm.schema, input).map_err(ApiError::ConfigErrors)
+        Ok(validate_config(&wasm.schema, input)?)
     }
 
     /// Register an instance for a compiled wasm file. Config defaults to
@@ -474,7 +474,7 @@ impl PluginService {
         &self,
         id: &str,
         require_enabled: bool,
-        f: impl FnOnce(&WasmPlugin, &[ConfigValue]) -> Result<T, CoreError> + Send + 'static,
+        f: impl FnOnce(&WasmPlugin, &[ConfigValue]) -> Result<T, PluginError> + Send + 'static,
     ) -> Result<T, ApiError> {
         let row = self
             .row(id)
@@ -519,9 +519,7 @@ impl PluginService {
                 books: declared
                     .into_iter()
                     .map(|b| -> Result<_, ApiError> {
-                        let book = SourceBook::try_from(b.book).map_err(|e| {
-                            ApiError::bad_request(format!("invalid declared book entry: {e}"))
-                        })?;
+                        let book = SourceBook::try_from(b.book)?;
                         Ok(DeclaredCatalogBook {
                             book,
                             chapters: b
@@ -566,9 +564,7 @@ impl PluginService {
                 books: declared
                     .into_iter()
                     .map(|b| -> Result<_, ApiError> {
-                        let book = SourceBook::try_from(b.book).map_err(|e| {
-                            ApiError::bad_request(format!("invalid declared book entry: {e}"))
-                        })?;
+                        let book = SourceBook::try_from(b.book)?;
                         Ok(DeclaredCatalogBook {
                             book,
                             chapters: b
@@ -764,10 +760,7 @@ impl From<ConfigErrors> for ApiError {
 async fn run_wasm<T: Send + 'static>(
     wasm: Arc<WasmPlugin>,
     values: Vec<ConfigValue>,
-    f: impl FnOnce(&WasmPlugin, &[ConfigValue]) -> Result<T, CoreError> + Send + 'static,
+    f: impl FnOnce(&WasmPlugin, &[ConfigValue]) -> Result<T, PluginError> + Send + 'static,
 ) -> Result<T, ApiError> {
-    let inner: Result<T, CoreError> = tokio::task::spawn_blocking(move || f(&wasm, &values))
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("plugin call panicked: {e}")))?;
-    inner.map_err(ApiError::from)
+    Ok(tokio::task::spawn_blocking(move || f(&wasm, &values)).await??)
 }

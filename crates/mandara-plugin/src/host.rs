@@ -17,8 +17,9 @@ use tracing::{info, warn};
 use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Config, Engine, Store};
 
-use mandara_core::error::{Error, Result};
+use crate::error::{BookEntryError, Error, ImageStoreError, Result};
 use mandara_core::source::{SourceBook, SourceBookFile, SourceChapter, SourceVolume};
+use wasmtime::error::Context as _;
 
 use crate::http_fetch::{self, FetchPolicy};
 
@@ -34,6 +35,7 @@ use crate::http_fetch::{self, FetchPolicy};
 wasmtime::component::bindgen!({
     path: "wit",
     world: "mandara:plugin/mandara-plugin",
+    imports: { "mandara:plugin/store.store-image": trappable },
 });
 
 // The bindgen macro brings the world-scoped types (`ConfigField`,
@@ -91,8 +93,10 @@ fn call_deadline_ticks(policy: &FetchPolicy) -> u64 {
 /// call. Synchronous — plugin calls already run on blocking threads.
 pub trait ImageStore: Send + Sync {
     /// Store image bytes; returns the content address (sha256 hex). Must
-    /// dedup: identical bytes return the same id.
-    fn store_image(&self, bytes: &[u8], mime: &str) -> std::result::Result<String, String>;
+    /// dedup: identical bytes return the same id. Backend failures retain
+    /// their original source through [`ImageStoreError`].
+    fn store_image(&self, bytes: &[u8], mime: &str)
+    -> std::result::Result<String, ImageStoreError>;
 }
 
 /// Host-side state handed to plugin imports for the duration of one call.
@@ -111,32 +115,34 @@ struct HostState {
 }
 
 impl mandara::plugin::store::Host for HostState {
-    // v48: synchronous host functions return `()` directly; errors are
-    // signalled by panicking (which traps the plugin).
+    // Logging is infallible; image storage is a trappable host import.
     fn log(&mut self, message: String) {
         info!(plugin = %self.name, "plugin: {message}");
     }
 
-    fn store_image(&mut self, bytes: Vec<u8>, mime: String) -> String {
+    fn store_image(&mut self, bytes: Vec<u8>, mime: String) -> wasmtime::Result<String> {
         if bytes.len() > MAX_IMAGE_BYTES {
-            panic!(
-                "`{}` store-image exceeds the {} byte per-image cap",
-                self.name, MAX_IMAGE_BYTES
-            );
+            return Err(Error::ContentLimit {
+                file: self.name.clone(),
+                resource: "store-image (per-image)",
+                limit: MAX_IMAGE_BYTES,
+            }
+            .into());
         }
         if self.image_bytes_stored + bytes.len() as u64 > MAX_CALL_IMAGE_BYTES as u64 {
-            panic!(
-                "`{}` store-image exceeds the {} byte per-call cap",
-                self.name, MAX_CALL_IMAGE_BYTES
-            );
-        }
-        match self.images.store_image(&bytes, &mime) {
-            Ok(id) => {
-                self.image_bytes_stored += bytes.len() as u64;
-                id
+            return Err(Error::ContentLimit {
+                file: self.name.clone(),
+                resource: "store-image (per-call)",
+                limit: MAX_CALL_IMAGE_BYTES,
             }
-            Err(e) => panic!("`{}` store-image failed: {e}", self.name),
+            .into());
         }
+        let id = self
+            .images
+            .store_image(&bytes, &mime)
+            .with_context(|| format!("`{}` store-image failed", self.name))?;
+        self.image_bytes_stored += bytes.len() as u64;
+        Ok(id)
     }
 }
 
@@ -185,7 +191,7 @@ impl mandara::plugin::http::Host for HostState {
             }),
             Err(e) => Err(match e {
                 http_fetch::FetchError::InvalidUrl(m) => {
-                    mandara::plugin::http::FetchError::InvalidUrl(m)
+                    mandara::plugin::http::FetchError::InvalidUrl(m.to_string())
                 }
                 http_fetch::FetchError::Denied(m) => mandara::plugin::http::FetchError::Denied(m),
                 http_fetch::FetchError::RedirectLimit(n) => {
@@ -198,7 +204,7 @@ impl mandara::plugin::http::Host for HostState {
                     mandara::plugin::http::FetchError::SizeLimit(n)
                 }
                 http_fetch::FetchError::Transport(m) => {
-                    mandara::plugin::http::FetchError::Transport(m)
+                    mandara::plugin::http::FetchError::Transport(m.to_string())
                 }
             }),
         }
@@ -236,7 +242,7 @@ impl WasmPlugin {
         config.epoch_interruption(true);
         let engine = Engine::new(&config)?;
         let component = Component::new(&engine, &wasm)
-            .map_err(|e| anyhow::anyhow!("{file} is not a valid wasm component: {e}"))?;
+            .with_context(|| format!("{file} is not a valid wasm component"))?;
         let mut linker = Linker::new(&engine);
         MandaraPlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |state: &mut HostState| state)?;
         Ok(Self {
@@ -291,9 +297,8 @@ impl WasmPlugin {
         // interrupted mid-network — see `call_deadline_ticks`.
         store.set_epoch_deadline(call_deadline_ticks(&self.policy));
         let bindings = MandaraPlugin::instantiate(&mut store, &self.component, &self.linker)
-            .map_err(|e| Error::Plugin(format!("instantiate `{}`: {e}", self.file)))?;
-        f(&mut store, &bindings)
-            .map_err(|e| Error::Plugin(format!("call into `{}`: {e:#}", self.file)))
+            .with_context(|| format!("instantiate `{}`", self.file))?;
+        Ok(f(&mut store, &bindings).with_context(|| format!("call into `{}`", self.file))?)
     }
 
     /// Human-readable plugin name (same for all instances).
@@ -327,14 +332,13 @@ impl WasmPlugin {
         if let Some(books) = &declared {
             let chapters = books.iter().map(|b| b.chapters.len()).sum::<usize>();
             if books.len() > MAX_DECLARE_BOOKS || chapters > MAX_DECLARE_CHAPTERS {
-                return Err(Error::Plugin(format!(
-                    "`{}` declare catalog too large: {}/{} books, {}/{} chapters (caps)",
-                    self.file,
-                    books.len(),
-                    MAX_DECLARE_BOOKS,
+                return Err(Error::CatalogLimit {
+                    file: self.file.clone(),
+                    books: books.len(),
+                    max_books: MAX_DECLARE_BOOKS,
                     chapters,
-                    MAX_DECLARE_CHAPTERS
-                )));
+                    max_chapters: MAX_DECLARE_CHAPTERS,
+                });
             }
             if books.len() > MAX_DECLARE_BOOKS * 9 / 10 || chapters > MAX_DECLARE_CHAPTERS * 9 / 10
             {
@@ -387,10 +391,11 @@ impl WasmPlugin {
         match chapter {
             Some(c) => {
                 if c.content.len() > MAX_CHAPTER_CONTENT_BYTES {
-                    return Err(Error::Plugin(format!(
-                        "`{}` chapter {book_id}#{index} exceeds the {} byte content cap",
-                        self.file, MAX_CHAPTER_CONTENT_BYTES
-                    )));
+                    return Err(Error::ContentLimit {
+                        file: self.file.clone(),
+                        resource: "chapter",
+                        limit: MAX_CHAPTER_CONTENT_BYTES,
+                    });
                 }
                 Ok(Some(SourceChapter {
                     title: c.title,
@@ -412,9 +417,7 @@ impl WasmPlugin {
         let book = self.call(config, |store, b| {
             b.call_identify_upload(store, filename, file_hash)
         })?;
-        book.map(SourceBook::try_from)
-            .transpose()
-            .map_err(|e| Error::Plugin(format!("identify-upload entry invalid: {e}")))
+        Ok(book.map(SourceBook::try_from).transpose()?)
     }
 
     /// Fetch a whole book file (`book-file` capability). `None` = the
@@ -429,10 +432,11 @@ impl WasmPlugin {
         match file {
             Some(f) => {
                 if f.bytes.len() > MAX_BOOK_FILE_BYTES {
-                    return Err(Error::Plugin(format!(
-                        "`{}` book file {book_id} exceeds the {} byte cap",
-                        self.file, MAX_BOOK_FILE_BYTES
-                    )));
+                    return Err(Error::ContentLimit {
+                        file: self.file.clone(),
+                        resource: "book file",
+                        limit: MAX_BOOK_FILE_BYTES,
+                    });
                 }
                 Ok(Some(SourceBookFile {
                     filename: f.filename,
@@ -451,16 +455,14 @@ impl WasmPlugin {
 /// (unknown keys allowed); anything else fails the plugin call so bad
 /// data never lands.
 impl TryFrom<BookEntry> for SourceBook {
-    type Error = Error;
+    type Error = BookEntryError;
 
     fn try_from(b: BookEntry) -> std::result::Result<Self, Self::Error> {
         let ext = match b.extra {
             None => None,
             Some(raw) => {
-                let value: serde_json::Value = serde_json::from_str(&raw)
-                    .map_err(|e| Error::Plugin(format!("invalid `extra` metadata JSON: {e}")))?;
-                let validated = mandara_core::ext::BookExt::from_value(value.clone())
-                    .map_err(|e| Error::Plugin(format!("invalid `extra` metadata object: {e}")))?;
+                let value: serde_json::Value = serde_json::from_str(&raw)?;
+                let validated = mandara_core::ext::BookExt::from_value(value.clone())?;
                 Some(serde_json::to_value(validated).unwrap_or(value))
             }
         };

@@ -1,7 +1,5 @@
 //! Database row structs mapped into core models.
 
-use anyhow::anyhow;
-
 use mandara_core::model::{
     BookMeta, Chapter, ChapterMeta, FileFormat, FileMeta, InChapter, OriginalInfo, Position,
     ReadingSession, Role, SeriesMeta, Share, ShareKind, User, Visibility,
@@ -25,10 +23,7 @@ impl UserRow {
         Ok(User {
             id: self.id,
             username: self.username,
-            role: self
-                .role
-                .parse::<Role>()
-                .map_err(|_| anyhow!("bad role in db: {}", self.role))?,
+            role: self.role.parse::<Role>().map_err(ApiError::internal)?,
             created_at: DbTs::from_str(self.created_at).parse(),
         })
     }
@@ -133,12 +128,12 @@ impl FileRow {
             format: self
                 .format
                 .parse::<FileFormat>()
-                .map_err(|_| anyhow!("bad file format in db: {}", self.format))?,
+                .map_err(ApiError::internal)?,
             label: self.label,
             visibility: self
                 .visibility
                 .parse::<Visibility>()
-                .map_err(|_| anyhow!("bad file visibility in db: {}", self.visibility))?,
+                .map_err(ApiError::internal)?,
             owner_id: self.owner_id,
             chapter_count: self.chapter_count.max(0) as u32,
             created_at: DbTs::from_str(self.created_at).parse(),
@@ -242,10 +237,7 @@ impl ShareRow {
     pub fn into_model(self) -> Result<Share, ApiError> {
         Ok(Share {
             token: self.token,
-            kind: self
-                .kind
-                .parse::<ShareKind>()
-                .map_err(|_| anyhow!("bad share kind in db: {}", self.kind))?,
+            kind: self.kind.parse::<ShareKind>().map_err(ApiError::internal)?,
             file_id: self.file_id,
             session_id: self.session_id,
             created_by: self.created_by,

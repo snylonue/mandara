@@ -56,7 +56,7 @@ fn config_number(key: &str, default: u32) -> u32 {
     }
 }
 
-fn log_error(context: &str, url: &str, err: &str) {
+fn log_error(context: &str, url: &str, err: &(impl std::fmt::Display + ?Sized)) {
     mandara::plugin::store::log(&format!("{context} `{url}` failed: {err}"));
 }
 
@@ -76,7 +76,7 @@ fn urlencode(s: &str) -> String {
 
 /// One remote `http.fetch` (timeout 5 s); application statuses come back
 /// as `(status, body)` — only transport-level problems are errors.
-fn http_get(url: &str) -> Result<(u16, Vec<u8>), String> {
+fn http_get(url: &str) -> Result<(u16, Vec<u8>), mandara::plugin::http::FetchError> {
     let request = mandara::plugin::http::Request {
         method: "GET".into(),
         url: url.into(),
@@ -84,10 +84,8 @@ fn http_get(url: &str) -> Result<(u16, Vec<u8>), String> {
         body: None,
         timeout_ms: Some(5_000),
     };
-    match mandara::plugin::http::fetch(&request) {
-        Ok(resp) => Ok((resp.status, resp.body)),
-        Err(e) => Err(format!("{e:?}")),
-    }
+    let resp = mandara::plugin::http::fetch(&request)?;
+    Ok((resp.status, resp.body))
 }
 
 /// The wire format of a `book-entry` on the remote source.

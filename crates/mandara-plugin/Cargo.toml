@@ -6,6 +6,7 @@ license.workspace = true
 description = "wasm plugin host: runs user-provided book sources as WebAssembly components"
 
 [dependencies]
+thiserror.workspace = true
 mandara-core = { path = "../mandara-core" }
 anyhow = { workspace = true }
 serde = { workspace = true }

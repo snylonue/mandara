@@ -36,6 +36,16 @@ wit_bindgen::generate!({
     path: "../../crates/mandara-plugin/wit",
 });
 
+#[derive(Debug, thiserror::Error)]
+enum Error {
+    #[error("fetch failed: {0}")]
+    Fetch(#[from] mandara::plugin::http::FetchError),
+    #[error("json: {0}")]
+    Json(#[from] serde_json::Error),
+    #[error("status {0}")]
+    Status(u16),
+}
+
 const DEFAULT_BASE_URL: &str = "https://api.bgm.tv";
 
 /// Config schema field order — the host injects values in this order.
@@ -56,7 +66,7 @@ fn config_string(key: &str) -> Option<String> {
 /// Descriptive User-Agent — required by the Bangumi developer guidelines.
 const USER_AGENT: &str = "snylonue/mandara (https://github.com/snylonue/mandara)";
 
-fn log_error(context: &str, url: &str, err: &str) {
+fn log_error(context: &str, url: &str, err: &(impl std::fmt::Display + ?Sized)) {
     mandara::plugin::store::log(&format!("{context} `{url}` failed: {err}"));
 }
 
@@ -67,7 +77,7 @@ fn http_request(
     url: &str,
     body: Option<Vec<u8>>,
     json_body: bool,
-) -> Result<(u16, Vec<u8>), String> {
+) -> Result<(u16, Vec<u8>), Error> {
     let mut headers = vec![mandara::plugin::http::Header {
         name: "User-Agent".into(),
         value: USER_AGENT.into(),
@@ -91,10 +101,8 @@ fn http_request(
         body,
         timeout_ms: Some(10_000),
     };
-    match mandara::plugin::http::fetch(&request) {
-        Ok(resp) => Ok((resp.status, resp.body)),
-        Err(e) => Err(format!("{e:?}")),
-    }
+    let resp = mandara::plugin::http::fetch(&request)?;
+    Ok((resp.status, resp.body))
 }
 
 // ---------------------------------------------------------------------------
@@ -235,8 +243,8 @@ struct ApiRelatedSubject {
 /// search remains one paginated request without per-result fan-out.
 fn resolve_book(
     mut subject: ApiSubject,
-    related: impl FnOnce() -> Result<Vec<ApiRelatedSubject>, String>,
-) -> Result<BookEntry, String> {
+    related: impl FnOnce() -> Result<Vec<ApiRelatedSubject>, Error>,
+) -> Result<BookEntry, Error> {
     if subject.is_series() && subject.volumes == 0 {
         let ids: std::collections::HashSet<u64> = related()?
             .into_iter()
@@ -601,9 +609,9 @@ impl Guest for BangumiPlugin {
                     match resolve_book(subject, || {
                         let (status, body) = http_request("GET", &related_url, None, false)?;
                         if status != 200 {
-                            return Err(format!("status {status}"));
+                            return Err(Error::Status(status));
                         }
-                        serde_json::from_slice(&body).map_err(|e| format!("json: {e}"))
+                        Ok(serde_json::from_slice(&body)?)
                     }) {
                         Ok(entry) => Some(entry),
                         Err(e) => {
@@ -747,8 +755,8 @@ mod tests {
     #[test]
     fn relation_failure_is_reported_for_metadata_fallback() {
         let result = resolve_book(subject(serde_json::json!(true), 0), || {
-            Err("status 503".into())
+            Err(Error::Status(503))
         });
-        assert_eq!(result.err().as_deref(), Some("status 503"));
+        assert!(matches!(result, Err(Error::Status(503))));
     }
 }

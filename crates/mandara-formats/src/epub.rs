@@ -23,8 +23,8 @@ use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
 
 use crate::ParsedImage;
+use crate::error::{Error, Result};
 use epub::doc::{EpubDoc, NavPoint};
-use mandara_core::error::{Error, Result};
 use mandara_core::ext::BookExt;
 use mandara_core::model::TocNode;
 use scraper::node::Node;
@@ -71,10 +71,8 @@ pub fn parse_with_policy(
     policy: ParsePolicy,
 ) -> Result<(ParsedBook, Vec<Diagnostic>)> {
     let mut diagnostics = Vec::new();
-    let mut container = crate::epub_container::Container::new(std::io::Cursor::new(bytes))
-        .map_err(|e| Error::InvalidArgument(format!("invalid epub container: {e}")))?;
-    let mut doc = epub::doc::EpubDoc::from_reader(std::io::Cursor::new(bytes))
-        .map_err(|e| Error::InvalidArgument(format!("{e}")))?;
+    let mut container = crate::epub_container::Container::new(std::io::Cursor::new(bytes))?;
+    let mut doc = epub::doc::EpubDoc::from_reader(std::io::Cursor::new(bytes))?;
 
     // epub-rs stores manifest hrefs as filesystem joins. Canonicalize them
     // once as URLs before any resource access (including covers and nav).
@@ -415,9 +413,7 @@ pub fn parse_with_policy(
     }
 
     if chapters.is_empty() {
-        return Err(Error::InvalidArgument(
-            "epub has no readable chapters".into(),
-        ));
+        return Err(Error::EmptySpine);
     }
 
     // Map the TOC tree onto the final chapter list; synthesize a flat TOC
@@ -2277,7 +2273,7 @@ mod tests {
     #[test]
     fn rejects_non_epub() {
         let err = parse(b"not a zip").unwrap_err();
-        assert!(matches!(err, Error::InvalidArgument(_)));
+        assert!(matches!(err, Error::Container(_)));
     }
 
     #[test]

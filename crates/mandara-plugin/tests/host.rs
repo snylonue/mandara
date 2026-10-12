@@ -6,8 +6,8 @@
 
 use std::sync::Arc;
 
-use mandara_core::error::Error;
 use mandara_plugin::FetchPolicy;
+use mandara_plugin::error::Error;
 use mandara_plugin::host::{
     ConfigErrors, ConfigField, ConfigKind, ConfigValue, MAX_SEARCH_LIMIT, WasmPlugin,
     validate_config, values_from_config,
@@ -22,7 +22,11 @@ struct TestImages {
 }
 
 impl mandara_plugin::host::ImageStore for TestImages {
-    fn store_image(&self, bytes: &[u8], _mime: &str) -> Result<String, String> {
+    fn store_image(
+        &self,
+        bytes: &[u8],
+        _mime: &str,
+    ) -> Result<String, mandara_plugin::ImageStoreError> {
         let n = self.count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(format!("{:064x}", bytes.len() as u128 + n as u128))
     }
@@ -244,7 +248,8 @@ fn runaway_plugin_is_trapped_by_epoch_deadline() {
         .get_chapter(&values, "hello-1", 0)
         .expect_err("spin must trap");
     match err {
-        Error::Plugin(msg) => {
+        Error::Runtime(source) => {
+            let msg = format!("{source:#}");
             assert!(
                 msg.contains("interrupt")
                     || msg.contains("epoch")

@@ -98,9 +98,7 @@ diesel::define_sql_function! {
 fn source_ext_column(ext: Option<&serde_json::Value>) -> Result<String, ApiError> {
     match ext {
         None => Ok("{}".into()),
-        Some(v) => BookExt::from_value(v.clone())
-            .map(|e| e.to_column())
-            .map_err(ApiError::bad_request),
+        Some(v) => Ok(BookExt::from_value(v.clone())?.to_column()),
     }
 }
 
@@ -349,8 +347,7 @@ impl Library {
         {
             let mut conn = self.diesel_db.get().await?;
             for entry in result.items {
-                let book = SourceBook::try_from(entry)
-                    .map_err(|e| ApiError::bad_request(format!("invalid search result: {e}")))?;
+                let book = SourceBook::try_from(entry)?;
                 let book_id: Option<String> = schema::book_files::table
                     .filter(
                         schema::book_files::source
@@ -732,7 +729,7 @@ impl Library {
         let book_id = uuid::Uuid::new_v4().simple().to_string();
         let authors_json = serde_json::to_string(authors).unwrap_or_else(|_| "[]".into());
         let mut ext = ext.cloned().unwrap_or_default();
-        ext.sanitize().map_err(ApiError::bad_request)?;
+        ext.sanitize()?;
         diesel::insert_into(schema::books::table)
             .values((
                 schema::books::id.eq(&book_id),
@@ -1304,13 +1301,12 @@ impl Library {
             .cover_url
             .clone()
             .or_else(|| base.cover_url.clone());
-        let series_ext =
-            SeriesExt::from_source(base.ext.as_ref()).map_err(ApiError::bad_request)?;
+        let series_ext = SeriesExt::from_source(base.ext.as_ref())?;
         // Extended metadata: the metadata entry's object, manual
         // overrides win per-key. The series keeps its own subset of the
         // same object.
         let mut book_ext = match &base.ext {
-            Some(v) => BookExt::from_value(v.clone()).map_err(ApiError::bad_request)?,
+            Some(v) => BookExt::from_value(v.clone())?,
             None => BookExt::default(),
         };
         if let Some(o) = &overrides.ext {
@@ -1318,7 +1314,7 @@ impl Library {
             // Override values are user-supplied; re-sanitize (trim,
             // ISBN normalization) so they land normalized like every
             // other create path.
-            book_ext.sanitize().map_err(ApiError::bad_request)?;
+            book_ext.sanitize()?;
         }
         let book_ext_json = book_ext.to_column();
 
@@ -1477,8 +1473,7 @@ impl Library {
         let entry = self.plugins.get_book(source, book_id).await?;
         entry
             .map(SourceBook::try_from)
-            .transpose()
-            .map_err(|e| ApiError::bad_request(format!("invalid plugin book entry: {e}")))?
+            .transpose()?
             .ok_or_else(|| ApiError::bad_request(format!("plugin does not offer book `{book_id}`")))
     }
 
@@ -1595,7 +1590,7 @@ impl Library {
         if let Some(o) = &overrides.ext {
             ext.apply_override(o);
         }
-        ext.sanitize().map_err(ApiError::bad_request)?;
+        ext.sanitize()?;
         diesel::insert_into(schema::books::table)
             .values((
                 schema::books::id.eq(&book_id),
@@ -1937,8 +1932,7 @@ impl Library {
                         }
                     }
                 }
-                let merged = BookExt::from_value(serde_json::Value::Object(map))
-                    .map_err(ApiError::bad_request)?;
+                let merged = BookExt::from_value(serde_json::Value::Object(map))?;
                 Some(merged.to_column())
             }
         };
@@ -1991,8 +1985,7 @@ impl Library {
                 map.insert(k.clone(), v.clone());
             }
         }
-        let ext =
-            BookExt::from_value(serde_json::Value::Object(map)).map_err(ApiError::bad_request)?;
+        let ext = BookExt::from_value(serde_json::Value::Object(map))?;
         diesel::update(schema::books::table.find(id))
             .set(schema::books::ext_meta.eq(ext.to_column()))
             .execute(&mut self.diesel_db.get().await?)
@@ -2057,8 +2050,7 @@ impl Library {
                     "source `{meta_src}` no longer offers book `{meta_ext_id}`"
                 ))
             })?;
-            let entry = SourceBook::try_from(entry)
-                .map_err(|e| ApiError::bad_request(format!("invalid plugin book entry: {e}")))?;
+            let entry = SourceBook::try_from(entry)?;
             let authors = serde_json::to_string(&entry.authors).unwrap_or_else(|_| "[]".into());
             let ext_json = source_ext_column(entry.ext.as_ref())?;
             diesel::update(schema::books::table.find(book_id))
@@ -2087,8 +2079,7 @@ impl Library {
                     "source `{source_id}` no longer offers book `{external_id}`"
                 ))
             })?;
-            let entry = SourceBook::try_from(entry)
-                .map_err(|e| ApiError::bad_request(format!("invalid plugin book entry: {e}")))?;
+            let entry = SourceBook::try_from(entry)?;
 
             let (content_inst, content_id) = self.plugins.content_target(source_id, &entry);
             let titles = self
@@ -2329,8 +2320,7 @@ impl Library {
                     map.insert(k.clone(), v.clone());
                 }
             }
-            let ext = SeriesExt::from_value(serde_json::Value::Object(map))
-                .map_err(ApiError::bad_request)?;
+            let ext = SeriesExt::from_value(serde_json::Value::Object(map))?;
             diesel::update(schema::series::table.find(id))
                 .set(schema::series::ext_meta.eq(ext.to_column()))
                 .execute(&mut self.diesel_db.get().await?)
@@ -2792,7 +2782,7 @@ impl Library {
                 .plugins
                 .get_book(source_id, external_id)
                 .await
-                .map_err(|e| warn!(source = %source_id, book = %external_id, "file-mode metadata unavailable: {e}"))
+                .inspect_err(|e| warn!(source = %source_id, book = %external_id, "file-mode metadata unavailable: {e}"))
                 .ok()
                 .flatten()
                 .and_then(|entry| match SourceBook::try_from(entry) {

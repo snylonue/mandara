@@ -10,6 +10,7 @@ description = "mandara plugin: Bangumi (bgm.tv) book-subject metadata source (se
 crate-type = ["cdylib"]
 
 [dependencies]
+thiserror.workspace = true
 wit-bindgen = "0.60"
 serde = { workspace = true }
 serde_json = { workspace = true }

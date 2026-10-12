@@ -3,7 +3,7 @@
 //! Encodings: UTF-8 (BOM or valid), UTF-16 (BOM), otherwise GB18030 (common
 //! for Chinese light novels downloaded as txt).
 
-use mandara_core::error::{Error, Result};
+use crate::error::Result;
 use mandara_core::ext::BookExt;
 use mandara_core::model::TocNode;
 
@@ -55,8 +55,7 @@ pub fn parse(bytes: &[u8], filename: &str) -> Result<ParsedBook> {
 /// Decode bytes into text, detecting the encoding.
 fn decode(bytes: &[u8]) -> Result<String> {
     if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
-        return String::from_utf8(bytes[3..].to_vec())
-            .map_err(|_| Error::InvalidArgument("invalid utf-8 content".into()));
+        return Ok(String::from_utf8(bytes[3..].to_vec())?);
     }
     if bytes.starts_with(&[0xFF, 0xFE]) || bytes.starts_with(&[0xFE, 0xFF]) {
         let (cow, _enc, _had_errors) = encoding_rs::UTF_16LE.decode(bytes);

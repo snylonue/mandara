@@ -8,6 +8,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use mandara_plugin::ImageStoreError;
+
 use crate::db::DieselDb;
 
 use super::library::store_image;
@@ -33,10 +35,10 @@ impl DbImageStore {
 }
 
 impl mandara_plugin::host::ImageStore for DbImageStore {
-    fn store_image(&self, bytes: &[u8], mime: &str) -> std::result::Result<String, String> {
-        self.rt
-            .block_on(store_image(&self.db, &self.files_dir, bytes, mime))
-            .map(|id| id.to_string())
-            .map_err(|e| e.to_string())
+    fn store_image(&self, bytes: &[u8], mime: &str) -> Result<String, ImageStoreError> {
+        Ok(self
+            .rt
+            .block_on(store_image(&self.db, &self.files_dir, bytes, mime))?
+            .to_string())
     }
 }

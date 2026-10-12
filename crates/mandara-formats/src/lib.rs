@@ -8,13 +8,14 @@ mod epub_container;
 mod epub_reference;
 mod epub_render;
 mod epub_uri;
+pub mod error;
 pub mod htmlize;
 pub mod imgdim;
 pub mod txt;
 
 use std::path::Path;
 
-use mandara_core::error::{Error, Result};
+use crate::error::{Error, Result};
 use mandara_core::ext::BookExt;
 use mandara_core::model::TocNode;
 
@@ -79,7 +80,7 @@ pub fn parse(bytes: &[u8], filename: &str) -> Result<ParsedBook> {
     } else if name.ends_with(".txt") || name.ends_with(".text") {
         txt::parse(bytes, name)
     } else {
-        Err(Error::UnsupportedFormat(filename.into()))
+        Err(Error::UnsupportedFormat)
     }
 }
 
@@ -90,7 +91,7 @@ mod tests {
     #[test]
     fn rejects_unknown_extension() {
         let err = parse(b"hello", "book.pdf").unwrap_err();
-        assert!(matches!(err, Error::UnsupportedFormat(_)));
+        assert!(matches!(err, Error::UnsupportedFormat));
     }
 
     #[test]

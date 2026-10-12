@@ -9,11 +9,11 @@ pub enum Error {
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
 
-    #[error("unsupported format: {0}")]
-    UnsupportedFormat(String),
+    #[error("unsupported format")]
+    UnsupportedFormat,
 
     #[error("plugin error: {0}")]
-    Plugin(String),
+    Plugin(#[source] Box<dyn std::error::Error + Send + Sync>),
 
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),

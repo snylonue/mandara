@@ -97,21 +97,27 @@ pub struct FetchResponse {
 }
 
 /// Transport-level outcome (the WIT `fetch-error` variant).
-#[derive(Debug, Clone)]
+#[derive(Debug, thiserror::Error)]
 pub enum FetchError {
     /// Permanent: URL parse/protocol problem.
-    InvalidUrl(String),
+    #[error("invalid URL or request: {0}")]
+    InvalidUrl(#[source] anyhow::Error),
     /// Permanent: host policy rejected the URL. Never produced today —
     /// kept for WIT compat.
+    #[error("request denied: {0}")]
     Denied(String),
     /// Permanent: too many redirect hops.
+    #[error("redirect limit exceeded: {0}")]
     RedirectLimit(u32),
     /// Transient: the call exceeded its (capped) timeout.
+    #[error("request timed out after {0} ms")]
     Timeout(u64),
     /// Permanent: response exceeded the size cap.
+    #[error("response exceeds the {0} byte size cap")]
     SizeLimit(u64),
     /// Transient-if-connect: DNS/TLS/connection problem.
-    Transport(String),
+    #[error("transport error: {0}")]
+    Transport(#[source] anyhow::Error),
 }
 
 /// Headers the host manages itself; forwarding the plugin's own copies
@@ -126,18 +132,18 @@ fn is_host_managed_header(name: &str) -> bool {
 fn map_error(e: ureq::Error, policy_timeout_ms: u64) -> FetchError {
     match e {
         ureq::Error::Timeout(_) => FetchError::Timeout(policy_timeout_ms),
-        ureq::Error::BadUri(msg) => FetchError::InvalidUrl(msg),
+        e @ ureq::Error::BadUri(_) => FetchError::InvalidUrl(e.into()),
         ureq::Error::TooManyRedirects => FetchError::RedirectLimit(MAX_REDIRECTS),
         ureq::Error::RedirectFailed => FetchError::RedirectLimit(MAX_REDIRECTS),
         ureq::Error::BodyExceedsLimit(limit) => FetchError::SizeLimit(limit),
         ureq::Error::InvalidProxyUrl => {
             FetchError::Denied("invalid proxy URL in environment".into())
         }
-        ureq::Error::HostNotFound => FetchError::Transport("host not found".into()),
-        ureq::Error::Http(e) => FetchError::Transport(format!("http: {e}")),
-        ureq::Error::Protocol(e) => FetchError::Transport(format!("protocol: {e}")),
-        ureq::Error::Io(e) => FetchError::Transport(format!("io: {e}")),
-        other => FetchError::Transport(format!("{other}")),
+        // ureq does not expose these inner errors through Error::source().
+        ureq::Error::Http(e) => FetchError::Transport(e.into()),
+        ureq::Error::Protocol(e) => FetchError::Transport(e.into()),
+        ureq::Error::Io(e) => FetchError::Transport(e.into()),
+        other => FetchError::Transport(other.into()),
     }
 }
 
@@ -146,10 +152,8 @@ fn log_url(url: &str) -> String {
 }
 
 fn resolve_redirect(from: &str, location: &str) -> Result<(String, bool), FetchError> {
-    let base = Url::parse(from).map_err(|e| FetchError::InvalidUrl(e.to_string()))?;
-    let next = base
-        .join(location)
-        .map_err(|e| FetchError::InvalidUrl(e.to_string()))?;
+    let base = Url::parse(from)?;
+    let next = base.join(location)?;
     let same_origin = base.scheme() == next.scheme()
         && base.host_str() == next.host_str()
         && base.port_or_known_default() == next.port_or_known_default();
@@ -235,10 +239,8 @@ pub fn fetch(policy: &FetchPolicy, request: FetchRequest) -> Result<FetchRespons
             }
             // Each branch keeps its own concrete body type (unit vs byte slice).
             let result = match current_body.as_deref() {
-                Some(bytes) if !bytes.is_empty() => {
-                    agent.run(builder.body(bytes).map_err(invalid_request)?)
-                }
-                _ => agent.run(builder.body(()).map_err(invalid_request)?),
+                Some(bytes) if !bytes.is_empty() => agent.run(builder.body(bytes)?),
+                _ => agent.run(builder.body(())?),
             };
             let response = match result {
                 Ok(response) => response,
@@ -285,8 +287,16 @@ pub fn fetch(policy: &FetchPolicy, request: FetchRequest) -> Result<FetchRespons
     }
 }
 
-fn invalid_request(e: ureq::http::Error) -> FetchError {
-    FetchError::InvalidUrl(format!("invalid request: {e}"))
+impl From<ureq::http::Error> for FetchError {
+    fn from(e: ureq::http::Error) -> Self {
+        Self::InvalidUrl(e.into())
+    }
+}
+
+impl From<url::ParseError> for FetchError {
+    fn from(e: url::ParseError) -> Self {
+        Self::InvalidUrl(e.into())
+    }
 }
 
 fn finish(
