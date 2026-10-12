@@ -49,10 +49,16 @@ wit_bindgen::generate!({
 });
 
 const DEFAULT_BASE_URL: &str = "https://www.wenku8.net";
-const DEFAULT_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
+const DEFAULT_UA: &str =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:158.0) Gecko/20100101 Firefox/158.0";
 
 /// Config schema field order — the host injects values in this order.
-const FIELDS: [&str; 3] = ["base-url", "referer", "illustration-placement"];
+const FIELDS: [&str; 4] = [
+    "base-url",
+    "referer",
+    "illustration-placement",
+    "user-agent",
+];
 
 /// fn values() reads the injected config once per call.
 fn values() -> Vec<ConfigValue> {
@@ -102,12 +108,13 @@ fn log_error(context: &str, url: &str, err: &(impl std::fmt::Display + ?Sized)) 
 /// retried once — see the retry guidance in docs/plugin-http-api-design.md
 /// §4.3; the call budget covers two attempts.
 fn http_get(url: &str, referer: &str) -> Result<(u16, Vec<u8>), mandara::plugin::http::FetchError> {
+    let user_agent = config_string("user-agent", DEFAULT_UA);
     let mut attempt = 0;
     loop {
         attempt += 1;
         let mut headers = vec![mandara::plugin::http::Header {
             name: "User-Agent".into(),
-            value: DEFAULT_UA.into(),
+            value: user_agent.clone(),
         }];
         if !referer.is_empty() {
             headers.push(mandara::plugin::http::Header {
@@ -990,6 +997,14 @@ impl Guest for Wenku8Plugin {
                 hint: Some(
                     "wenku8 把每卷的插画章放在卷尾：默认保留原文位置；可选移到卷首或跳过".into(),
                 ),
+            },
+            ConfigField {
+                key: "user-agent".into(),
+                label: "User-Agent（UA）".into(),
+                kind: mandara::plugin::config::ConfigKind::Text,
+                default: Some(DEFAULT_UA.into()),
+                required: false,
+                hint: Some("所有站点请求（包括图片）使用的 UA；留空使用默认浏览器 UA".into()),
             },
         ]
     }

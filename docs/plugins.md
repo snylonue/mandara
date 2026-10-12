@@ -380,9 +380,10 @@ sync and refresh preserve that user-selected binding.
   browsed by their numeric series id (the number in the book URL, e.g.
   `3617`) and acquired by selecting an independently identified volume — the library source browser's manual-id entry, and the
   rebind dialog, support lookup-only sources. Config: `base-url`
-  (mirror-switchable), optional `referer` override, and
-  `illustration-placement` — wenku8 appends an `插图` (color plates)
-  chapter at the *end of every volume*; the plugin keeps it **in that
+  (mirror-switchable), optional `referer` override, `user-agent` (used
+  for every request, including images; omitted or empty uses the default
+  browser UA), and `illustration-placement` — wenku8 appends an `插图`
+  (color plates) chapter at the *end of every volume*; the plugin keeps it **in that
   original position** by default (`end`), or moves it to the volume
   front like the physical book / linovelib2epub (`front`), or drops it
   (`skip`). Plates are extracted
