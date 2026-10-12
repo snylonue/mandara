@@ -1,26 +1,13 @@
-// The unified "add" dialog (添加书籍 / 新建系列 → 一个对话框，两个预设入口).
-//
-// Two top-level modes, switched with the radio at the top:
-//   - book mode (添加书籍): ① 选择元数据来源（手动 / 从插件源）→
-//     ② 添加若干内容（上传文件 / 从插件源 — 两者可同时选择，且都能选
-//     多份）；**每个内容项有自己的文件设置**（可见性 / 备注）。一次提交
-//     把全部内容挂到同一书目条目下 —— 第一项内容创建元数据条目
-//     （`POST /api/books`，手动字段或 `meta_plugin_*`），其余内容依次带
-//     `book_id` 挂上（一个元数据 ⇔ 多文件）。一项失败不影响其余。
-//     都不选则仅添加元数据（可在详情页稍后补充内容）。
-//   - series mode (新建系列): ① 选择元数据来源（手动 / 从插件源）。
-//     手动 → `POST /api/series`；插件 → 以内容方式获取该插件书，后端按卷
-//     拆分自动生成系列（bangumi 系列条目即此路径）。
-//
-// The metadata source and the content source stay orthogonal, exactly like
-// the backend `POST /api/books` contract (meta_plugin_* vs plugin_source).
+// Add either one book with independently selected content, or an explicit series.
+// Plugin series selection previews members; only checked books are imported,
+// as metadata without files. Manual series creation remains metadata-only.
 
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { ExtMetaForm, type ExtRecord } from "./ExtMetaForm";
 import { Modal } from "./Modal";
-import { SourceSearchPane, type SourcePick } from "./SourceSearch";
+import { SourceSearchPane, type SourcePick, type SeriesSourcePick } from "./SourceSearch";
 import { useToast } from "./toast";
 import type {
   AcquireResult,
@@ -86,6 +73,8 @@ export function AddDialog({
 
   // Plugin pick for the metadata source (①).
   const [pluginMetaRef, setPluginMetaRef] = useState<SourcePick | null>(null);
+  const [pluginSeriesRef, setPluginSeriesRef] = useState<SeriesSourcePick | null>(null);
+  const [selectedVolumes, setSelectedVolumes] = useState<string[]>([]);
 
   // Manual metadata fields.
   const [title, setTitle] = useState("");
@@ -105,6 +94,8 @@ export function AddDialog({
     setContents([]);
     setDialogError(null);
     setPluginMetaRef(null);
+    setPluginSeriesRef(null);
+    setSelectedVolumes([]);
     setTitle("");
     setAuthors("");
     setDescription("");
@@ -126,11 +117,22 @@ export function AddDialog({
   /** Adopt a picked source entry as the metadata source (①). */
   function usePluginMeta(pick: SourcePick) {
     setPluginMetaRef(pick);
-    // Manual-id picks carry no metadata (the id is a lookup key); only
-    // prefill the refinement fields when the pick has metadata.
+    // Book selection carries resolved metadata, including manual-ID lookup.
     setTitle(pick.item.title);
     setAuthors(pick.item.authors.join("，"));
     setDescription(pick.item.description ?? "");
+    setDialogError(null);
+  }
+
+  function clearPluginSeries() {
+    setPluginSeriesRef(null);
+    setSelectedVolumes([]);
+    setDialogError(null);
+  }
+
+  function usePluginSeries(pick: SeriesSourcePick) {
+    setPluginSeriesRef(pick);
+    setSelectedVolumes([]);
     setDialogError(null);
   }
 
@@ -286,7 +288,7 @@ export function AddDialog({
       setDialogError(t("library.manualNeedsTitle"));
       return;
     }
-    if (seriesMeta === "plugin" && !pluginMetaRef) {
+    if (seriesMeta === "plugin" && !pluginSeriesRef) {
       setDialogError(t("library.pickMetaFromSeries"));
       return;
     }
@@ -295,38 +297,11 @@ export function AddDialog({
     try {
       let series: SeriesBrief;
       if (seriesMeta === "plugin") {
-        // 从插件源: acquire the plugin book as content. A multi-volume
-        // source (e.g. bangumi 系列条目) splits into a series + one book
-        // per 卷; a single-volume one creates a bare metadata entry whose
-        // content can be attached later.
-        const form = new FormData();
-        form.append("visibility", "public");
-        form.append("plugin_source", pluginMetaRef!.instance.id);
-        form.append("plugin_book_id", pluginMetaRef!.item.id);
-        const result = await api<AcquireResult>("/books", {
+        // Import the series itself and only explicitly checked book metadata.
+        series = await api<SeriesBrief>(`/plugins/${pluginSeriesRef!.instance.id}/series`, {
           method: "POST",
-          body: form,
+          body: JSON.stringify({ series_id: pluginSeriesRef!.item.id, book_ids: selectedVolumes }),
         });
-        if (result.series) {
-          series = result.series;
-        } else {
-          // Single-volume: create a series for it and move the book in.
-          const s = await api<SeriesBrief>("/series", {
-            method: "POST",
-            body: JSON.stringify({
-              title: result.books[0]?.book.title ?? pluginMetaRef!.item.title,
-              authors: result.books[0]?.book.authors ?? [],
-            }),
-          });
-          series = s;
-          const bookId = result.books[0]?.book.id;
-          if (bookId) {
-            await api(`/books/${bookId}`, {
-              method: "PATCH",
-              body: JSON.stringify({ series_id: s.id }),
-            });
-          }
-        }
         toast.push("success", t("series.created", { title: series.title }));
         onSeriesCreated?.(series);
       } else {
@@ -359,14 +334,25 @@ export function AddDialog({
   const inBookMode = mode === "book";
   const contentCount = contents.length;
   const fileCount = contents.filter((c) => c.kind === "file").length;
-  const seriesMetaPane = (
+  const metadataPane = (
     <SourceSearchPane
+      key="book-metadata"
       instances={instances}
       filter={(i) => i.enabled && i.capabilities.includes("lookup")}
-      pickLabel={() =>
-        inBookMode ? t("library.useAsMetadataSource") : t("library.useAsSeriesSource")
-      }
-      onPick={(pick) => usePluginMeta(pick)}
+      pickLabel={() => t("library.useAsMetadataSource")}
+      onPick={usePluginMeta}
+    />
+  );
+  const seriesPane = (
+    <SourceSearchPane
+      key="series-metadata"
+      target="series"
+      disabled={uploading}
+      instances={instances}
+      filter={(i) => i.enabled && i.capabilities.includes("lookup")}
+      pickLabel={() => t("library.useAsSeriesSource")}
+      onPick={usePluginSeries}
+      onClear={clearPluginSeries}
     />
   );
 
@@ -403,11 +389,11 @@ export function AddDialog({
         <h3>{t("library.sectionWhat")}</h3>
         <div className="row">
           <label className="radio">
-            <input type="radio" checked={inBookMode} onChange={() => setMode("book")} />
+            <input type="radio" checked={inBookMode} onChange={() => { setMode("book"); setDialogError(null); }} />
             {t("library.whatBook")}
           </label>
           <label className="radio">
-            <input type="radio" checked={!inBookMode} onChange={() => setMode("series")} />
+            <input type="radio" checked={!inBookMode} onChange={() => { setMode("series"); setDialogError(null); }} />
             {t("library.whatSeries")}
           </label>
         </div>
@@ -435,7 +421,7 @@ export function AddDialog({
                 {t("library.modePlugin")}
               </label>
             </div>
-            {meta === "plugin" && <div className="field">{seriesMetaPane}</div>}
+            {meta === "plugin" && <div className="field">{metadataPane}</div>}
             {meta === "manual" && (
               <div className="field">
                 <input
@@ -588,7 +574,38 @@ export function AddDialog({
               <p className="hint">{t("series.createHint")}</p>
             </div>
           )}
-          {seriesMeta === "plugin" && <div className="field">{seriesMetaPane}</div>}
+          {seriesMeta === "plugin" && <div className="field">{seriesPane}</div>}
+          {seriesMeta === "plugin" && pluginSeriesRef && (
+            <div className="field">
+              <p className="strong">{t("library.selectedSeries", { title: pluginSeriesRef.item.title })}</p>
+              <p className="hint">{pluginSeriesRef.item.authors.join(" / ")}</p>
+              {pluginSeriesRef.item.description && <p className="hint">{pluginSeriesRef.item.description}</p>}
+              <h3>{t("library.seriesMemberSelection", { count: selectedVolumes.length })}</h3>
+              <p className="hint">{t("library.seriesMetadataOnlyHint")}</p>
+              {pluginSeriesRef.books.length > 0 && <div className="row">
+                <button disabled={uploading} onClick={() => setSelectedVolumes(pluginSeriesRef.books.map((book) => book.id))}>{t("library.selectAllVolumes")}</button>
+                <button disabled={uploading} onClick={() => setSelectedVolumes([])}>{t("library.clearVolumes")}</button>
+              </div>}
+              <ul className="source-results">
+                {pluginSeriesRef.books.map((book) => (
+                  <li key={book.id} className="source-result">
+                    <label className="radio">
+                      <input
+                        type="checkbox"
+                        disabled={uploading}
+                        checked={selectedVolumes.includes(book.id)}
+                        onChange={(e) => {
+                          const checked = e.target.checked;
+                          setSelectedVolumes((prev) => checked ? [...prev, book.id] : prev.filter((id) => id !== book.id));
+                        }}
+                      />
+                      <span>{book.title}</span>
+                    </label>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </section>
       )}
 
@@ -606,7 +623,7 @@ export function AddDialog({
                 : t("library.addBook")}
           </button>
         ) : (
-          <button className="btn primary" onClick={() => void submitSeries()} disabled={uploading}>
+          <button className="btn primary" onClick={() => void submitSeries()} disabled={uploading || (seriesMeta === "plugin" && !pluginSeriesRef)}>
             {uploading ? t("library.uploading") : t("series.create")}
           </button>
         )}

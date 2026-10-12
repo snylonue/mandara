@@ -103,6 +103,10 @@ pub fn router(state: St) -> Router {
         .route("/api/plugins/{id}/config", put(plugins::put_plugin_config))
         .route("/api/plugins/{id}/search", get(plugins::search_plugins))
         .route("/api/plugins/{id}/lookup", get(plugins::lookup_plugin))
+        .route(
+            "/api/plugins/{id}/series",
+            get(plugins::lookup_series).post(plugins::import_series),
+        )
         .route("/api/plugins/{id}/books", post(plugins::materialize_book))
         .route(
             "/api/series",

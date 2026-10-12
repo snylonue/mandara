@@ -320,6 +320,62 @@ fn search_item(entry: mandara_plugin::CatalogEntry, book_id: Option<String>) -> 
     }
 }
 
+#[derive(Serialize)]
+pub struct SeriesLookupResponse {
+    pub series: SearchItem,
+    pub books: Vec<SearchItem>,
+}
+
+pub async fn lookup_series(
+    State(st): State<St>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(params): Query<LookupParams>,
+) -> Result<impl IntoResponse, ApiError> {
+    current_user(&st, &headers).await?;
+    if params.q.trim().is_empty() {
+        return Err(ApiError::bad_request("series ID must not be empty"));
+    }
+    let result = st
+        .library
+        .plugins()
+        .get_series(&id, &params.q)
+        .await?
+        .ok_or_else(|| ApiError::not_found("plugin series"))?;
+    Ok(Json(SeriesLookupResponse {
+        series: search_item(mandara_plugin::CatalogEntry::Series(result.series), None),
+        books: result
+            .books
+            .into_iter()
+            .map(|book| search_item(mandara_plugin::CatalogEntry::Single(book), None))
+            .collect(),
+    }))
+}
+
+#[derive(Deserialize)]
+pub struct ImportSeries {
+    pub series_id: String,
+    #[serde(default)]
+    pub book_ids: Vec<String>,
+}
+
+pub async fn import_series(
+    State(st): State<St>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(req): Json<ImportSeries>,
+) -> Result<impl IntoResponse, ApiError> {
+    let user = current_user(&st, &headers).await?;
+    let series = st
+        .library
+        .import_plugin_series(&user, &id, &req.series_id, &req.book_ids)
+        .await?;
+    Ok((
+        axum::http::StatusCode::CREATED,
+        Json(crate::routes::series::SeriesBrief::from_meta(&st, series).await?),
+    ))
+}
+
 #[derive(Deserialize)]
 pub struct LookupParams {
     pub q: String,

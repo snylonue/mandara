@@ -475,25 +475,68 @@ impl Library {
             .ok_or_else(|| ApiError::not_found("file"))
     }
 
-    /// Create/update the metadata entry and virtual file of a plugin book.
-    /// Chapters/sessions don't exist yet; `titles` only fixes the
-    /// `chapter_count` (placeholder rows are ensured separately).
-    ///
-    /// `owner` claims the metadata when it has no creator yet (uploads
-    /// identified as this plugin book, or a user picking the book from
-    /// the source browser) and becomes the owner of a newly created
-    /// virtual file.
-    /// Resolve/create the metadata entry for a plugin book (idempotent)
-    /// and keep it fresh from the source — WITHOUT creating any content
-    /// file. This is the metadata half of [`Self::ensure_plugin_book`],
-    /// decoupled from the content half so a book can take its metadata
-    /// from a plugin while its content comes from elsewhere (an uploaded
-    /// file or another plugin) without a spurious empty virtual file.
-    ///
-    /// Reuses an existing entry recorded for this plugin book
-    /// (`books.meta_source`/`meta_external_id`, the canonical record of
-    /// metadata provenance), claiming it as `owner` when it has no
-    /// creator yet. `owner` is `None` for ownerless startup syncs.
+    /// Import explicit series metadata and only the selected member books, without content.
+    pub async fn import_plugin_series(
+        &self,
+        user: &User,
+        source: &str,
+        series_id: &str,
+        book_ids: &[String],
+    ) -> Result<SeriesMeta, ApiError> {
+        if series_id.trim().is_empty() {
+            return Err(ApiError::bad_request("series ID must not be empty"));
+        }
+        let result = self
+            .plugins
+            .get_series(source, series_id)
+            .await?
+            .ok_or_else(|| ApiError::not_found("plugin series"))?;
+        let series = SourceSeries::try_from(result.series)?;
+        let members: std::collections::HashSet<_> =
+            result.books.iter().map(|b| b.id.as_str()).collect();
+        let mut selected = std::collections::HashSet::new();
+        let mut books = Vec::with_capacity(book_ids.len());
+        // Validate membership and resolve full book metadata before writing anything.
+        for id in book_ids {
+            if !members.contains(id.as_str()) || !selected.insert(id) {
+                return Err(ApiError::bad_request(
+                    "book IDs must be distinct members of the selected series",
+                ));
+            }
+            let book = self
+                .plugins
+                .get_book(source, id)
+                .await?
+                .ok_or_else(|| ApiError::not_found("plugin member book"))?;
+            let book = SourceBook::try_from(book)?;
+            if book.id != *id || book.series.as_ref().map(|s| &s.id) != Some(&series.id) {
+                return Err(ApiError::bad_request(
+                    "member book does not belong to the selected series",
+                ));
+            }
+            books.push(book);
+        }
+        for book in books {
+            self.resolve_plugin_metadata(source, Some(&user.id), &book)
+                .await?;
+        }
+        let id = self
+            .resolve_plugin_series(source, Some(&user.id), &series)
+            .await?;
+        // Claim previously unowned metadata, without replacing another creator.
+        diesel::update(schema::series::table.find(&id))
+            .set(
+                schema::series::created_by
+                    .eq(coalesce(schema::series::created_by, user.id.as_str())),
+            )
+            .execute(&mut self.diesel_db.get().await?)
+            .await?;
+        self.get_series(&id)
+            .await?
+            .ok_or_else(|| ApiError::not_found("series"))
+    }
+
+    /// Resolve series metadata by canonical plugin-instance provenance.
     async fn resolve_plugin_series(
         &self,
         source: &str,
@@ -541,6 +584,7 @@ impl Library {
             .await?)
     }
 
+    /// Resolve book metadata and its explicit parent series without creating content files.
     async fn resolve_plugin_metadata(
         &self,
         source: &str,

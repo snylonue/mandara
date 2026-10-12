@@ -39,6 +39,7 @@ export type ShareBookResponse = Schemas["ShareBookResponse"];
 export type PluginInstance = Schemas["PluginInstance"];
 export type PluginSearchItem = Schemas["PluginSearchItem"];
 export type PluginSearchResponse = Schemas["PluginSearchResponse"];
+export type PluginSeriesLookupResponse = Schemas["PluginSeriesLookupResponse"];
 export type ConfigField = Schemas["ConfigField"];
 export type ConfigSchema = Schemas["ConfigSchema"];
 export type ConfigError = Schemas["ConfigError"];

@@ -22,9 +22,15 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api, ApiError } from "../api";
 import { Modal } from "./Modal";
-import type { PluginInstance, PluginSearchItem, PluginSearchResponse } from "../types";
+import type { PluginInstance, PluginSearchItem, PluginSearchResponse, PluginSeriesLookupResponse } from "../types";
 
 export const SEARCH_PAGE_SIZE = 10;
+
+export type SeriesSourcePick = {
+  instance: PluginInstance;
+  item: PluginSeriesLookupResponse["series"];
+  books: PluginSeriesLookupResponse["books"];
+};
 
 export type SourcePick = {
   instance: PluginInstance;
@@ -105,18 +111,22 @@ export async function searchSource(
   return api<PluginSearchResponse>(`/plugins/${instanceId}/search?${params}`);
 }
 
-export function SourceSearchPane({
-  instances,
-  filter,
-  onPick,
-  pickLabel,
-}: {
+type SourceSearchProps = {
   instances: PluginInstance[];
   filter: (i: PluginInstance) => boolean;
-  onPick: (pick: SourcePick) => Promise<void> | void;
-  /** Optional custom label for the pick button ("加入书架" by default). */
   pickLabel?: (item: PluginSearchItem) => string;
-}) {
+  disabled?: boolean;
+} & ({
+  target?: "book";
+  onPick: (pick: SourcePick) => Promise<void> | void;
+} | {
+  target: "series";
+  onPick: (pick: SeriesSourcePick) => Promise<void> | void;
+  onClear: () => void;
+});
+
+export function SourceSearchPane(props: SourceSearchProps) {
+  const { instances, filter, pickLabel } = props;
   const { t } = useTranslation();
   const options = instances.filter(filter);
   const [sel, setSel] = useState("");
@@ -127,7 +137,9 @@ export function SourceSearchPane({
   const [picking, setPicking] = useState<string | null>(null);
   const [pickError, setPickError] = useState<string | null>(null);
   const [manual, setManual] = useState("");
+  const [nextOffset, setNextOffset] = useState(0);
   const seq = useRef(0);
+  useEffect(() => () => { ++seq.current; }, []);
 
   const selected = options.find((i) => i.id === sel);
   const interaction = selected ? sourceInteraction(selected) : null;
@@ -149,7 +161,7 @@ export function SourceSearchPane({
     setError(null);
     try {
       const r = await searchSource(instanceId, query, offset);
-      if (seq.current === mySeq) setResult(r);
+      if (seq.current === mySeq) { setResult(r); setNextOffset(offset + r.items.length); }
     } catch (e) {
       if (seq.current !== mySeq) return;
       setError(e instanceof Error ? e.message : t("common.failed"));
@@ -165,7 +177,11 @@ export function SourceSearchPane({
   // search term).
   useEffect(() => {
     ++seq.current;
+    if (props.target === "series") props.onClear();
+    setNextOffset(0);
+    setPickError(null);
     if (!sel || !showSearch) {
+      setLoading(false);
       setResult(null);
       setError(null);
       return;
@@ -173,20 +189,30 @@ export function SourceSearchPane({
     setResult(null); // drop the previous page while the new search loads
     void load(sel, q, 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sel, q, showSearch]);
+  }, [sel, q, showSearch, props.target]);
 
   const total = result?.total ?? 0;
-  const shown = result?.items.length ?? 0;
+  const items = (result?.items ?? []).filter((item) => props.target !== "series" || item.kind === "series");
 
   async function lookup(key: string) {
-    if (!selected) return;
+    if (!selected || props.disabled) return;
     const mySeq = ++seq.current;
+    if (props.target === "series") props.onClear();
     setLoading(true);
     setError(null);
     try {
       const params = new URLSearchParams({ q: key });
-      const r = await api<PluginSearchResponse>(`/plugins/${selected.id}/lookup?${params}`);
-      if (seq.current === mySeq) setResult(r);
+      if (props.target === "series") {
+        const r = await api<PluginSeriesLookupResponse>(`/plugins/${selected.id}/series?${params}`);
+        if (seq.current === mySeq) {
+          setResult({ total: 1, items: [r.series] });
+          setNextOffset(1);
+          await props.onPick({ instance: selected, item: r.series, books: r.books });
+        }
+      } else {
+        const r = await api<PluginSearchResponse>(`/plugins/${selected.id}/lookup?${params}`);
+        if (seq.current === mySeq) { setResult(r); setNextOffset(r.total); }
+      }
     } catch (e) {
       if (seq.current === mySeq) {
         setResult(null);
@@ -198,11 +224,12 @@ export function SourceSearchPane({
   }
 
   function pick(item: PluginSearchItem) {
-    if (!selected) return;
+    if (!selected || props.disabled) return;
+    if (props.target === "series") { if (item.kind === "series") void lookup(item.id); return; }
     if (item.kind === "series") { void lookup(item.id); return; }
     setPickError(null);
     setPicking(item.id);
-    Promise.resolve(onPick({ instance: selected, item }))
+    Promise.resolve(props.onPick({ instance: selected, item }))
       .catch((e) => setPickError(e instanceof ApiError ? e.message : String(e)))
       .finally(() => setPicking(null));
   }
@@ -210,7 +237,7 @@ export function SourceSearchPane({
   return (
     <div className="source-search">
       <div className="row">
-        <select value={sel} onChange={(e) => setSel(e.target.value)}>
+        <select disabled={props.disabled} value={sel} onChange={(e) => setSel(e.target.value)}>
           <option value="">{t("plugin.chooseSource")}</option>
           {options.map((i) => (
             <option key={i.id} value={i.id}>
@@ -221,7 +248,8 @@ export function SourceSearchPane({
         {sel && showSearch && selected && (
           <input
             className="search"
-            placeholder={searchPlaceholder(selected, t("plugin.searchPlaceholder"))}
+            disabled={props.disabled}
+            placeholder={props.target === "series" ? t("plugin.seriesSearchPlaceholder") : searchPlaceholder(selected, t("plugin.searchPlaceholder"))}
             value={q}
             onChange={(e) => setQ(e.target.value)}
           />
@@ -230,24 +258,30 @@ export function SourceSearchPane({
 
       {error && <div className="error">{error}</div>}
       {loading && <p className="hint">{t("common.loading")}</p>}
-      {!loading && !error && sel && result && result.items.length === 0 && (
-        <p className="hint">{t("plugin.noResults")}</p>
+      {!loading && !error && sel && result && items.length === 0 && (
+        <p className="hint">{t(props.target === "series" ? "plugin.noSeriesResults" : "plugin.noResults")}</p>
       )}
       {showManualId && sel && selected && (
         <div className="field">
-          {!showSearch && <p className="hint">{t("plugin.noSearch")}</p>}
-          {showSearch && <p className="hint">{t("plugin.manualIdAlso")}</p>}
+          {props.target === "series" ? <p className="hint">{t("plugin.manualSeriesIdAlso")}</p> : <>
+            {!showSearch && <p className="hint">{t("plugin.noSearch")}</p>}
+            {showSearch && <p className="hint">{t("plugin.manualIdAlso")}</p>}
+          </>}
           <div className="row">
             <input
-              placeholder={idHint(selected, t("plugin.manualIdPlaceholder"))}
+              disabled={props.disabled}
+              placeholder={props.target === "series" ? t("plugin.seriesIdPlaceholder") : idHint(selected, t("plugin.manualIdPlaceholder"))}
               value={manual}
-              onChange={(e) => setManual(e.target.value)}
-              aria-label={t("plugin.manualIdPlaceholder")}
+              onChange={(e) => {
+                setManual(e.target.value);
+                if (props.target === "series") { ++seq.current; props.onClear(); setResult(null); setLoading(false); }
+              }}
+              aria-label={t(props.target === "series" ? "plugin.seriesIdPlaceholder" : "plugin.manualIdPlaceholder")}
             />
             {manual.trim() && (
               <button
                 className="btn link"
-                disabled={picking !== null || loading}
+                disabled={props.disabled || picking !== null || loading}
                 onClick={() => void lookup(manual.trim())}
               >
                 {picking !== null ? t("common.loading") : t("plugin.useManualId")}
@@ -260,7 +294,7 @@ export function SourceSearchPane({
         <p className="hint">{t("plugin.browseSynced")}</p>
       )}
       <ul className="source-results">
-        {result?.items.map((item) => (
+        {items.map((item) => (
           <li key={item.id} className="source-result">
             <div>
               <span className="strong">{item.title}</span>
@@ -273,22 +307,22 @@ export function SourceSearchPane({
             </div>
             <button
               className="btn link"
-              disabled={picking !== null}
+              disabled={props.disabled || picking !== null || loading}
               onClick={() => pick(item)}
             >
-              {picking === item.id ? t("common.loading") : (item.kind === "series" ? t("plugin.browseSeries") : (pickLabel?.(item) ?? t("plugin.addToShelf")))}
+              {picking === item.id ? t("common.loading") : (item.kind === "series" && props.target !== "series" ? t("plugin.browseSeries") : (pickLabel?.(item) ?? t("plugin.addToShelf")))}
             </button>
           </li>
         ))}
       </ul>
-      {!loading && total > shown && (
+      {!loading && total > nextOffset && (
         <div className="row">
           <button
             className="btn link"
-            disabled={sel === ""}
-            onClick={() => void load(sel, q, shown)}
+            disabled={props.disabled || sel === "" || loading}
+            onClick={() => void load(sel, q, nextOffset)}
           >
-            {t("plugin.more", { total: String(total - shown) })}
+            {t("plugin.more", { total: String(total - nextOffset) })}
           </button>
         </div>
       )}

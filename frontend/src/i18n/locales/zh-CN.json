@@ -59,7 +59,7 @@
     "modePlugin": "从插件源选择",
     "modeManual": "手动填写",
     "pickMetaFromPlugin": "请先从插件源选择一本书作为元数据来源",
-    "pickMetaFromSeries": "请先从插件源选择一本书作为系列来源",
+    "pickMetaFromSeries": "请先查找并选择一个系列作为元数据来源",
     "bookPlaceholder": "书名",
     "authorsPlaceholder": "作者（逗号分隔）",
     "descriptionPlaceholder": "简介",
@@ -92,7 +92,12 @@
     "addedPartial": "添加完成，但 {{failed}} 项失败（{{ok}} 项成功）",
     "uploadingProgress": "上传中 {{done}}/{{total}}…",
     "sectionSeriesMeta": "① 选择系列元数据来源",
-    "modeManualHint": "手动填写书名、作者、简介等元数据。"
+    "modeManualHint": "手动填写书名、作者、简介等元数据。",
+    "selectedSeries": "已选系列：《{{title}}》",
+    "seriesMemberSelection": "选择一并添加的单卷书目（已选 {{count}} 卷）",
+    "seriesMetadataOnlyHint": "可以不选单卷，仅创建系列。勾选的卷只添加元数据；正文文件或内容源需另行选择。",
+    "selectAllVolumes": "全选单卷",
+    "clearVolumes": "取消全选"
   },
   "book": {
     "filesTitle": "文件版本（{{count}}）",
@@ -208,7 +213,7 @@
     "noSearch": "该来源不支持搜索，请直接输入书目 ID。",
     "manualIdPlaceholder": "输入书目 ID",
     "manualIdAlso": "或直接输入条目 ID（需该来源支持 lookup）：",
-    "useManualId": "使用该 ID",
+    "useManualId": "查找",
     "browseSeries": "选择单卷",
     "browseSynced": "该来源的书目已同步到书架，无需在此选取。",
     "manageTitle": "插件管理",
@@ -231,7 +236,11 @@
     "synced": "同步完成：{{n}} 本书。",
     "configSaved": "配置已保存。",
     "saveConfig": "保存配置",
-    "listPlaceholder": "每行一个（或逗号分隔）"
+    "listPlaceholder": "每行一个（或逗号分隔）",
+    "seriesSearchPlaceholder": "搜索系列名…",
+    "seriesIdPlaceholder": "输入系列 ID（如网站系列书号）",
+    "manualSeriesIdAlso": "输入系列 ID，查找后自动选中该系列：",
+    "noSeriesResults": "未找到系列条目，可直接输入系列 ID 查找。"
   },
   "series": {
     "volumes": "共 {{count}} 卷",

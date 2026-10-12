@@ -290,6 +290,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/plugins/{id}/series": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Resolve a series and preview its independently addressable members
+         * @description Resolves get-series directly, without treating a member book as a series or acquiring anything. The returned series ID is canonical within this plugin instance.
+         */
+        get: operations["lookupPluginSeries"];
+        put?: never;
+        /**
+         * Import series metadata and explicitly selected member book metadata
+         * @description Reuses series and book metadata by plugin-instance provenance. Only the
+         *     requested member books are added; an empty book_ids creates just the
+         *     series. No content files or chapters are acquired, even for a content
+         *     source. All selected IDs must be distinct members of this series and
+         *     resolve via get-book before any metadata is written.
+         */
+        post: operations["importPluginSeries"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/plugins/{id}/search": {
         parameters: {
             query?: never;
@@ -1171,7 +1199,7 @@ export interface components {
         /** @description One search hit, annotated with the library book it is already synced into */
         PluginSearchItem: {
             /**
-             * @description Series hits must be opened through lookup before selecting a member book
+             * @description For book selection, open series hits through lookup to choose a member. For series selection, resolve the series itself through GET /api/plugins/{id}/series.
              * @enum {string}
              */
             kind: "book" | "series";
@@ -1183,6 +1211,25 @@ export interface components {
             cover_url?: string | null;
             /** @description Library metadata entry already materialized for this book, if any */
             book_id: string | null;
+        };
+        PluginSeriesLookupResponse: {
+            series: components["schemas"]["PluginSearchItem"] & {
+                /** @constant */
+                kind?: "series";
+            };
+            books: (components["schemas"]["PluginSearchItem"] & {
+                /** @constant */
+                kind?: "book";
+            })[];
+        };
+        ImportPluginSeries: {
+            /** @description Opaque plugin series ID, not a member book ID or host UUID */
+            series_id: string;
+            /**
+             * @description Explicit member book IDs to import as metadata only; omitted or empty imports only the series
+             * @default []
+             */
+            book_ids: string[];
         };
         PluginSearchResponse: {
             /** @description Source-side total match count (may be capped by the source) */
@@ -1656,6 +1703,64 @@ export interface operations {
                 };
             };
             400: components["responses"]["BadRequest"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    lookupPluginSeries: {
+        parameters: {
+            query: {
+                q: string;
+            };
+            header?: never;
+            path: {
+                /** @description Plugin instance id (source id) */
+                id: components["parameters"]["PluginId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Series metadata and available member books */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PluginSeriesLookupResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    importPluginSeries: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Plugin instance id (source id) */
+                id: components["parameters"]["PluginId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImportPluginSeries"];
+            };
+        };
+        responses: {
+            /** @description Created or refreshed series, including its current library member count */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SeriesBrief"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
             404: components["responses"]["NotFound"];
         };
     };

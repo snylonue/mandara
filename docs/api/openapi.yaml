@@ -400,6 +400,67 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /api/plugins/{id}/series:
+    get:
+      tags: [plugins]
+      summary: Resolve a series and preview its independently addressable members
+      description: Resolves get-series directly, without treating a member book as a series or acquiring anything. The returned series ID is canonical within this plugin instance.
+      operationId: lookupPluginSeries
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PluginId"
+        - name: q
+          in: query
+          required: true
+          schema: {type: string, minLength: 1}
+      responses:
+        "200":
+          description: Series metadata and available member books
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PluginSeriesLookupResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      tags: [plugins]
+      summary: Import series metadata and explicitly selected member book metadata
+      description: |
+        Reuses series and book metadata by plugin-instance provenance. Only the
+        requested member books are added; an empty book_ids creates just the
+        series. No content files or chapters are acquired, even for a content
+        source. All selected IDs must be distinct members of this series and
+        resolve via get-book before any metadata is written.
+      operationId: importPluginSeries
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PluginId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ImportPluginSeries"
+      responses:
+        "201":
+          description: Created or refreshed series, including its current library member count
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SeriesBrief"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /api/plugins/{id}/search:
     get:
       tags: [plugins]
@@ -2277,7 +2338,7 @@ components:
       required: [kind, id, title, authors, book_id]
       properties:
         kind:
-          description: Series hits must be opened through lookup before selecting a member book
+          description: For book selection, open series hits through lookup to choose a member. For series selection, resolve the series itself through GET /api/plugins/{id}/series.
           type: string
           enum: [book, series]
         id:
@@ -2299,6 +2360,39 @@ components:
           description: Library metadata entry already materialized for this book, if any
           type: string
           nullable: true
+
+    PluginSeriesLookupResponse:
+      type: object
+      required: [series, books]
+      properties:
+        series:
+          allOf:
+            - $ref: "#/components/schemas/PluginSearchItem"
+            - type: object
+              properties:
+                kind: {type: string, const: series}
+        books:
+          type: array
+          items:
+            allOf:
+              - $ref: "#/components/schemas/PluginSearchItem"
+              - type: object
+                properties:
+                  kind: {type: string, const: book}
+    ImportPluginSeries:
+      type: object
+      required: [series_id]
+      properties:
+        series_id:
+          description: Opaque plugin series ID, not a member book ID or host UUID
+          type: string
+          minLength: 1
+        book_ids:
+          description: Explicit member book IDs to import as metadata only; omitted or empty imports only the series
+          type: array
+          default: []
+          uniqueItems: true
+          items: {type: string, minLength: 1}
 
     PluginSearchResponse:
       type: object
