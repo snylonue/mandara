@@ -12,7 +12,9 @@
 //!   onto `book-entry` fields and the extended-metadata JSON (`extra`):
 //!   作者/译者/插画 → authors/translators/illustrators, 出版社/发售日/
 //!   ISBN/页数/价格/副标题 → publisher/pub_date/isbn/pages/price/subtitle,
-//!   plus tags. The original name is kept as `original_title`.
+//!   plus tags. The original name is kept as `original_title`. Series with
+//!   an unknown volume count consult `GET /v0/subjects/{id}/subjects`
+//!   for distinct book subjects related as 单行本.
 //!
 //! **NSFW**: Bangumi hides NSFW subjects from unauthenticated requests.
 //! Configure an access token (generate one at
@@ -216,6 +218,34 @@ struct ApiSearchResult {
     total: u64,
     #[serde(default)]
     data: Vec<ApiSubject>,
+}
+
+/// Related subjects include adaptations as well as the series' volumes.
+#[derive(serde::Deserialize)]
+struct ApiRelatedSubject {
+    id: u64,
+    #[serde(default, rename = "type")]
+    subject_type: u8,
+    #[serde(default)]
+    relation: String,
+}
+
+/// Bangumi may leave a series' volume count at zero even when its
+/// individual volumes are linked. Only consult those links on lookup;
+/// search remains one paginated request without per-result fan-out.
+fn resolve_book(
+    mut subject: ApiSubject,
+    related: impl FnOnce() -> Result<Vec<ApiRelatedSubject>, String>,
+) -> Result<BookEntry, String> {
+    if subject.is_series() && subject.volumes == 0 {
+        let ids: std::collections::HashSet<u64> = related()?
+            .into_iter()
+            .filter(|s| s.subject_type == 1 && s.relation == "单行本" && s.id != subject.id)
+            .map(|s| s.id)
+            .collect();
+        subject.volumes = ids.len() as u32;
+    }
+    Ok((&subject).into())
 }
 
 // ---------------------------------------------------------------------------
@@ -563,7 +593,25 @@ impl Guest for BangumiPlugin {
         let url = format!("{base}/v0/subjects/{book_id}");
         match http_request("GET", &url, None, false) {
             Ok((200, resp_body)) => match serde_json::from_slice::<ApiSubject>(&resp_body) {
-                Ok(subject) => Some((&subject).into()),
+                Ok(subject) => {
+                    // Preserve the subject metadata when relation discovery
+                    // fails, rather than making an otherwise valid lookup vanish.
+                    let fallback = BookEntry::from(&subject);
+                    let related_url = format!("{url}/subjects");
+                    match resolve_book(subject, || {
+                        let (status, body) = http_request("GET", &related_url, None, false)?;
+                        if status != 200 {
+                            return Err(format!("status {status}"));
+                        }
+                        serde_json::from_slice(&body).map_err(|e| format!("json: {e}"))
+                    }) {
+                        Ok(entry) => Some(entry),
+                        Err(e) => {
+                            log_error("get-book relations", &related_url, &e);
+                            Some(fallback)
+                        }
+                    }
+                }
                 Err(e) => {
                     log_error("get-book", &url, &format!("json: {e}"));
                     None
@@ -610,3 +658,97 @@ impl Guest for BangumiPlugin {
 }
 
 export!(BangumiPlugin);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn subject(series: serde_json::Value, volumes: u32) -> ApiSubject {
+        serde_json::from_value(serde_json::json!({
+            "id": 282709,
+            "name": "驭兽使系列",
+            "series": series,
+            "volumes": volumes,
+            "infobox": [{"key": "作者", "value": "深山鈴"}],
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn zero_count_series_discovers_thirteen_linked_volumes() {
+        // Regression for subject 282709: series=true, volumes=0, but
+        // thirteen novels are linked alongside manga and anime adaptations.
+        let ids = [
+            282710, 293974, 293975, 311573, 336311, 336312, 370740, 386565, 536053, 536054, 571280,
+            625296, 669064,
+        ];
+        let mut links: Vec<serde_json::Value> = ids
+            .iter()
+            .map(|id| serde_json::json!({"id": id, "type": 1, "relation": "单行本"}))
+            .collect();
+        links.extend([
+            serde_json::json!({"id": 282708, "type": 1, "relation": "书籍"}),
+            serde_json::json!({"id": 383631, "type": 2, "relation": "动画"}),
+            serde_json::json!({"id": 383632, "type": 2, "relation": "单行本"}),
+            serde_json::json!({"id": 282709, "type": 1, "relation": "单行本"}),
+            serde_json::json!({"id": 282710, "type": 1, "relation": "单行本"}),
+            serde_json::json!({"id": 1}),
+        ]);
+        let book = resolve_book(subject(serde_json::json!(true), 0), || {
+            Ok(serde_json::from_value(serde_json::json!(links)).unwrap())
+        })
+        .unwrap();
+        assert_eq!(book.id, "282709");
+        assert_eq!(book.authors, ["深山鈴"]);
+        let volumes = book.volumes.unwrap();
+        assert_eq!(volumes.len(), 13);
+        for (i, volume) in volumes.iter().enumerate() {
+            assert_eq!(volume.title, format!("第{}卷", i + 1));
+            assert_eq!(volume.chapter_count, 1);
+        }
+    }
+
+    #[test]
+    fn explicit_count_does_not_fetch_or_shrink_to_linked_volumes() {
+        for count in [1, 24] {
+            let book = resolve_book(subject(serde_json::json!(true), count), || {
+                panic!("explicit volume counts must not fetch relations")
+            })
+            .unwrap();
+            assert_eq!(
+                book.volumes.as_ref().map(Vec::len),
+                (count > 1).then_some(count as usize)
+            );
+        }
+    }
+
+    #[test]
+    fn single_subjects_do_not_fetch_relations() {
+        for series in [serde_json::json!(false), serde_json::Value::Null] {
+            let book = resolve_book(subject(series, 0), || {
+                panic!("single subjects must not fetch relations")
+            })
+            .unwrap();
+            assert!(book.volumes.is_none());
+        }
+    }
+
+    #[test]
+    fn empty_or_one_link_stays_single() {
+        for links in ["[]", r#"[{"id": 282710, "type": 1, "relation": "单行本"}]"#] {
+            let book = resolve_book(subject(serde_json::json!(true), 0), || {
+                Ok(serde_json::from_str(links).unwrap())
+            })
+            .unwrap();
+            assert!(book.volumes.is_none());
+        }
+    }
+
+    #[test]
+    fn relation_failure_is_reported_for_metadata_fallback() {
+        let result = resolve_book(subject(serde_json::json!(true), 0), || {
+            Err("status 503".into())
+        });
+        assert_eq!(result.err().as_deref(), Some("status 503"));
+    }
+}

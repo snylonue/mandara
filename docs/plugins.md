@@ -354,7 +354,12 @@ and, when it has `lookup`, the book id).
   the extended-metadata JSON (publisher/pub_date/isbn/pages/price/
   subtitle/tags; ISBN checksum-verified guest-side, invalid ones skipped),
   unknown keys preserved under `infobox_misc`. Every request carries a
-  descriptive User-Agent as required by the API guidelines.
+  descriptive User-Agent as required by the API guidelines. Series lookups
+  declare one metadata volume per upstream volume. If Bangumi leaves
+  `volumes` at zero, lookup counts distinct book subjects linked as
+  单行本 via `GET /v0/subjects/{id}/subjects` (not adaptations).
+  Explicit counts are kept; relation failures are logged and leave the
+  subject metadata usable. Search stays a single paginated request.
 - `plugins/reader-plugin/` — reading-site source over HTTP: `search` +
   `lookup` + `content` + `book-file`; chapter mode for `r-N` books, and
   `get-book-file` returning the epub the source serves (file mode wins,
