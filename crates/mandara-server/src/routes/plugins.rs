@@ -202,11 +202,18 @@ fn default_search_limit() -> u32 {
     20
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchItemKind {
+    Book,
+    Series,
+}
+
 /// One search hit, annotated with the library metadata entry it is
 /// already synced into (when it is).
 #[derive(Serialize)]
 pub struct SearchItem {
-    pub kind: &'static str,
+    pub kind: SearchItemKind,
     pub id: String,
     pub title: String,
     pub authors: Vec<String>,
@@ -293,7 +300,7 @@ pub async fn materialize_book(
 fn search_item(entry: mandara_plugin::CatalogEntry, book_id: Option<String>) -> SearchItem {
     match entry {
         mandara_plugin::CatalogEntry::Single(b) => SearchItem {
-            kind: "book",
+            kind: SearchItemKind::Book,
             id: b.id,
             title: b.title,
             authors: b.authors,
@@ -302,7 +309,7 @@ fn search_item(entry: mandara_plugin::CatalogEntry, book_id: Option<String>) -> 
             book_id,
         },
         mandara_plugin::CatalogEntry::Series(s) => SearchItem {
-            kind: "series",
+            kind: SearchItemKind::Series,
             id: s.id,
             title: s.title,
             authors: s.authors,
