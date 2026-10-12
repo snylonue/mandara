@@ -3418,37 +3418,6 @@ async fn with_stored_dims(db: &DieselDb, html: &str) -> String {
     annotate_image_dimensions(html, &dims_by_id)
 }
 
-/// Startup backfill: sniff intrinsic dimensions for images stored before
-/// they were recorded (migration 0011 added the columns; older rows are
-/// NULL). Returns the number of rows updated.
-pub async fn backfill_image_dimensions(db: &DieselDb, files_dir: &Path) -> anyhow::Result<usize> {
-    let rows: Vec<String> = schema::images::table
-        .filter(schema::images::width.is_null())
-        .select(schema::images::id)
-        .load(&mut db.get().await?)
-        .await?;
-    let mut updated = 0;
-    for id in rows {
-        let path = files_dir.join("images").join(&id);
-        let bytes = match tokio::fs::read(&path).await {
-            Ok(bytes) => bytes,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(e) => return Err(anyhow::Error::new(e).context("read image for backfill")),
-        };
-        if let Some((w, h)) = mandara_formats::imgdim::image_dimensions(&bytes) {
-            diesel::update(schema::images::table.find(&id))
-                .set((
-                    schema::images::width.eq(w as i64),
-                    schema::images::height.eq(h as i64),
-                ))
-                .execute(&mut db.get().await?)
-                .await?;
-            updated += 1;
-        }
-    }
-    Ok(updated)
-}
-
 /// One-shot upgrade migration (`--reparse-originals`, owner decision:
 /// manual, no HTTP endpoint): re-run the current parser over every
 /// retained original and replace the stored chapters + toc in one
