@@ -1,11 +1,13 @@
 // Library / shelf: one flat grid of books and collapsed series (a series
-// with ≥2 visible volumes is one stacked card; clicking it opens the series
+// stays one card even with a single visible volume; clicking it opens the series
 // page). Sort / group / view live in the URL; the last used combination is
 // remembered in localStorage and adopted by the next plain shelf visit.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
+import { shelfBookTitle } from "../shelfTitle";
+import { groupBySeries, type ShelfItem } from "../shelfGroups";
 import { useAuth } from "../auth";
 import { AddDialog, type AddMode } from "../components/AddDialog";
 import {
@@ -19,7 +21,7 @@ import { useToast } from "../components/toast";
 import { usePluginInstances } from "../components/SourceSearch";
 import { IconBook, IconGrid, IconGridCompact, IconList } from "../components/icons";
 import { attachProgress, progressByFile, type ShelfEntry } from "../progress";
-import type { BookListEntry, SeriesBrief, SessionList } from "../types";
+import type { BookListEntry, SessionList } from "../types";
 
 type SortKey = "default" | "title" | "recent";
 type GroupKey = "series" | "flat" | "author";
@@ -51,40 +53,8 @@ function loadPrefs(): ShelfPrefs {
   }
 }
 
-/** One rendered shelf item: a standalone book or a collapsed series. */
-type ShelfItem =
-  | { kind: "book"; entry: ShelfEntry }
-  | { kind: "series"; series: SeriesBrief; volumes: ShelfEntry[] };
-
 function itemKey(item: ShelfItem): string {
   return item.kind === "series" ? `s-${item.series.id}` : `b-${item.entry.book.id}`;
-}
-
-/** Collapse runs of series members into one card each (order preserved). */
-function groupBySeries(list: ShelfEntry[]): ShelfItem[] {
-  const items: ShelfItem[] = [];
-  const at = new Map<string, number>();
-  for (const entry of list) {
-    const series = entry.series;
-    if (!series) {
-      items.push({ kind: "book", entry });
-      continue;
-    }
-    const seen = at.get(series.id);
-    if (seen === undefined) {
-      at.set(series.id, items.length);
-      items.push({ kind: "series", series, volumes: [entry] });
-    } else {
-      const item = items[seen];
-      if (item.kind === "series") item.volumes.push(entry);
-    }
-  }
-  // A series with a single visible volume is just a book.
-  return items.map((item) =>
-    item.kind === "series" && item.volumes.length === 1
-      ? { kind: "book" as const, entry: item.volumes[0] }
-      : item,
-  );
 }
 
 const lastReadAt = (entry: ShelfEntry): number =>
@@ -94,7 +64,7 @@ function sortEntries(list: ShelfEntry[], sort: SortKey): ShelfEntry[] {
   if (sort === "default") return list;
   const copy = [...list];
   if (sort === "title") {
-    copy.sort((a, b) => a.book.title.localeCompare(b.book.title, "zh-Hans-CN"));
+    copy.sort((a, b) => shelfBookTitle(a).localeCompare(shelfBookTitle(b), "zh-Hans-CN"));
   } else {
     copy.sort((a, b) => lastReadAt(b) - lastReadAt(a));
   }
@@ -247,7 +217,7 @@ export function LibraryPage() {
             item.kind === "series" ? (
               <ShelfSeriesRow key={itemKey(item)} series={item.series} volumes={item.volumes} />
             ) : (
-              <ShelfListRow key={itemKey(item)} entry={item.entry} />
+              <ShelfListRow key={itemKey(item)} entry={item.entry} title={shelfBookTitle(item.entry)} />
             ),
           )}
         </div>
@@ -259,7 +229,7 @@ export function LibraryPage() {
           item.kind === "series" ? (
             <ShelfSeriesCard key={itemKey(item)} series={item.series} volumes={item.volumes} />
           ) : (
-            <ShelfBookCard key={itemKey(item)} entry={item.entry} />
+            <ShelfBookCard key={itemKey(item)} entry={item.entry} title={shelfBookTitle(item.entry)} />
           ),
         )}
       </div>

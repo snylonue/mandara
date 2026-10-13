@@ -128,7 +128,7 @@ export function ShelfBookCard({
     <>
       <CardCover
         bookId={book.id}
-        title={book.title}
+        title={title ?? book.title}
         coverUrl={book.cover_url}
         entry={entry}
         volumeNo={volumeNo}
@@ -193,11 +193,13 @@ export function ShelfListRow({
   entry,
   to,
   meta,
+  title,
   volumeNo,
 }: {
   entry: ShelfItem;
   to?: string;
   meta?: string;
+  title?: string;
   volumeNo?: number;
 }) {
   const { t } = useTranslation();
@@ -212,11 +214,11 @@ export function ShelfListRow({
   return (
     <Link className="shelf-row" to={to ?? `/book/${book.id}`}>
       <div className="shelf-row-cover">
-        <BookCover bookId={book.id} title={book.title} coverUrl={book.cover_url} />
+        <BookCover bookId={book.id} title={title ?? book.title} coverUrl={book.cover_url} />
       </div>
       <div className="shelf-row-main">
-        <div className="book-title" title={book.title}>
-          {book.title}
+        <div className="book-title" title={title ?? book.title}>
+          {title ?? book.title}
         </div>
         <div className="book-meta">
           {meta ?? defaultMeta}
