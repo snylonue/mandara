@@ -2,11 +2,12 @@
 // Plugin series selection previews members; only checked books are imported,
 // as metadata without files. Manual series creation remains metadata-only.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { ExtMetaForm, type ExtRecord } from "./ExtMetaForm";
 import { Modal } from "./Modal";
+import { PluginContentChoice } from "./PluginContentChoice";
 import { SourceSearchPane, type SourcePick, type SeriesSourcePick } from "./SourceSearch";
 import { useToast } from "./toast";
 import type {
@@ -17,7 +18,7 @@ import type {
 } from "../types";
 
 export type AddMode = "book" | "series";
-type MetaSource = "manual" | "plugin";
+type MetaSource = "file" | "manual" | "plugin";
 
 /** One content item of the book-mode ② section: an uploaded file or a
  *  plugin book, each with its own file settings (visibility + label). */
@@ -28,6 +29,31 @@ type ContentEntry = {
   visibility: Visibility;
   label: string;
 };
+
+/** Keep the component identity stable while editing per-version settings. */
+function ItemSettings({ entry, onChange }: {
+  entry: ContentEntry;
+  onChange: (patch: Partial<ContentEntry>) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="row item-settings">
+      <select
+        value={entry.visibility}
+        onChange={(e) => onChange({ visibility: e.target.value as Visibility })}
+        aria-label={t("library.visibilityLabel")}
+      >
+        <option value="private">{t("library.visibilityPrivate")}</option>
+        <option value="public">{t("library.visibilityPublic")}</option>
+      </select>
+      <input
+        placeholder={t("library.labelPlaceholder")}
+        value={entry.label}
+        onChange={(e) => onChange({ label: e.target.value })}
+      />
+    </div>
+  );
+}
 
 const splitAuthors = (raw: string) =>
   raw
@@ -57,9 +83,10 @@ export function AddDialog({
   const toast = useToast();
   const [mode, setMode] = useState<AddMode>(initialMode);
   // Book mode: metadata source (①) and content (②).
-  const [meta, setMeta] = useState<MetaSource>("manual");
+  const [meta, setMeta] = useState<MetaSource>("file");
+  const [metadataFile, setMetadataFile] = useState<File | null>(null);
   // Series mode: metadata source.
-  const [seriesMeta, setSeriesMeta] = useState<MetaSource>("manual");
+  const [seriesMeta, setSeriesMeta] = useState<Exclude<MetaSource, "file">>("manual");
 
   const [uploading, setUploading] = useState(false);
   // Progress of a multi-content submission: `uploadDone`/`uploadTotal`.
@@ -69,7 +96,6 @@ export function AddDialog({
   // own visibility/label.
   const [contents, setContents] = useState<ContentEntry[]>([]);
   const [dialogError, setDialogError] = useState<string | null>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
 
   // Plugin pick for the metadata source (①).
   const [pluginMetaRef, setPluginMetaRef] = useState<SourcePick | null>(null);
@@ -89,7 +115,8 @@ export function AddDialog({
 
   const reset = () => {
     setMode(initialMode);
-    setMeta("manual");
+    setMeta("file");
+    setMetadataFile(null);
     setSeriesMeta("manual");
     setContents([]);
     setDialogError(null);
@@ -117,10 +144,6 @@ export function AddDialog({
   /** Adopt a picked source entry as the metadata source (①). */
   function usePluginMeta(pick: SourcePick) {
     setPluginMetaRef(pick);
-    // Book selection carries resolved metadata, including manual-ID lookup.
-    setTitle(pick.item.title);
-    setAuthors(pick.item.authors.join("，"));
-    setDescription(pick.item.description ?? "");
     setDialogError(null);
   }
 
@@ -150,6 +173,26 @@ export function AddDialog({
         : [...prev, { kind: "plugin", pick, visibility: "private", label: "" }];
     });
     setDialogError(null);
+  }
+
+  /** Local uploads supply both metadata and content through the same entry list. */
+  function addFiles(files: File[], asMetadata = false) {
+    if (asMetadata && files[0]) setMetadataFile(files[0]);
+    setContents((prev) => {
+      // Replacing the local source replaces its automatically selected content.
+      const retained = asMetadata && files[0] && metadataFile
+        ? prev.filter((entry) => entry.file !== metadataFile)
+        : prev;
+      return [...retained, ...files.filter((file) => !retained.some((entry) => entry.file === file)).map((file) => ({
+        kind: "file" as const, file, visibility: "private" as Visibility, label: "",
+      }))];
+    });
+    setDialogError(null);
+  }
+
+  function removeContent(index: number) {
+    if (contents[index].file === metadataFile) setMetadataFile(null);
+    setContents((prev) => prev.filter((_, i) => i !== index));
   }
 
   /** Update one content item's settings. */
@@ -187,7 +230,15 @@ export function AddDialog({
       setDialogError(t("library.pickMetaFromPlugin"));
       return;
     }
-    const contentCount = contents.length;
+    if (meta === "file" && !metadataFile) {
+      setDialogError(t("library.pickMetadataFile"));
+      return;
+    }
+    // The chosen local metadata file must create the entry, even after reordering.
+    const submittedContents = meta === "file"
+      ? [...contents.filter((entry) => entry.file === metadataFile), ...contents.filter((entry) => entry.file !== metadataFile)]
+      : contents;
+    const contentCount = submittedContents.length;
     if (contentCount === 0 && meta === "manual" && !title.trim()) {
       setDialogError(t("library.manualNeedsTitle"));
       return;
@@ -200,7 +251,7 @@ export function AddDialog({
     try {
       // Creating submission (must succeed — the entry must exist). With
       // no content at all this is a metadata-only entry (`metadata_only`).
-      const firstItem = contents[0] ?? null;
+      const firstItem = submittedContents[0] ?? null;
       let bookId: string | null = null;
       let firstTitle = "";
       const first = await acquire(firstItem, (form) => {
@@ -239,8 +290,8 @@ export function AddDialog({
       // Attach the remaining content; failures are collected and
       // reported, the rest still lands.
       let okCount = contentCount;
-      for (let i = 1; i < contents.length; i++) {
-        const entry = contents[i];
+      for (let i = 1; i < submittedContents.length; i++) {
+        const entry = submittedContents[i];
         try {
           await acquire(entry, (form) => {
             form.append("book_id", bookId!);
@@ -327,6 +378,7 @@ export function AddDialog({
   }
 
   function close() {
+    if (uploading) return;
     reset();
     onClose();
   }
@@ -339,8 +391,10 @@ export function AddDialog({
       key="book-metadata"
       instances={instances}
       filter={(i) => i.enabled && i.capabilities.includes("lookup")}
+      disabled={uploading}
       pickLabel={() => t("library.useAsMetadataSource")}
       onPick={usePluginMeta}
+      onClear={() => setPluginMetaRef(null)}
     />
   );
   const seriesPane = (
@@ -356,27 +410,6 @@ export function AddDialog({
     />
   );
 
-  /** Per-item file settings row (visibility + label). */
-  function ItemSettings({ entry, index }: { entry: ContentEntry; index: number }) {
-    return (
-      <div className="row item-settings">
-        <select
-          value={entry.visibility}
-          onChange={(e) => patchContent(index, { visibility: e.target.value as Visibility })}
-          aria-label={t("library.visibilityLabel")}
-        >
-          <option value="private">{t("library.visibilityPrivate")}</option>
-          <option value="public">{t("library.visibilityPublic")}</option>
-        </select>
-        <input
-          placeholder={t("library.labelPlaceholder")}
-          value={entry.label}
-          onChange={(e) => patchContent(index, { label: e.target.value })}
-        />
-      </div>
-    );
-  }
-
   return (
     <Modal
       open={open}
@@ -384,250 +417,279 @@ export function AddDialog({
       title={inBookMode ? t("library.addBook") : t("series.create")}
       wide
     >
-      {/* Top switch: what are we adding? */}
-      <section className="modal-section">
-        <h3>{t("library.sectionWhat")}</h3>
-        <div className="row">
-          <label className="radio">
-            <input type="radio" checked={inBookMode} onChange={() => { setMode("book"); setDialogError(null); }} />
-            {t("library.whatBook")}
-          </label>
-          <label className="radio">
-            <input type="radio" checked={!inBookMode} onChange={() => { setMode("series"); setDialogError(null); }} />
-            {t("library.whatSeries")}
-          </label>
-        </div>
-      </section>
+      <fieldset className="add-form" disabled={uploading}>
+        {/* Top switch: what are we adding? */}
+        <section className="modal-section">
+          <h3>{t("library.sectionWhat")}</h3>
+          <div className="row">
+            <label className="radio">
+              <input type="radio" checked={inBookMode} onChange={() => { setMode("book"); setDialogError(null); }} />
+              {t("library.whatBook")}
+            </label>
+            <label className="radio">
+              <input type="radio" checked={!inBookMode} onChange={() => { setMode("series"); setDialogError(null); }} />
+              {t("library.whatSeries")}
+            </label>
+          </div>
+        </section>
 
-      {inBookMode ? (
-        <>
+        {inBookMode ? (
+          <>
+            <section className="modal-section">
+              <h3>{t("library.sectionMeta")}</h3>
+              <div className="row">
+                <label className="radio">
+                  <input type="radio" checked={meta === "file"} onChange={() => { setMeta("file"); setDialogError(null); }} />
+                  {t("library.modeFile")}
+                </label>
+                <label className="radio">
+                  <input
+                    type="radio"
+                    checked={meta === "manual"}
+                    onChange={() => setMeta("manual")}
+                  />
+                  {t("library.modeManual")}
+                </label>
+                <label className="radio">
+                  <input
+                    type="radio"
+                    checked={meta === "plugin"}
+                    onChange={() => setMeta("plugin")}
+                  />
+                  {t("library.modePlugin")}
+                </label>
+              </div>
+              {meta === "file" && <div className="field">
+                <label className="file-picker">
+                  <span>{metadataFile?.name ?? t("library.pickFile")}</span>
+                  <input
+                    type="file" accept=".epub,.txt,.text" hidden
+                    aria-label={t("library.pickMetadataFile")}
+                    onChange={(event) => {
+                      addFiles(Array.from(event.target.files ?? []), true);
+                      event.target.value = "";
+                    }}
+                  />
+                </label>
+                <p className="hint">{t("library.modeFileHint")}</p>
+              </div>}
+              {meta === "plugin" && <div className="field">
+                {metadataPane}
+                {pluginMetaRef && <div className="source-selection">
+                  <p className="strong">{t("library.selectedBook", { title: pluginMetaRef.item.title })}</p>
+                  <p className="hint">{pluginMetaRef.instance.name} · {pluginMetaRef.item.authors.join(" / ")}</p>
+                  {pluginMetaRef.item.description && <p className="hint">{pluginMetaRef.item.description}</p>}
+                  {(pluginMetaRef.instance.capabilities.includes("content") || pluginMetaRef.instance.capabilities.includes("book-file"))
+                    ? <PluginContentChoice
+                        key={pluginMetaRef.instance.id + ":" + pluginMetaRef.item.id}
+                        pick={pluginMetaRef}
+                        disabled={uploading}
+                        selectedIds={contents.filter((entry) => entry.pick?.instance.id === pluginMetaRef.instance.id).map((entry) => entry.pick!.item.id)}
+                        onPick={usePluginBook}
+                      />
+                    : <p className="hint">{t("library.sourceMetadataOnly")}</p>}
+                </div>}
+              </div>}
+              {meta === "manual" && (
+                <div className="field">
+                  <input
+                    placeholder={t("library.bookPlaceholder")}
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
+                  />
+                  <input
+                    placeholder={t("library.authorsPlaceholder")}
+                    value={authors}
+                    onChange={(e) => setAuthors(e.target.value)}
+                  />
+                  <textarea
+                    placeholder={t("library.descriptionPlaceholder")}
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                  />
+                  <ExtMetaForm kind="book" value={ext} onChange={setExt} />
+                  <p className="hint">{t("library.modeManualHint")}</p>
+                </div>
+              )}
+            </section>
+
+            <section className="modal-section">
+              <h3>{t("library.sectionAcquire")}</h3>
+
+              {/* Per-item list with individual file settings */}
+              {contents.length > 0 && (
+                <div className="field">
+                  <ul className="picker-list file-list">
+                    {contents.map((entry, i) => (
+                      <li key={entry.kind === "file" ? `f-${i}` : `p-${entry.pick!.instance.id}-${entry.pick!.item.id}`}>
+                        <div className="file-item-head">
+                          <span className="strong">
+                            {entry.kind === "file"
+                              ? entry.file!.name
+                              : entry.pick!.item.title || entry.pick!.item.id}
+                          </span>
+                          <span className="hint">
+                            {entry.kind === "plugin"
+                              ? `${entry.pick!.instance.name} · ${entry.pick!.item.id}`
+                              : ""}
+                            {meta === "file" && entry.file === metadataFile ? ` · ${t("library.fileMetadataSource")}` : ""}
+                          </span>
+                          <button
+                            className="btn link danger"
+                            onClick={() => removeContent(i)}
+                          >
+                            {t("library.removeFile")}
+                          </button>
+                        </div>
+                        <ItemSettings entry={entry} onChange={(patch) => patchContent(i, patch)} />
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              <details className="additional-content">
+                <summary>{t("library.otherContents")}</summary>
+                {/* Additional uploads share the same selected metadata. */}
+                <div className="field">
+                  <label className="file-picker">
+                    <span>
+                      {fileCount > 0
+                        ? t("library.filesSelected", { count: fileCount })
+                        : t("library.pickFile")}
+                    </span>
+                    <input
+                      type="file"
+                      accept=".epub,.txt,.text"
+                      multiple
+                      hidden
+                      aria-label={t("library.tabUpload")}
+                      onChange={(e) => {
+                        const picked = Array.from(e.target.files ?? []);
+                        addFiles(picked, meta === "file" && !metadataFile);
+                        e.target.value = "";
+                      }}
+                    />
+                  </label>
+                </div>
+
+                {/* Other content providers must advertise content capabilities. */}
+                <div className="field">
+                  <p className="strong">{t("library.tabPlugin")}</p>
+                  <SourceSearchPane
+                    instances={instances}
+                    filter={(i) =>
+                      i.enabled &&
+                      (i.capabilities.includes("content") || i.capabilities.includes("book-file")) &&
+                      (i.capabilities.includes("search") || i.capabilities.includes("lookup"))
+                    }
+                    pickLabel={() => t("library.pickThisBook")}
+                    disabled={uploading}
+                    onPick={(pick) => usePluginBook(pick)}
+                  />
+                </div>
+              </details>
+              <p className="hint">{t("library.contentBothHint")}</p>
+              {contentCount === 0 && <p className="hint">{t("library.tabMetaOnlyHint")}</p>}
+            </section>
+          </>
+        ) : (
           <section className="modal-section">
-            <h3>{t("library.sectionMeta")}</h3>
+            <h3>{t("library.sectionSeriesMeta")}</h3>
             <div className="row">
               <label className="radio">
                 <input
                   type="radio"
-                  checked={meta === "manual"}
-                  onChange={() => setMeta("manual")}
+                  checked={seriesMeta === "manual"}
+                  onChange={() => setSeriesMeta("manual")}
                 />
                 {t("library.modeManual")}
               </label>
               <label className="radio">
                 <input
                   type="radio"
-                  checked={meta === "plugin"}
-                  onChange={() => setMeta("plugin")}
+                  checked={seriesMeta === "plugin"}
+                  onChange={() => setSeriesMeta("plugin")}
                 />
                 {t("library.modePlugin")}
               </label>
             </div>
-            {meta === "plugin" && <div className="field">{metadataPane}</div>}
-            {meta === "manual" && (
+            {seriesMeta === "manual" && (
               <div className="field">
                 <input
-                  placeholder={t("library.bookPlaceholder")}
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
+                  placeholder={t("book.seriesTitlePlaceholder")}
+                  value={seriesTitle}
+                  onChange={(e) => setSeriesTitle(e.target.value)}
                 />
                 <input
                   placeholder={t("library.authorsPlaceholder")}
-                  value={authors}
-                  onChange={(e) => setAuthors(e.target.value)}
+                  value={seriesAuthors}
+                  onChange={(e) => setSeriesAuthors(e.target.value)}
                 />
                 <textarea
                   placeholder={t("library.descriptionPlaceholder")}
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
+                  value={seriesDescription}
+                  onChange={(e) => setSeriesDescription(e.target.value)}
                 />
-                <ExtMetaForm kind="book" value={ext} onChange={setExt} />
-                <p className="hint">{t("library.modeManualHint")}</p>
+                <ExtMetaForm kind="series" value={seriesExt} onChange={setSeriesExt} />
+                <p className="hint">{t("series.createHint")}</p>
               </div>
             )}
-          </section>
-
-          <section className="modal-section">
-            <h3>{t("library.sectionAcquire")}</h3>
-
-            {/* 上传文件 (multiple, independent of the plugin source) */}
-            <div className="field">
-              <p className="strong">{t("library.tabUpload")}</p>
-              <label className="file-picker">
-                <span>
-                  {fileCount > 0
-                    ? t("library.filesSelected", { count: fileCount })
-                    : t("library.pickFile")}
-                </span>
-                <input
-                  ref={fileRef}
-                  type="file"
-                  accept=".epub,.txt,.text"
-                  multiple
-                  hidden
-                  onChange={(e) => {
-                    const picked = Array.from(e.target.files ?? []);
-                    if (picked.length) {
-                      setContents((prev) => [
-                        ...prev,
-                        ...picked.map((file) => ({
-                          kind: "file" as const,
-                          file,
-                          visibility: "private" as Visibility,
-                          label: "",
-                        })),
-                      ]);
-                    }
-                    e.target.value = "";
-                  }}
-                />
-              </label>
-            </div>
-
-            {/* 从插件源 (multiple books, independent of the upload) */}
-            <div className="field">
-              <p className="strong">{t("library.tabPlugin")}</p>
-              <SourceSearchPane
-                instances={instances}
-                filter={(i) =>
-                  i.enabled &&
-                  (i.capabilities.includes("search") || i.capabilities.includes("lookup"))
-                }
-                pickLabel={() => t("library.pickThisBook")}
-                onPick={(pick) => usePluginBook(pick)}
-              />
-            </div>
-
-            {/* Per-item list with individual file settings */}
-            {contents.length > 0 && (
+            {seriesMeta === "plugin" && <div className="field">{seriesPane}</div>}
+            {seriesMeta === "plugin" && pluginSeriesRef && (
               <div className="field">
-                <ul className="picker-list file-list">
-                  {contents.map((entry, i) => (
-                    <li key={entry.kind === "file" ? `f-${i}` : `p-${entry.pick!.item.id}`}>
-                      <div className="file-item-head">
-                        <span className="strong">
-                          {entry.kind === "file"
-                            ? entry.file!.name
-                            : entry.pick!.item.title || entry.pick!.item.id}
-                        </span>
-                        <span className="hint">
-                          {entry.kind === "plugin"
-                            ? `${entry.pick!.instance.name} · ${entry.pick!.item.id}`
-                            : ""}
-                          {i === 0 ? ` · ${t("library.firstCreatesEntry")}` : ` · ${t("library.attachToEntry")}`}
-                        </span>
-                        <button
-                          className="btn link danger"
-                          onClick={() => setContents((prev) => prev.filter((_, j) => j !== i))}
-                        >
-                          {t("library.removeFile")}
-                        </button>
-                      </div>
-                      <ItemSettings entry={entry} index={i} />
+                <p className="strong">{t("library.selectedSeries", { title: pluginSeriesRef.item.title })}</p>
+                <p className="hint">{pluginSeriesRef.item.authors.join(" / ")}</p>
+                {pluginSeriesRef.item.description && <p className="hint">{pluginSeriesRef.item.description}</p>}
+                <h3>{t("library.seriesMemberSelection", { count: selectedVolumes.length })}</h3>
+                <p className="hint">{t("library.seriesMetadataOnlyHint")}</p>
+                {pluginSeriesRef.books.length > 0 && <div className="row">
+                  <button disabled={uploading} onClick={() => setSelectedVolumes(pluginSeriesRef.books.map((book) => book.id))}>{t("library.selectAllVolumes")}</button>
+                  <button disabled={uploading} onClick={() => setSelectedVolumes([])}>{t("library.clearVolumes")}</button>
+                </div>}
+                <ul className="source-results">
+                  {pluginSeriesRef.books.map((book) => (
+                    <li key={book.id} className="source-result">
+                      <label className="radio">
+                        <input
+                          type="checkbox"
+                          disabled={uploading}
+                          checked={selectedVolumes.includes(book.id)}
+                          onChange={(e) => {
+                            const checked = e.target.checked;
+                            setSelectedVolumes((prev) => checked ? [...prev, book.id] : prev.filter((id) => id !== book.id));
+                          }}
+                        />
+                        <span>{book.title}</span>
+                      </label>
                     </li>
                   ))}
                 </ul>
               </div>
             )}
-
-            <p className="hint">{t("library.contentBothHint")}</p>
-            {contentCount === 0 && <p className="hint">{t("library.tabMetaOnlyHint")}</p>}
           </section>
-        </>
-      ) : (
-        <section className="modal-section">
-          <h3>{t("library.sectionSeriesMeta")}</h3>
-          <div className="row">
-            <label className="radio">
-              <input
-                type="radio"
-                checked={seriesMeta === "manual"}
-                onChange={() => setSeriesMeta("manual")}
-              />
-              {t("library.modeManual")}
-            </label>
-            <label className="radio">
-              <input
-                type="radio"
-                checked={seriesMeta === "plugin"}
-                onChange={() => setSeriesMeta("plugin")}
-              />
-              {t("library.modePlugin")}
-            </label>
-          </div>
-          {seriesMeta === "manual" && (
-            <div className="field">
-              <input
-                placeholder={t("book.seriesTitlePlaceholder")}
-                value={seriesTitle}
-                onChange={(e) => setSeriesTitle(e.target.value)}
-              />
-              <input
-                placeholder={t("library.authorsPlaceholder")}
-                value={seriesAuthors}
-                onChange={(e) => setSeriesAuthors(e.target.value)}
-              />
-              <textarea
-                placeholder={t("library.descriptionPlaceholder")}
-                value={seriesDescription}
-                onChange={(e) => setSeriesDescription(e.target.value)}
-              />
-              <ExtMetaForm kind="series" value={seriesExt} onChange={setSeriesExt} />
-              <p className="hint">{t("series.createHint")}</p>
-            </div>
-          )}
-          {seriesMeta === "plugin" && <div className="field">{seriesPane}</div>}
-          {seriesMeta === "plugin" && pluginSeriesRef && (
-            <div className="field">
-              <p className="strong">{t("library.selectedSeries", { title: pluginSeriesRef.item.title })}</p>
-              <p className="hint">{pluginSeriesRef.item.authors.join(" / ")}</p>
-              {pluginSeriesRef.item.description && <p className="hint">{pluginSeriesRef.item.description}</p>}
-              <h3>{t("library.seriesMemberSelection", { count: selectedVolumes.length })}</h3>
-              <p className="hint">{t("library.seriesMetadataOnlyHint")}</p>
-              {pluginSeriesRef.books.length > 0 && <div className="row">
-                <button disabled={uploading} onClick={() => setSelectedVolumes(pluginSeriesRef.books.map((book) => book.id))}>{t("library.selectAllVolumes")}</button>
-                <button disabled={uploading} onClick={() => setSelectedVolumes([])}>{t("library.clearVolumes")}</button>
-              </div>}
-              <ul className="source-results">
-                {pluginSeriesRef.books.map((book) => (
-                  <li key={book.id} className="source-result">
-                    <label className="radio">
-                      <input
-                        type="checkbox"
-                        disabled={uploading}
-                        checked={selectedVolumes.includes(book.id)}
-                        onChange={(e) => {
-                          const checked = e.target.checked;
-                          setSelectedVolumes((prev) => checked ? [...prev, book.id] : prev.filter((id) => id !== book.id));
-                        }}
-                      />
-                      <span>{book.title}</span>
-                    </label>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </section>
-      )}
-
-      {dialogError && <div className="error">{dialogError}</div>}
-      <div className="modal-actions">
-        <button onClick={close}>{t("library.cancel")}</button>
-        {inBookMode ? (
-          <button className="btn primary" onClick={() => void submitBook()} disabled={uploading}>
-            {uploading
-              ? uploadTotal > 0
-                ? t("library.uploadingProgress", { done: uploadDone, total: uploadTotal })
-                : t("library.uploading")
-              : contentCount > 1
-                ? t("library.addContents", { count: contentCount })
-                : t("library.addBook")}
-          </button>
-        ) : (
-          <button className="btn primary" onClick={() => void submitSeries()} disabled={uploading || (seriesMeta === "plugin" && !pluginSeriesRef)}>
-            {uploading ? t("library.uploading") : t("series.create")}
-          </button>
         )}
-      </div>
+
+        {dialogError && <div className="error">{dialogError}</div>}
+        <div className="modal-actions">
+          <button onClick={close}>{t("library.cancel")}</button>
+          {inBookMode ? (
+            <button className="btn primary" onClick={() => void submitBook()} disabled={uploading}>
+              {uploading
+                ? uploadTotal > 0
+                  ? t("library.uploadingProgress", { done: uploadDone, total: uploadTotal })
+                  : t("library.uploading")
+                : contentCount > 1
+                  ? t("library.addContents", { count: contentCount })
+                  : t(contentCount === 0 && meta !== "file" ? "library.addMetadataOnly" : "library.addBook")}
+            </button>
+          ) : (
+            <button className="btn primary" onClick={() => void submitSeries()} disabled={uploading || (seriesMeta === "plugin" && !pluginSeriesRef)}>
+              {uploading ? t("library.uploading") : t("series.create")}
+            </button>
+          )}
+        </div>
+      </fieldset>
     </Modal>
   );
 }

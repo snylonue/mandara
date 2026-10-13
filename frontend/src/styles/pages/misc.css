@@ -8,6 +8,27 @@
 }
 /* ---- plugin source browser / admin ---- */
 
+.add-form {
+  border: none;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+
+.source-selection {
+  padding: var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.additional-content > summary,
+.source-selection summary {
+  cursor: pointer;
+  color: var(--text-2);
+  padding-block: var(--space-2);
+}
+
 .source-search {
   display: flex;
   flex-direction: column;

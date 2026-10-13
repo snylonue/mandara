@@ -360,6 +360,42 @@ pub struct LookupParams {
     pub q: String,
 }
 
+/// A content declaration preview; deliberately excludes chapter bodies.
+#[derive(Serialize)]
+pub struct ContentPreview {
+    pub id: String,
+    pub mode: mandara_core::model::ContentMode,
+    pub chapter_count: usize,
+}
+
+impl From<mandara_core::source::SourceDeclaredContent> for ContentPreview {
+    fn from(content: mandara_core::source::SourceDeclaredContent) -> Self {
+        Self {
+            id: content.id,
+            mode: content.mode,
+            chapter_count: content.chapters.len(),
+        }
+    }
+}
+
+pub async fn preview_content(
+    AuthenticatedUser(_user): AuthenticatedUser,
+    State(st): State<St>,
+    Path(id): Path<String>,
+    Query(params): Query<LookupParams>,
+) -> Result<impl IntoResponse, ApiError> {
+    if params.q.trim().is_empty() {
+        return Err(ApiError::bad_request("content ID must not be empty"));
+    }
+    let content = st
+        .library
+        .plugins()
+        .get_content(&id, &params.q, true)
+        .await?
+        .ok_or_else(|| ApiError::not_found("plugin content"))?;
+    Ok(Json(ContentPreview::from(content)))
+}
+
 pub async fn lookup_plugin(
     AuthenticatedUser(_user): AuthenticatedUser,
     State(st): State<St>,
@@ -389,4 +425,45 @@ pub async fn lookup_plugin(
         total: items.len() as u64,
         items,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ContentPreview;
+    use mandara_core::model::ContentMode;
+    use mandara_core::source::{SourceDeclaredChapter, SourceDeclaredContent};
+
+    #[test]
+    fn content_preview_excludes_bodies_and_preserves_independent_identity() {
+        let preview = ContentPreview::from(SourceDeclaredContent {
+            id: "content-only-id".into(),
+            mode: ContentMode::Chapters,
+            chapters: vec![SourceDeclaredChapter {
+                title: "第一章".into(),
+                format: "text".into(),
+                content: Some("正文".into()),
+            }],
+        });
+        assert_eq!(
+            serde_json::to_value(preview).unwrap(),
+            serde_json::json!({
+                "id": "content-only-id", "mode": "chapters", "chapter_count": 1
+            })
+        );
+    }
+
+    #[test]
+    fn file_content_preview_does_not_require_parsed_chapters() {
+        let preview = ContentPreview::from(SourceDeclaredContent {
+            id: "download".into(),
+            mode: ContentMode::File,
+            chapters: vec![],
+        });
+        assert_eq!(
+            serde_json::to_value(preview).unwrap(),
+            serde_json::json!({
+                "id": "download", "mode": "file", "chapter_count": 0
+            })
+        );
+    }
 }

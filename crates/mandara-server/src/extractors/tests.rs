@@ -29,6 +29,10 @@ struct Fixture {
 
 impl Fixture {
     async fn new() -> Self {
+        Self::with_plugin(false).await
+    }
+
+    async fn with_plugin(load_plugin: bool) -> Self {
         let dir = std::env::temp_dir().join(format!("mandara-auth-{}", uuid::Uuid::new_v4()));
         let db = dir.join("test.db");
         crate::db::run_migrations(&db).await.unwrap();
@@ -44,7 +48,26 @@ impl Fixture {
             )
             .await
             .unwrap();
-        let plugins = Arc::new(PluginService::new(diesel_db.clone(), vec![]));
+        let wasm = if load_plugin {
+            vec![Arc::new(
+                mandara_plugin::WasmPlugin::load(
+                    "fixture.wasm",
+                    include_bytes!("../../../mandara-plugin/tests/fixtures/hello.wasm").to_vec(),
+                    Arc::new(mandara_plugin::FetchPolicy::default()),
+                    crate::service::images::DbImageStore::new(diesel_db.clone(), dir.join("files")),
+                )
+                .unwrap(),
+            )]
+        } else {
+            vec![]
+        };
+        let plugins = Arc::new(PluginService::new(diesel_db.clone(), wasm));
+        if load_plugin {
+            plugins
+                .register("fixture", "fixture.wasm", json!({}))
+                .await
+                .unwrap();
+        }
         let library = Library::new(diesel_db.clone(), plugins, dir.join("files"));
         let cfg = Config {
             addr: "127.0.0.1:0".into(),
@@ -208,6 +231,100 @@ async fn invalid_expired_and_deleted_credentials_are_unauthorized() {
 }
 
 #[tokio::test]
+async fn content_preview_confirms_independent_ids_without_importing() {
+    use diesel::QueryDsl as _;
+    use diesel_async::RunQueryDsl as _;
+
+    let fixture = Fixture::with_plugin(true).await;
+    let token = fixture.token("user", Role::User);
+    let response = request(
+        fixture.app(),
+        "GET",
+        "/api/plugins/fixture/content?q=hello-content-1",
+        Some(&token),
+        "",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response_json(response).await,
+        json!({
+            "id": "hello-content-1", "mode": "chapters", "chapter_count": 2
+        })
+    );
+    let response = request(
+        fixture.app(),
+        "GET",
+        "/api/plugins/fixture/content?q=hello-1",
+        Some(&token),
+        "",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let mut conn = fixture.state.diesel_db.get().await.unwrap();
+    assert_eq!(
+        crate::schema::books::table
+            .count()
+            .get_result::<i64>(&mut conn)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        crate::schema::book_files::table
+            .count()
+            .get_result::<i64>(&mut conn)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        crate::schema::chapters::table
+            .count()
+            .get_result::<i64>(&mut conn)
+            .await
+            .unwrap(),
+        0
+    );
+    drop(conn);
+    fixture
+        .state
+        .library
+        .plugins()
+        .set_enabled("fixture", false)
+        .await
+        .unwrap();
+    let response = request(
+        fixture.app(),
+        "GET",
+        "/api/plugins/fixture/content?q=hello-content-1",
+        Some(&token),
+        "",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn content_preview_rejects_blank_ids_and_missing_sources() {
+    let fixture = Fixture::new().await;
+    let token = fixture.token("user", Role::User);
+    for (uri, expected) in [
+        (
+            "/api/plugins/missing/content?q=%20",
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "/api/plugins/missing/content?q=independent",
+            StatusCode::NOT_FOUND,
+        ),
+    ] {
+        let response = request(fixture.app(), "GET", uri, Some(&token), "").await;
+        assert_eq!(response.status(), expected);
+    }
+}
+
+#[tokio::test]
 async fn admin_guard_uses_current_database_role_not_jwt_role() {
     let fixture = Fixture::new().await;
     let admin = fixture.token("admin", Role::Admin);
@@ -254,6 +371,7 @@ async fn protected_routes_authenticate_before_parsing_request_data() {
         ("GET", "/api/plugins/id/series"),
         ("POST", "/api/plugins/id/series"),
         ("GET", "/api/plugins/id/lookup"),
+        ("GET", "/api/plugins/id/content"),
         ("GET", "/api/books"),
         ("POST", "/api/books"),
         ("POST", "/api/books/id/files"),

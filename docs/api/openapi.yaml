@@ -379,6 +379,40 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /api/plugins/{id}/content:
+    get:
+      tags: [plugins]
+      summary: Preview an independently identified content item without importing it
+      description: |
+        Ask an enabled plugin for its content declaration. Returns identity,
+        loading form and chapter count only; no book, file, chapter or download
+        job is created. A metadata ID may be tried as a candidate, but availability
+        must be confirmed here rather than inferred from source capabilities.
+        Metadata and content IDs are independent; a 404 does not imply missing metadata.
+      operationId: previewPluginContent
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PluginId"
+        - name: q
+          in: query
+          required: true
+          schema: {type: string, minLength: 1}
+          description: Opaque candidate content ID
+      responses:
+        "200":
+          description: The content declaration preview
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PluginContentPreview"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /api/plugins/{id}/lookup:
     get:
       tags: [plugins]
@@ -2279,6 +2313,21 @@ components:
           type: string
         message:
           type: string
+
+    PluginContentPreview:
+      type: object
+      required: [id, mode, chapter_count]
+      properties:
+        id:
+          type: string
+          description: Confirmed content ID, accepted by the content exports
+        mode:
+          type: string
+          enum: [chapters, file]
+        chapter_count:
+          type: integer
+          minimum: 0
+          description: Declared chapter count; file-mode chapters are known after parsing
 
     PluginSearchItem:
       description: One search hit, annotated with the library book it is already synced into

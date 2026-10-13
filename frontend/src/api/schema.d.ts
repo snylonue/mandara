@@ -270,6 +270,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/plugins/{id}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Preview an independently identified content item without importing it
+         * @description Ask an enabled plugin for its content declaration. Returns identity,
+         *     loading form and chapter count only; no book, file, chapter or download
+         *     job is created. A metadata ID may be tried as a candidate, but availability
+         *     must be confirmed here rather than inferred from source capabilities.
+         *     Metadata and content IDs are independent; a 404 does not imply missing metadata.
+         */
+        get: operations["previewPluginContent"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/plugins/{id}/lookup": {
         parameters: {
             query?: never;
@@ -1169,6 +1193,14 @@ export interface components {
             field: string;
             message: string;
         };
+        PluginContentPreview: {
+            /** @description Confirmed content ID, accepted by the content exports */
+            id: string;
+            /** @enum {string} */
+            mode: "chapters" | "file";
+            /** @description Declared chapter count; file-mode chapters are known after parsing */
+            chapter_count: number;
+        };
         /** @description One search hit, annotated with the library book it is already synced into */
         PluginSearchItem: {
             /**
@@ -1649,6 +1681,35 @@ export interface operations {
                 };
             };
             400: components["responses"]["ValidationError"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    previewPluginContent: {
+        parameters: {
+            query: {
+                /** @description Opaque candidate content ID */
+                q: string;
+            };
+            header?: never;
+            path: {
+                /** @description Plugin instance id (source id) */
+                id: components["parameters"]["PluginId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The content declaration preview */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PluginContentPreview"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
             404: components["responses"]["NotFound"];
         };
     };

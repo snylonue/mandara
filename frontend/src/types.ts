@@ -37,6 +37,7 @@ export type ShareSessionView = Schemas["ShareSessionView"];
 export type ShareView = Schemas["ShareView"];
 export type ShareBookResponse = Schemas["ShareBookResponse"];
 export type PluginInstance = Schemas["PluginInstance"];
+export type PluginContentPreview = Schemas["PluginContentPreview"];
 export type PluginSearchItem = Schemas["PluginSearchItem"];
 export type PluginSearchResponse = Schemas["PluginSearchResponse"];
 export type PluginSeriesLookupResponse = Schemas["PluginSeriesLookupResponse"];

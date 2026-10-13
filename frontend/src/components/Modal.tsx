@@ -22,6 +22,8 @@ export function Modal({
 }) {
   const { t } = useTranslation();
   const panelRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+  useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
 
   // Scroll lock + ESC to close + initial focus.
   useEffect(() => {
@@ -29,7 +31,7 @@ export function Modal({
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") onCloseRef.current();
     };
     window.addEventListener("keydown", onKey);
     // Move focus into the dialog so tabbing starts inside.
@@ -41,7 +43,8 @@ export function Modal({
       document.body.style.overflow = prevOverflow;
       window.removeEventListener("keydown", onKey);
     };
-  }, [open, onClose]);
+    // Form edits must not rerun initial focus when the close callback changes.
+  }, [open]);
 
   if (!open) return null;
 

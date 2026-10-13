@@ -119,6 +119,7 @@ type SourceSearchProps = {
 } & ({
   target?: "book";
   onPick: (pick: SourcePick) => Promise<void> | void;
+  onClear?: () => void;
 } | {
   target: "series";
   onPick: (pick: SeriesSourcePick) => Promise<void> | void;
@@ -177,7 +178,7 @@ export function SourceSearchPane(props: SourceSearchProps) {
   // search term).
   useEffect(() => {
     ++seq.current;
-    if (props.target === "series") props.onClear();
+    props.onClear?.();
     setNextOffset(0);
     setPickError(null);
     if (!sel || !showSearch) {
@@ -197,7 +198,7 @@ export function SourceSearchPane(props: SourceSearchProps) {
   async function lookup(key: string) {
     if (!selected || props.disabled) return;
     const mySeq = ++seq.current;
-    if (props.target === "series") props.onClear();
+    props.onClear?.();
     setLoading(true);
     setError(null);
     try {
@@ -274,7 +275,7 @@ export function SourceSearchPane(props: SourceSearchProps) {
               value={manual}
               onChange={(e) => {
                 setManual(e.target.value);
-                if (props.target === "series") { ++seq.current; props.onClear(); setResult(null); setLoading(false); }
+                ++seq.current; props.onClear?.(); setResult(null); setLoading(false);
               }}
               aria-label={t(props.target === "series" ? "plugin.seriesIdPlaceholder" : "plugin.manualIdPlaceholder")}
             />
