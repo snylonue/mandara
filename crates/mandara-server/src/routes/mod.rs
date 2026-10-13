@@ -10,7 +10,7 @@ pub mod sessions;
 pub mod shares;
 
 use axum::extract::{DefaultBodyLimit, Request, State};
-use axum::http::{HeaderMap, HeaderValue, header};
+use axum::http::{HeaderValue, header};
 use axum::middleware::{self, Next};
 use axum::response::Response;
 use axum::routing::{delete, get, patch, post, put};
@@ -26,11 +26,6 @@ use crate::error::ApiError;
 
 /// Re-exported so submodules can write `use crate::routes::St`.
 pub use crate::state::St;
-
-/// Resolve the current user (or the local admin when auth is disabled).
-pub async fn current_user(st: &St, headers: &HeaderMap) -> Result<User, ApiError> {
-    st.auth.require_user(headers, &st.diesel_db).await
-}
 
 pub fn can_view_file(user: &User, file: &FileMeta) -> bool {
     user.role == mandara_core::model::Role::Admin

@@ -33,3 +33,6 @@ dotenvy = { workspace = true }
 sha2 = "0.11.0"
 diesel = { workspace = true }
 diesel-async = { workspace = true }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

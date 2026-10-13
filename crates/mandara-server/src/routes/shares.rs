@@ -3,7 +3,7 @@
 
 use axum::Json;
 use axum::extract::{Path, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
@@ -16,11 +16,12 @@ use diesel::prelude::SelectableHelper as _;
 use diesel_async::RunQueryDsl as _;
 
 use mandara_core::model::{
-    ChapterMeta, InChapter, Position, Share, ShareKind, TocNode, User, Visibility,
+    ChapterMeta, InChapter, Position, Share, ShareKind, TocNode, Visibility,
 };
 
 use crate::error::ApiError;
-use crate::routes::{St, can_manage_file, current_user, load_visible_file};
+use crate::extractors::AuthenticatedUser;
+use crate::routes::{St, can_manage_file, load_visible_file};
 use crate::rows::ShareRow;
 #[allow(unused_imports)]
 use crate::schema::{sessions, shares, users};
@@ -84,12 +85,12 @@ pub struct CreateShare {
 }
 
 pub async fn create_share(
+    user: AuthenticatedUser,
     State(st): State<St>,
-    headers: HeaderMap,
     Path(file_id): Path<String>,
     Json(req): Json<CreateShare>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = current_user(&st, &headers).await?;
+    let user = user.into_inner();
     let file = load_visible_file(&st, &user, &file_id).await?;
     // Private files are shareable by their owner (or admins) only; public
     // files (e.g. plugin catalogs) may be shared by any viewer.
@@ -346,11 +347,11 @@ pub async fn share_chapter(
 // DELETE /api/shares/{token} ------------------------------------------------------
 
 pub async fn delete_share(
+    user: AuthenticatedUser,
     State(st): State<St>,
-    headers: HeaderMap,
     Path(token): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user: User = current_user(&st, &headers).await?;
+    let user = user.into_inner();
     let row = load_share(&st, &token).await?;
     let is_creator = row.created_by.as_deref() == Some(user.id.as_str());
     if !is_creator && user.role != mandara_core::model::Role::Admin {
