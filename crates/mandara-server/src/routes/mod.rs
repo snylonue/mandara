@@ -146,10 +146,6 @@ pub fn router(state: St) -> Router {
         .route("/api/files/{id}/download", get(files::download_file))
         .route("/api/images/{id}", get(images::get_image))
         .route(
-            "/api/files/{id}/content-source",
-            post(files::set_content_source),
-        )
-        .route(
             "/api/files/{id}/sessions",
             get(sessions::list_file_sessions).post(sessions::create_session),
         )

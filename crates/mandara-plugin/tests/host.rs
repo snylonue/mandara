@@ -176,7 +176,13 @@ fn config_is_injected_into_calls() {
             .contains("tag1、tag2")
     );
     assert_eq!(first.chapters.len(), 2);
-    assert!(first.chapters[0].content.contains("测试站点"));
+    assert!(
+        first.chapters[0]
+            .content
+            .as_deref()
+            .unwrap()
+            .contains("测试站点")
+    );
 
     // Chapters serve the injected site name and mode variant.
     let ch = plugin
@@ -201,6 +207,27 @@ fn config_is_injected_into_calls() {
         .search_books(&values, "", 0, MAX_SEARCH_LIMIT)
         .unwrap();
     assert_eq!(result.items.len(), 0);
+}
+
+#[test]
+fn declared_bodies_preserve_absence_and_empty_content() {
+    let plugin = load();
+    let declared = plugin.declare(&[]).unwrap().unwrap();
+    let chapters = &declared[1].chapters;
+    assert_eq!(chapters.len(), 3);
+    assert!(chapters[0].content.is_some());
+    assert_eq!(chapters[1].content, None);
+    assert_eq!(chapters[2].content.as_deref(), Some(""));
+    let empty = plugin
+        .get_chapter(&[], &declared[1].book.id, 2)
+        .unwrap()
+        .unwrap();
+    assert_eq!(empty.content, "");
+    let lazy = plugin
+        .get_chapter(&[], &declared[1].book.id, 1)
+        .unwrap()
+        .unwrap();
+    assert!(lazy.content.contains("正文"));
 }
 
 #[test]

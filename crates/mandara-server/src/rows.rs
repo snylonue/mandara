@@ -101,8 +101,6 @@ pub struct FileRow {
     pub book_id: String,
     pub source: String,
     pub external_id: String,
-    pub content_source: Option<String>,
-    pub content_external_id: Option<String>,
     pub format: String,
     pub label: String,
     pub visibility: String,
@@ -123,8 +121,6 @@ impl FileRow {
             book_id: self.book_id,
             source: self.source,
             external_id: self.external_id,
-            content_source: self.content_source,
-            content_external_id: self.content_external_id,
             format: self
                 .format
                 .parse::<FileFormat>()
@@ -156,16 +152,16 @@ impl FileRow {
 pub struct ChapterRow {
     pub idx: i64,
     pub title: String,
-    pub content: String,
+    pub content: Option<String>,
 }
 
 impl ChapterRow {
-    pub fn into_model(self) -> Chapter {
-        Chapter {
+    pub fn into_model(self) -> Option<Chapter> {
+        Some(Chapter {
             idx: self.idx.max(0) as u32,
             title: self.title,
-            content: self.content,
-        }
+            content: self.content?,
+        })
     }
 }
 

@@ -3,7 +3,7 @@
 //! A *metadata-only* plugin over the official Bangumi API
 //! (`https://api.bgm.tv`, v0): `search` + `lookup`, no content — acquired
 //! books are metadata entries; attach content by uploading files or
-//! rebinding to a content plugin instance.
+//! adding independent content items from plugin instances.
 //!
 //! - `search-books` → `POST /v0/search/subjects?limit=&offset=` (the
 //!   pagination parameters live in the query string, not the body; body =

@@ -96,7 +96,7 @@ diesel-async = { version = "0.7", features = ["sqlite"] }  # SyncConnectionWrapp
 |---|---|
 | `SyncConnectionWrapper` futures are not cancellation-safe (diesel-async#281): dropping a future mid-transaction then reusing the connection can panic | Never hold transactions across user-controlled await boundaries longer than necessary (already true after localize_images removal); wrap transaction bodies so cancellation lands between statements where possible; documented in the service module docs |
 | Per-query `spawn_blocking` hop | Irrelevant at SQLite/local-disk latency |
-| `CASE WHEN excluded…` upsert guard | Rewrite as `coalesce(nullif(excluded(content), ""), content)`; declare `nullif` once via `sql_function!` (declarative signature, no raw SQL string) |
+| Optional chapter-body upsert | Use `coalesce(excluded(content), content)` for nullable bodies: NULL preserves cached content; an empty string replaces it with a valid empty body |
 | `strftime('%Y-%m-%dT%H:%M:%fZ','now')` explicit UPDATE in sessions.rs | Generate the same-format timestamp on the Rust side and bind it (table defaults stay DB-side) |
 
 ## Phases (one feature = one commit)

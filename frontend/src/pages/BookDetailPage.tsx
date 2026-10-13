@@ -16,7 +16,6 @@ import { Modal } from "../components/Modal";
 import { ExtMetaForm, ExtMetaTable, extMergePatch, type ExtRecord } from "../components/ExtMetaForm";
 import { useToast } from "../components/toast";
 import {
-  SourceBrowserDialog,
   SourceSearchPane,
   usePluginInstances,
   type SourcePick,
@@ -26,7 +25,6 @@ import type {
   BookDetail,
   BookMeta,
   FileMeta,
-  PluginInstance,
   ReadingSession,
   SeriesBrief,
   SessionsResponse,
@@ -56,33 +54,7 @@ function FileSection({
 }) {
   const { t } = useTranslation();
   const toast = useToast();
-  const instances = usePluginInstances();
-  const [rebindOpen, setRebindOpen] = useState(false);
-  const [rebindError, setRebindError] = useState<string | null>(null);
-  const [rebinding, setRebinding] = useState(false);
   const [sessions, setSessions] = useState<ReadingSession[]>([]);
-
-  async function rebind(pick: SourcePick) {
-    setRebindError(null);
-    setRebinding(true);
-    try {
-      const body: Record<string, string> = { content_source: pick.instance.id };
-      // The file's external_id (its id in the *metadata* source) rarely
-      // matches the content source's id; use the picked book's id unless
-      // the user picked the default (self) of the current source.
-      body.content_external_id = pick.item.id;
-      await api<FileMeta>(`/files/${file.id}/content-source`, {
-        method: "POST",
-        body: JSON.stringify(body),
-      });
-      setRebindOpen(false);
-      await onChanged();
-    } catch (e) {
-      setRebindError(e instanceof ApiError ? e.message : t("common.failed_verb"));
-    } finally {
-      setRebinding(false);
-    }
-  }
 
   const loadSessions = useCallback(async () => {
     try {
@@ -137,15 +109,11 @@ function FileSection({
       <div className="file-head">
         <div className="file-title">
           <Link to={`/read/${file.id}`} className="file-label">
-            {file.label || file.format}
+            {file.label || (file.source === "local" ? file.format : file.source)}
           </Link>
           <span className={`fmt-badge fmt-${file.format}`}>{file.format}</span>
-          {file.source !== "local" && file.format !== "plugin" && (
-            <span className="tag" title={t("book.contentSourceLine", {
-              source: file.source,
-              content: file.content_source,
-              external: file.content_external_id ?? file.external_id,
-            })}>
+          {file.source !== "local" && (
+            <span className="tag" title={t("book.contentSourceLine", { source: file.source, external: file.external_id })}>
               {t("book.pluginTag")}
             </span>
           )}
@@ -178,7 +146,7 @@ function FileSection({
               {t("book.download")}
             </button>
           )}
-          {canManage && file.source === "local" && (
+          {canManage && (
             <>
               <button className="btn sm" onClick={() => void toggleVisibility()}>
                 {file.visibility === "public" ? t("book.setPrivate") : t("book.setPublic")}
@@ -189,18 +157,13 @@ function FileSection({
             </>
           )}
           {canManage && file.source !== "local" && (
-            <>
-              <button
-                className="btn sm"
-                title={t("book.rematerializeHint")}
-                onClick={() => void rematerialize()}
-              >
-                {t("book.rematerialize")}
-              </button>
-              <button className="btn sm" onClick={() => setRebindOpen(true)}>
-                {t("book.changeContentSource")}
-              </button>
-            </>
+            <button
+              className="btn sm"
+              title={t("book.rematerializeHint")}
+              onClick={() => void rematerialize()}
+            >
+              {t("book.rematerialize")}
+            </button>
           )}
         </div>
       </div>
@@ -210,17 +173,6 @@ function FileSection({
       <div className="hint file-sub">
         {t("book.uploadedAt", { count: file.chapter_count, time: fmtTime(file.created_at) })}
       </div>
-      <SourceBrowserDialog
-        open={rebindOpen}
-        onClose={() => setRebindOpen(false)}
-        instances={instances}
-        filter={(i: PluginInstance) => i.enabled && i.id !== file.source && i.capabilities.includes("content")}
-        title={t("book.rebindTitle", { label: file.label || file.format })}
-        pickLabel={() => t("book.useAsContentSource")}
-        onPick={(pick) => (rebinding ? Promise.resolve() : rebind(pick))}
-      />
-      {rebindError && <div className="error">{rebindError}</div>}
-
       {sessions.length > 0 && (
         <table className="sessions">
           <thead>

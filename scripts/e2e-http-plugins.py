@@ -104,21 +104,26 @@ def main():
             assert request("GET", f'/files/{file["id"]}/chapters/0')["content"] == chapter["content"]
             print("ok: separately acquired metadata-only volumes share their explicit parent series")
 
-            rebound_file = request("POST", f'/files/{file["id"]}/content-source', {"content_source": "reader", "content_external_id": "r-alpha"})
-            assert rebound_file["chapter_count"] == 2
-            assert request("GET", f'/files/{file["id"]}/chapters/0')["title"] == "第一章 相遇"
+            second = acquire({"plugin_source": "reader", "plugin_book_id": "r-alpha", "book_id": book_id})["books"][0]["files"][0]
+            assert second["id"] != file["id"]
+            assert request("GET", f'/files/{second["id"]}/chapters/0')["title"] == "第一章 相遇"
             request("POST", f'/books/{book_id}/refresh')
-            rebound = request("GET", f'/books/{book_id}')
-            assert rebound["files"][0]["content_external_id"] == "r-alpha"
-            assert request("GET", f'/files/{file["id"]}/chapters/0')["title"] == "第一章 相遇"
-            print("ok: refresh preserves user-selected source and opaque book ID")
+            details = request("GET", f'/books/{book_id}')
+            assert {f["external_id"] for f in details["files"]} == {"r-alpha", "r-beta"}
+            request("POST", f'/files/{second["id"]}/rematerialize')
+            assert request("GET", f'/files/{file["id"]}/chapters/0')["content"] == chapter["content"]
+            request("DELETE", f'/files/{second["id"]}')
+            assert request("GET", f'/files/{file["id"]}/chapters/0')["content"] == chapter["content"]
+            request("POST", f'/files/{file["id"]}/content-source', {"content_source": "reader"}, expected=405)
+            print("ok: multiple content items are independently selectable, refreshable and deletable")
 
             uploaded = acquire({"visibility": "public"}, upload=True)["books"][0]
             attached = acquire({"book_id": uploaded["book"]["id"], "visibility": "public"}, upload=True)
             assert attached["books"][0]["book"]["id"] == uploaded["book"]["id"]
             plugin = acquire({"plugin_source": "reader", "plugin_book_id": "r-2", "book_id": uploaded["book"]["id"]})
             assert plugin["books"][0]["files"][0]["format"] == "epub"
-            acquire({"plugin_source": "reader", "plugin_book_id": "r-2", "book_id": book_id}, expected=409)
+            another = acquire({"plugin_source": "reader", "plugin_book_id": "r-2", "book_id": book_id})
+            assert another["books"][0]["files"][0]["id"] != plugin["books"][0]["files"][0]["id"]
             print("ok: upload/attach/file-mode acquisition remains supported")
         finally:
             for child in reversed(children):

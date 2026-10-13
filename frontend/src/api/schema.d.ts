@@ -563,7 +563,12 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Fetch one chapter's content */
+        /**
+         * Fetch one chapter's content
+         * @description Reads downloaded chapter content. If the background download has
+         *     not reached this chapter yet, fetches it on demand. Concurrent
+         *     background and foreground requests share the same cached result.
+         */
         get: operations["getChapter"];
         put?: never;
         post?: never;
@@ -614,29 +619,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/files/{id}/content-source": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Rebind a file's chapter source (owner/admin only; metadata/content
-         *     separation). The target instance must exist; when it has the
-         *     `lookup` capability the book must resolve via get-book. Existing
-         *     chapter bodies are cleared and re-materialized from the new source
-         *     on next read; title placeholders refresh from the new source.
-         */
-        post: operations["setContentSource"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/files/{id}/rematerialize": {
         parameters: {
             query?: never;
@@ -648,8 +630,8 @@ export interface paths {
         put?: never;
         /**
          * Clear a plugin file's stored chapter bodies (owner/admin only) so
-         *     they are lazily re-pulled from its content source on the next
-         *     read. The retry path for degraded materializations — e.g. images
+         *     they are downloaded automatically from its content source in the
+         *     background. The retry path for degraded materializations — e.g. images
          *     that fell back to remote URLs because the download failed; the
          *     re-pull stores them via the plugin's store-image import.
          */
@@ -902,6 +884,10 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /**
+         * @description One independently selectable content item of a book. Source identity
+         *     is immutable; add or delete an item instead of changing its source.
+         */
         FileMeta: {
             id: string;
             book_id: string;
@@ -909,13 +895,6 @@ export interface components {
             source: string;
             /** @description Id within the source (same as `id` for local files) */
             external_id: string;
-            /**
-             * @description Instance id whose chapters back this file when different from
-             *     `source` (metadata/content source separation); null = `source`.
-             */
-            content_source: string | null;
-            /** @description Book id inside the content source; null = `external_id`. */
-            content_external_id: string | null;
             /** @enum {string} */
             format: "epub" | "txt" | "plugin";
             /** @description Short human label for this edition */
@@ -933,7 +912,7 @@ export interface components {
             /**
              * @description Legacy flat offset, retained for existing caches. New plugin
              *     books use local chapter indices and value 0. Legacy uncached
-             *     reads require explicit book selection via content rebinding.
+             *     reads require adding an explicit plugin book as a new content item.
              */
             volume_offset: number;
             /**
@@ -1862,15 +1841,15 @@ export interface operations {
                      * @description Attach the content to this existing metadata entry
                      *     instead of creating one. The caller must be able to
                      *     see the book. Mutually exclusive with the plugin
-                     *     metadata modes (a plugin book attached this way must
-                     *     not already be materialized under another entry).
+                     *     metadata modes. Content reuse is scoped to this book.
                      */
                     book_id?: string;
                     /**
                      * @description Together with `plugin_book_id`: the *content* comes
                      *     from this plugin source's book (materialized into the
                      *     library; whole-book files via `get-book-file`, else
-                     *     lazy chapter mode). When no `file`,
+                     *     automatic background chapter downloads). The response
+                     *     does not wait for all chapter bodies. When no `file`,
                      *     `meta_plugin_source`, or `book_id` is given, the
                      *     plugin's own entry also provides the metadata.
                      */
@@ -2435,41 +2414,6 @@ export interface operations {
                 };
                 content?: never;
             };
-        };
-    };
-    setContentSource: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Book file id */
-                id: components["parameters"]["FileId"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": {
-                    /** @description Target plugin instance id (must exist) */
-                    content_source: string;
-                    /** @description Book id inside the content source (default: the file's external_id) */
-                    content_external_id?: string;
-                };
-            };
-        };
-        responses: {
-            /** @description The updated file */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["FileMeta"];
-                };
-            };
-            400: components["responses"]["BadRequest"];
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
         };
     };
     rematerializeFile: {

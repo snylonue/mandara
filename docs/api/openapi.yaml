@@ -603,15 +603,15 @@ paths:
                     Attach the content to this existing metadata entry
                     instead of creating one. The caller must be able to
                     see the book. Mutually exclusive with the plugin
-                    metadata modes (a plugin book attached this way must
-                    not already be materialized under another entry).
+                    metadata modes. Content reuse is scoped to this book.
                 plugin_source:
                   type: string
                   description: |
                     Together with `plugin_book_id`: the *content* comes
                     from this plugin source's book (materialized into the
                     library; whole-book files via `get-book-file`, else
-                    lazy chapter mode). When no `file`,
+                    automatic background chapter downloads). The response
+                    does not wait for all chapter bodies. When no `file`,
                     `meta_plugin_source`, or `book_id` is given, the
                     plugin's own entry also provides the metadata.
                 plugin_book_id:
@@ -1081,6 +1081,10 @@ paths:
     get:
       tags: [files]
       summary: Fetch one chapter's content
+      description: |
+        Reads downloaded chapter content. If the background download has
+        not reached this chapter yet, fetches it on demand. Concurrent
+        background and foreground requests share the same cached result.
       operationId: getChapter
       security:
         - bearerAuth: []
@@ -1158,55 +1162,13 @@ paths:
         "404":
           description: No original retained for this file
 
-  /api/files/{id}/content-source:
-    post:
-      tags: [files]
-      summary: |
-        Rebind a file's chapter source (owner/admin only; metadata/content
-        separation). The target instance must exist; when it has the
-        `lookup` capability the book must resolve via get-book. Existing
-        chapter bodies are cleared and re-materialized from the new source
-        on next read; title placeholders refresh from the new source.
-      operationId: setContentSource
-      security:
-        - bearerAuth: []
-      parameters:
-        - $ref: "#/components/parameters/FileId"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [content_source]
-              properties:
-                content_source:
-                  description: Target plugin instance id (must exist)
-                  type: string
-                content_external_id:
-                  description: 'Book id inside the content source (default: the file''s external_id)'
-                  type: string
-      responses:
-        "200":
-          description: The updated file
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/FileMeta"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "404":
-          $ref: "#/components/responses/NotFound"
-
   /api/files/{id}/rematerialize:
     post:
       tags: [files]
       summary: |
         Clear a plugin file's stored chapter bodies (owner/admin only) so
-        they are lazily re-pulled from its content source on the next
-        read. The retry path for degraded materializations — e.g. images
+        they are downloaded automatically from its content source in the
+        background. The retry path for degraded materializations — e.g. images
         that fell back to remote URLs because the download failed; the
         re-pull stores them via the plugin's store-image import.
       operationId: rematerializeFile
@@ -1732,13 +1694,14 @@ components:
 
     FileMeta:
       type: object
+      description: |
+        One independently selectable content item of a book. Source identity
+        is immutable; add or delete an item instead of changing its source.
       required:
         - id
         - book_id
         - source
         - external_id
-        - content_source
-        - content_external_id
         - format
         - label
         - visibility
@@ -1758,17 +1721,6 @@ components:
         external_id:
           description: Id within the source (same as `id` for local files)
           type: string
-        content_source:
-          description: |
-            Instance id whose chapters back this file when different from
-            `source` (metadata/content source separation); null = `source`.
-          type: string
-          nullable: true
-        content_external_id:
-          description: |
-            Book id inside the content source; null = `external_id`.
-          type: string
-          nullable: true
         format:
           type: string
           enum: [epub, txt, plugin]
@@ -1794,7 +1746,7 @@ components:
           description: |
             Legacy flat offset, retained for existing caches. New plugin
             books use local chapter indices and value 0. Legacy uncached
-            reads require explicit book selection via content rebinding.
+            reads require adding an explicit plugin book as a new content item.
           type: integer
           minimum: 0
         original:

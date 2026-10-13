@@ -32,6 +32,16 @@ pub struct SourceBook {
     pub volume_no: u32,
 }
 
+/// A chapter advertised in a declared catalog.
+#[derive(Debug, Clone)]
+pub struct SourceDeclaredChapter {
+    pub title: String,
+    /// Interpretation of a supplied body, as in `SourceChapter::format`.
+    pub format: String,
+    /// `None` requests lazy loading; `Some("")` is a supplied empty body.
+    pub content: Option<String>,
+}
+
 /// A chapter as returned by a plugin source.
 #[derive(Debug, Clone)]
 pub struct SourceChapter {

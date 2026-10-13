@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use serde::Serialize;
 
-use mandara_core::source::{SourceBook, SourceBookFile, SourceChapter};
+use mandara_core::source::{SourceBook, SourceBookFile, SourceChapter, SourceDeclaredChapter};
 use mandara_plugin::error::Error as PluginError;
 use mandara_plugin::{
     BookEntry, ConfigErrors, ConfigField, ConfigKind, ConfigValue, SearchResult, SourceInfo,
@@ -108,9 +108,8 @@ pub struct ConfigFieldView {
 /// One declared book plus its declared chapters (sync path).
 pub struct DeclaredCatalogBook {
     pub book: SourceBook,
-    /// Declared chapters in reading order; non-empty `content` can be
-    /// materialized eagerly, empty = title-only placeholder.
-    pub chapters: Vec<SourceChapter>,
+    /// Declared chapters in reading order; supplied bodies are cached eagerly.
+    pub chapters: Vec<SourceDeclaredChapter>,
 }
 
 pub struct DeclaredCatalog {
@@ -334,22 +333,15 @@ impl PluginService {
         Ok(self.info(&row))
     }
 
-    /// Delete an instance. Files that still reference it (as source or
-    /// content source) must be deleted first (409, like metadata
-    /// deletion).
+    /// Delete an instance only after removing its content items (409 otherwise).
     pub async fn unregister(&self, id: &str) -> Result<(), ApiError> {
-        use diesel::BoolExpressionMethods as _;
         use diesel::ExpressionMethods as _;
         use diesel::QueryDsl as _;
         use diesel_async::RunQueryDsl as _;
 
         let mut conn = self.db.get().await?;
         let files: Vec<String> = crate::schema::book_files::table
-            .filter(
-                crate::schema::book_files::source
-                    .eq(id)
-                    .or(crate::schema::book_files::content_source.eq(id)),
-            )
+            .filter(crate::schema::book_files::source.eq(id))
             .select(crate::schema::book_files::id)
             .load(&mut conn)
             .await?;
@@ -530,7 +522,7 @@ impl PluginService {
                             chapters: b
                                 .chapters
                                 .into_iter()
-                                .map(|c| SourceChapter {
+                                .map(|c| SourceDeclaredChapter {
                                     title: c.title,
                                     format: c.format,
                                     content: c.content,
@@ -579,7 +571,7 @@ impl PluginService {
                             chapters: b
                                 .chapters
                                 .into_iter()
-                                .map(|c| SourceChapter {
+                                .map(|c| SourceDeclaredChapter {
                                     title: c.title,
                                     format: c.format,
                                     content: c.content,
@@ -724,34 +716,6 @@ impl PluginService {
             }
         }
         Ok(None)
-    }
-
-    /// Validate a content-target instance for rebinding: it must exist,
-    /// and when it has the `lookup` capability the book must resolve via
-    /// `get-book` (catches typos early).
-    pub async fn check_content_target(&self, source: &str, book_id: &str) -> Result<(), ApiError> {
-        let row = self
-            .row(source)
-            .await?
-            .ok_or_else(|| ApiError::bad_request(format!("unknown plugin instance `{source}`")))?;
-        let wasm = self.wasm_info(&row.wasm_file).ok_or_else(|| {
-            ApiError::bad_request(format!("wasm file `{}` is not loaded", row.wasm_file))
-        })?;
-        if wasm.capabilities.iter().any(|c| c == "lookup") {
-            let values = values_from_config(&wasm.schema, &row.config);
-            let book_id = book_id.to_string();
-            let book_id_2 = book_id.clone();
-            let found = run_wasm(wasm.wasm.clone(), values, move |wasm, values| {
-                wasm.get_book(values, &book_id)
-            })
-            .await?;
-            if found.is_none() {
-                return Err(ApiError::bad_request(format!(
-                    "content source `{source}` does not offer book `{book_id_2}`"
-                )));
-            }
-        }
-        Ok(())
     }
 }
 

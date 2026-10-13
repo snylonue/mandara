@@ -1,5 +1,6 @@
 //! Business services.
 
+mod downloads;
 pub mod images;
 pub mod library;
 pub mod plugins;

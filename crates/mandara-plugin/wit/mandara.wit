@@ -1,8 +1,8 @@
-// Plugin protocol v9: one volume is one addressable book.
+// Plugin protocol v10: declared bodies are explicitly optional.
 // Plugins adapt upstream data and define opaque, stable IDs.
 // Metadata/content source selection belongs exclusively to the host.
 
-package mandara:plugin@0.9.0;
+package mandara:plugin@0.10.0;
 
 /// Shared types between mandara and plugins.
 interface types {
@@ -40,11 +40,19 @@ interface types {
     /// A single chapter of a book.
     record chapter {
         title: string,
-        /// Empty string = title-only placeholder (body fetched lazily via
-        /// `get-chapter`); non-empty = can be materialized eagerly.
+        /// A supplied body, including an empty string.
         content: string,
         /// "text" = plain text normalized by the host; "html" = HTML
         /// fragment sanitized by the host before storage.
+        format: string,
+    }
+
+    /// A declared chapter, optionally supplied with its body.
+    record declared-chapter {
+        title: string,
+        /// none = fetch lazily via get-chapter; some("") = cached empty body.
+        content: option<string>,
+        /// Same interpretation as chapter.format.
         format: string,
     }
 
@@ -52,7 +60,7 @@ interface types {
     /// chapter bodies.
     record declared-book {
         book: book-entry,
-        chapters: list<chapter>,
+        chapters: list<declared-chapter>,
     }
 
     /// Paginated catalog search result.
@@ -258,7 +266,7 @@ world mandara-plugin {
     // Types used by this world's exports come from the imported `types`
     // interface; WIT requires an explicit `use` to bring them into the
     // world scope.
-    use types.{book-entry, chapter, declared-book, search-result, book-file, source-info, series-entry, series-result, catalog-entry};
+    use types.{book-entry, chapter, declared-chapter, declared-book, search-result, book-file, source-info, series-entry, series-result, catalog-entry};
     use config.{config-field, config-value};
 
     /// Human-readable name of this plugin (same for all instances).

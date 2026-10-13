@@ -113,31 +113,31 @@ impl std::error::Error for ApiError {
 
 impl From<diesel::result::Error> for ApiError {
     fn from(e: diesel::result::Error) -> Self {
-        ApiError::Internal(anyhow::Error::new(e))
+        Self::internal(e)
     }
 }
 
 impl From<diesel_async::pooled_connection::PoolError> for ApiError {
     fn from(e: diesel_async::pooled_connection::PoolError) -> Self {
-        ApiError::Internal(anyhow::Error::new(e))
+        Self::internal(e)
     }
 }
 
 impl From<diesel_async::pooled_connection::deadpool::PoolError> for ApiError {
     fn from(e: diesel_async::pooled_connection::deadpool::PoolError) -> Self {
-        ApiError::Internal(anyhow::Error::new(e))
+        Self::internal(e)
     }
 }
 
 impl From<tokio::task::JoinError> for ApiError {
     fn from(e: tokio::task::JoinError) -> Self {
-        Self::Internal(e.into())
+        Self::internal(e)
     }
 }
 
 impl From<anyhow::Error> for ApiError {
     fn from(e: anyhow::Error) -> Self {
-        ApiError::Internal(e)
+        Self::internal(e)
     }
 }
 
@@ -147,8 +147,8 @@ impl From<CoreError> for ApiError {
             CoreError::NotFound(m) => ApiError::NotFound(m),
             CoreError::InvalidArgument(m) => ApiError::BadRequest(m),
             e @ CoreError::UnsupportedFormat => Self::invalid_input(e),
-            e @ CoreError::Plugin(_) => ApiError::Internal(e.into()),
-            CoreError::Io(e) => ApiError::Internal(anyhow::Error::new(e)),
+            e @ CoreError::Plugin(_) => Self::internal(e),
+            CoreError::Io(e) => Self::internal(e),
         }
     }
 }
@@ -170,7 +170,7 @@ impl From<mandara_formats::error::Error> for ApiError {
 }
 impl From<mandara_plugin::error::Error> for ApiError {
     fn from(e: mandara_plugin::error::Error) -> Self {
-        Self::Internal(e.into())
+        Self::internal(e)
     }
 }
 impl From<mandara_plugin::error::BookEntryError> for ApiError {
@@ -181,7 +181,7 @@ impl From<mandara_plugin::error::BookEntryError> for ApiError {
 
 impl From<crate::auth::AuthError> for ApiError {
     fn from(e: crate::auth::AuthError) -> Self {
-        Self::Internal(e.into())
+        Self::internal(e)
     }
 }
 impl From<crate::routes::auth::UsernameError> for ApiError {
@@ -198,5 +198,66 @@ impl From<axum::extract::multipart::MultipartError> for ApiError {
 impl From<crate::routes::books::UploadError> for ApiError {
     fn from(e: crate::routes::books::UploadError) -> Self {
         Self::invalid_input(e)
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn errors_keep_status_and_structured_body() {
+        let cases = [
+            (
+                ApiError::BadRequest("invalid".into()),
+                StatusCode::BAD_REQUEST,
+                serde_json::json!({"error":"invalid"}),
+            ),
+            (
+                ApiError::NotFound("chapter".into()),
+                StatusCode::NOT_FOUND,
+                serde_json::json!({"error":"chapter"}),
+            ),
+            (
+                ApiError::ConflictWithFiles(vec!["file".into()]),
+                StatusCode::CONFLICT,
+                serde_json::json!({"error":"still has 1 file(s); delete the files first","files":["file"]}),
+            ),
+            (
+                ApiError::invalid_input(anyhow::anyhow!("bad input")),
+                StatusCode::BAD_REQUEST,
+                serde_json::json!({"error":"bad input"}),
+            ),
+            (
+                ApiError::ConfigErrors(mandara_plugin::ConfigErrors(vec![])),
+                StatusCode::BAD_REQUEST,
+                serde_json::json!({"error":"invalid plugin configuration","errors":[]}),
+            ),
+            (
+                ApiError::internal(anyhow::anyhow!("private details")),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                serde_json::json!({"error":"internal server error"}),
+            ),
+        ];
+        for (error, status, body) in cases {
+            let response = error.into_response();
+            assert_eq!(response.status(), status);
+            let bytes = axum::body::to_bytes(response.into_body(), 4096)
+                .await
+                .unwrap();
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(),
+                body
+            );
+        }
+    }
+
+    #[test]
+    fn diagnostic_errors_keep_their_original_cause() {
+        let error = ApiError::internal(anyhow::anyhow!("root cause").context("cache write"));
+        assert_eq!(
+            std::error::Error::source(&error).unwrap().to_string(),
+            "cache write"
+        );
+        assert!(error.to_string().contains("root cause"));
     }
 }

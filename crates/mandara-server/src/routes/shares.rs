@@ -340,10 +340,7 @@ pub async fn share_chapter(
         .get_file(&row.file_id)
         .await?
         .ok_or_else(|| ApiError::not_found("file"))?;
-    match st.library.get_chapter(&file, path.idx).await? {
-        Some(chapter) => Ok(Json(chapter)),
-        None => Err(ApiError::not_found("chapter")),
-    }
+    Ok(Json(st.library.get_chapter(&file, path.idx).await?))
 }
 
 // DELETE /api/shares/{token} ------------------------------------------------------

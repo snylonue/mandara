@@ -32,7 +32,7 @@ the full design. This guide is for plugin authors.
 - Startup: wasm files compiled; instances loaded from `plugin_instances`.
 - `declare`-capable instances are **fully synced** at startup and on
   `POST /api/plugins/sync` (metadata + title rows; eager bodies for
-  non-empty `content`).
+  every supplied `content`, including empty strings).
 - `search`/`lookup`-capable instances are **lazy**: nothing is
   materialized until a user acquires a book through the unified
   acquisition flow (`POST /api/books` with `plugin_source` +
@@ -42,12 +42,33 @@ the full design. This guide is for plugin authors.
   the bytes through the normal upload parser (chapters, hierarchical TOC,
   sanitized HTML; stored like a local upload, format `epub`/`txt`). If
   `get-book-file` returns `none` or errors, the host falls back to
-  **chapter mode** (`get-book` + title placeholders; bodies lazy until
-  first read). Virtual rows (e.g. from `declare` sync) are materialized
-  in file mode on **first access** too.
-- Chapter bodies materialize into the central DB on first read; afterwards
-  the book behaves like any uploaded file (readable even if the plugin
-  file is removed).
+  **chapter mode** (`get-book` + title placeholders; bodies downloaded
+  automatically in the background after acquisition). Declared virtual
+  rows are also queued for background materialization.
+- Content acquisition returns without waiting for all chapter
+  bodies. Background downloads fill missing bodies in chapter order, with
+  at most two background fetches active globally. Cached bodies are skipped;
+  failed chapters are logged without blocking subsequent chapters.
+- Refresh queues newly discovered chapters; rematerialize clears cached
+  bodies and queues a download of the same content item. Existing downloads
+  are joined rather than restarted; deletion does not wait for remote requests.
+  Legacy split caches remain readable but cannot fetch uncached chapters;
+  add an explicit plugin book as a separate content item instead.
+- Readers and background downloads use the same start-or-join operation for
+  each cache key. Its short critical section only selects one writer and
+  registers completion waiters; it does not hold cache data or cache states.
+  Chapter keys are independent; whole-file downloads use one key per content
+  item. Database reads, writes and plugin work never hold this lock. Writers
+  finish their cache writes before delivering normalized content through the
+  channel. Chapter downloads return a chapter; whole-file downloads return all
+  chapters so each waiter selects its own index without rereading the database.
+  Database bodies use NULL for uncached title placeholders; an empty string is
+  a cached empty chapter. Cache presence never depends on body length.
+  A missing chapter is an error; an existing chapter may have an empty body. Channels carry
+  only not-found or failed download errors; detailed causes are logged by the
+  writer, not shared API errors. Failures release waiters without automatic retries.
+  Canceling a reader does not cancel the writer. Existing cached bodies are
+  returned directly, without joining a download or requiring an available plugin.
 - `identify`-capable instances are asked to recognize uploaded files
   (`identify-upload`, first match wins, in instance creation order).
 - `POST /api/books/{id}/refresh` re-pulls **metadata only** via
@@ -57,7 +78,7 @@ the full design. This guide is for plugin authors.
 ## Interface (WIT)
 
 Interface file: `crates/mandara-plugin/wit/mandara.wit`, world
-`mandara:plugin/mandara-plugin@0.9.0`. Every export is **required**
+`mandara:plugin/mandara-plugin@0.10.0`. Every export is **required**
 (the WIT parser has no optional exports) — unsupported features return
 `none`/empty and are declared via `capabilities()`:
 
@@ -79,8 +100,9 @@ interface types {
         series: option<series-entry>,
         volume-no: u32,
     }
-    record chapter { title: string, content: string, format: string }  // empty content = lazy body
-    record declared-book { book: book-entry, chapters: list<chapter> }
+    record chapter { title: string, content: string, format: string }
+    record declared-chapter { title: string, content: option<string>, format: string }
+    record declared-book { book: book-entry, chapters: list<declared-chapter> }
     variant catalog-entry { single(book-entry), series(series-entry) }
     record search-result { total: u64, items: list<catalog-entry> }
     record series-result { series: series-entry, books: list<book-entry> }
@@ -110,6 +132,14 @@ interface http {
     fetch: func(request: request) -> result<response, fetch-error>;
 }
 ```
+
+**Declared bodies (v0.10.0).** `declared-chapter.content` is explicitly optional:
+`none` requests lazy loading, while `some("")` supplies a valid empty chapter.
+The host normalizes every supplied body and preserves its cache presence even
+when normalization produces an empty string. `chapter.content` returned by
+`get-chapter` remains a required string; a missing chapter is returned as `none`.
+This replaces the v0.9 empty-string sentinel and changes the component ABI;
+rebuild all plugins with the current WIT before deploying the new host.
 
 World exports:
 
@@ -152,9 +182,9 @@ user select one member. Manual website IDs go through the same lookup.
 
 **Upgrade:** rebuild all components after the WIT change. Existing cached
 chapters and reading sessions are retained. Legacy flat-split files are
-not automatically rebound: their uncached reads/refresh require explicit
-volume selection. Content rebinding resets the old offset and TOC without
-changing metadata provenance. Legacy numeric-series metadata may need to
+not changed in place: add an explicitly selected volume as a separate
+content item for uncached reads. Metadata provenance stays independent.
+Legacy numeric-series metadata may need to
 be acquired anew to refresh; no positional ID migration is attempted.
 
 **Extended metadata (`book-entry.extra`, v0.7.0).** A source may
@@ -341,9 +371,13 @@ file serves many sites (per-instance config).
 
 Plugins describe only their own source. Users independently choose metadata
 and content in the acquisition flow; the host records both source ids and
-source-local book ids. Plugins never reference another instance. Owners and
-admins may rebind an existing file via `POST /api/files/{id}/content-source`;
-sync and refresh preserve that user-selected binding.
+source-local book ids. Plugins never reference another instance. A book
+holds multiple independent content items, each with its own immutable
+source and book ID, chapter cache, reading sessions and shares. Users select
+an item to read; deleting one does not affect the others. There is no global
+content-source setting or source-rebinding endpoint. Migration 0017 folds
+legacy overrides into each item's recorded source, retaining item IDs, caches,
+sessions, shares and archived original bytes. Colliding legacy items are kept.
 
 ## Example plugins
 
@@ -356,7 +390,7 @@ sync and refresh preserve that user-selected binding.
 - `plugins/bangumi-plugin/` — a **real-world** metadata-only source:
   Bangumi (`https://bgm.tv`) book subjects via the official v0 API.
   `search` + `lookup`, no content — acquired entries are pure metadata;
-  attach content by uploading files or rebinding to a content plugin.
+  attach separate content items by uploading files or selecting a content plugin.
   Config: `base-url` and an optional **access token**
   (<https://next.bgm.tv/demo/access-token>) sent as
   `Authorization: Bearer …` — NSFW subjects are hidden from
@@ -378,7 +412,7 @@ sync and refresh preserve that user-selected binding.
   only: wenku8's search and listings are login-walled, so books are
   browsed by their numeric series id (the number in the book URL, e.g.
   `3617`) and acquired by selecting an independently identified volume — the library source browser's manual-id entry, and the
-  rebind dialog, support lookup-only sources. Config: `base-url`
+  add-content dialog, support lookup-only sources. Config: `base-url`
   (mirror-switchable), optional `referer` override, `user-agent` (used
   for every request, including images; omitted or empty uses the default
   browser UA), and `illustration-placement` — wenku8 appends an `插图`

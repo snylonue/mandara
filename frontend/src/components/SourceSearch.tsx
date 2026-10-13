@@ -16,7 +16,7 @@
 //
 // Used by:
 //   - the unified add-book dialog (获取书籍 step, file/plugin tabs),
-//   - book detail "更换内容源" (rebind a file's content source).
+//   - book detail "添加内容" (add an independent content item).
 
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";

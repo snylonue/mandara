@@ -145,8 +145,7 @@ impl Guest for HelloPlugin {
         vec!["declare".into(), "identify".into(), "content".into()]
     }
 
-    /// Static catalog. Bodies are inline (non-empty `content`), so the
-    /// host materializes them eagerly.
+    /// Static catalog with supplied bodies, a lazy body and a valid empty body.
     fn declare() -> Option<Vec<DeclaredBook>> {
         let site = config_string("site-name", "Mandara 示例库");
         let tags = config_tags();
@@ -185,25 +184,33 @@ impl Guest for HelloPlugin {
             DeclaredBook {
                 book: book1,
                 chapters: vec![
-                    Chapter {
+                    DeclaredChapter {
                         title: "第一章 你好，书架".into(),
-                        content: format!(
+                        content: Some(format!(
                             "你成功加载了一个 wasm 插件！\n\n当前站点名称由配置注入：{site}。{tail}\n\n这本书由 Rust 编写、以 WebAssembly 组件的形式运行在服务器上。\n\n插件在沙箱中运行，只能调用宿主提供的 log 与 configure 接口。"
-                        ),
+                        )),
                         format: "text".into(),
                     },
-                    Chapter {
+                    DeclaredChapter {
                         title: "第二章 世界很大".into(),
-                        content: "你可以用同样的方式写出自己的书籍来源插件：实现 capabilities、declare（或 search-books/get-book）、chapter-titles 和 get-chapter 即可。\n\n参考 docs/plugins.md。".into(),
+                        content: Some("你可以用同样的方式写出自己的书籍来源插件：实现 capabilities、declare（或 search-books/get-book）、chapter-titles 和 get-chapter 即可。\n\n参考 docs/plugins.md。".into()),
                         format: "text".into(),
                     },
                 ],
             },
             DeclaredBook {
                 book: book2,
-                chapters: vec![Chapter {
+                chapters: vec![DeclaredChapter {
                     title: "幕后".into(),
-                    content: "这个插件的目录是声明式的数据，行为由配置驱动：\n\n- site-name 改变书名与正文；\n- mode 切换正文变体；\n- verbose 让插件记录宿主日志；\n- tags 附加到描述中。\n\n每次调用宿主都注入配置，插件内部没有任何跨调用状态。".into(),
+                    content: Some("这个插件的目录是声明式的数据，行为由配置驱动：\n\n- site-name 改变书名与正文；\n- mode 切换正文变体；\n- verbose 让插件记录宿主日志；\n- tags 附加到描述中。\n\n每次调用宿主都注入配置，插件内部没有任何跨调用状态。".into()),
+                    format: "text".into(),
+                }, DeclaredChapter {
+                    title: "延迟加载".into(),
+                    content: None,
+                    format: "text".into(),
+                }, DeclaredChapter {
+                    title: "空章节".into(),
+                    content: Some(String::new()),
                     format: "text".into(),
                 }],
             },
@@ -227,7 +234,7 @@ impl Guest for HelloPlugin {
     fn chapter_titles(book_id: String) -> Vec<String> {
         match book_id.as_str() {
             "hello-1" => vec!["第一章 你好，书架".into(), "第二章 世界很大".into()],
-            "hello-2" => vec!["幕后".into()],
+            "hello-2" => vec!["幕后".into(), "延迟加载".into(), "空章节".into()],
             _ => Vec::new(),
         }
     }
@@ -273,6 +280,16 @@ impl Guest for HelloPlugin {
             ("hello-2", 0, _) => Some(Chapter {
                 title: "幕后".into(),
                 content: "这个插件的目录是声明式的数据，行为由配置驱动。\n\n每次调用宿主都注入配置，插件内部没有任何跨调用状态。".into(),
+                format: "text".into(),
+            }),
+            ("hello-2", 1, _) => Some(Chapter {
+                title: "延迟加载".into(),
+                content: "声明目录只提供了标题，这段正文在读取时下载。".into(),
+                format: "text".into(),
+            }),
+            ("hello-2", 2, _) => Some(Chapter {
+                title: "空章节".into(),
+                content: String::new(),
                 format: "text".into(),
             }),
             _ => None,

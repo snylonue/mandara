@@ -4,15 +4,14 @@
 //! Two-level model: `books` are pure metadata entries, `book_files` are
 //! the actual books (uploads or virtual plugin books). Files from every
 //! source are catalogued here; plugin chapters are materialized into the
-//! same tables on first access, so readers see one unified store.
+//! same tables by background downloads, so readers see one unified store.
 //!
 //! Plugin system v2: sources are *instances* registered in
 //! `plugin_instances` (see [`PluginService`]). Catalog access is lazy —
 //! `declare`-capable instances sync their static catalog at startup,
 //! `search`-capable instances are browsed on demand and single books are
-//! materialized via `get-book`. A file's chapters may come from a
-//! different instance than its metadata (`content_source` /
-//! `content_external_id`, metadata/content separation).
+//! materialized via `get-book`. A book can hold multiple content items from
+//! different instances; each item has its own immutable source identity.
 //!
 //! Visibility is per file: `private` = owner + admins only, `public` =
 //! visible to every logged-in user.
@@ -28,17 +27,10 @@ use mandara_core::model::{
     BookMeta, Chapter, ChapterMeta, FileFormat, FileMeta, ImageId, Role, SeriesMeta, TocNode, User,
     Visibility,
 };
-use mandara_core::source::{SourceBook, SourceBookFile, SourceChapter, SourceSeries};
+use mandara_core::source::{SourceBook, SourceBookFile, SourceDeclaredChapter, SourceSeries};
 use mandara_core::{BookExt, SeriesExt};
 
 use mandara_formats::ParsedBook;
-
-// `NULLIF(a, b)` — not built into Diesel's DSL; declared once so upsert
-// guards stay pure expressions (no raw SQL strings).
-diesel::define_sql_function! {
-    #[sql_name = "NULLIF"]
-    fn nullif(x: diesel::sql_types::Text, y: diesel::sql_types::Text) -> diesel::sql_types::Nullable<diesel::sql_types::Text>;
-}
 
 // `COALESCE(?, col)` for optional string updates: `None` keeps the
 // stored value (nullable target column).
@@ -79,16 +71,6 @@ diesel::define_sql_function! {
     ) -> diesel::sql_types::Nullable<diesel::sql_types::Text>;
 }
 
-// Same function, non-nullable result (for upsert guards over NOT NULL
-// columns).
-diesel::define_sql_function! {
-    #[sql_name = "COALESCE"]
-    fn coalesce_nn(
-        x: diesel::sql_types::Nullable<diesel::sql_types::Text>,
-        y: diesel::sql_types::Text,
-    ) -> diesel::sql_types::Text;
-}
-
 /// Validate + normalize a source's extended metadata object and render it
 /// as the stored column value. Invalid payloads fail the acquisition —
 /// bad data never lands (docs/metadata-ext-design.md).
@@ -127,7 +109,7 @@ pub enum AcquireContent<'a> {
     /// A book offered by a plugin source. Whole-book files are fetched
     /// via `get-book-file` and run through the upload parser (file mode,
     /// `book-file` capability); otherwise a virtual chapter-mode file is
-    /// created whose bodies materialize lazily on first read.
+    /// created whose bodies download automatically in the background.
     Plugin {
         source: &'a str,
         book_id_in_source: &'a str,
@@ -238,12 +220,14 @@ struct MetadataPlan {
     books: Vec<PlannedBook>,
 }
 
+#[derive(Clone)]
 pub struct Library {
     diesel_db: crate::db::DieselDb,
     plugins: Arc<PluginService>,
     /// Directory for retained original file bytes
     /// (`data/files/{file_id}.{ext}`; see docs/storage-unification-design.md).
     files_dir: PathBuf,
+    downloads: Arc<super::downloads::Downloads>,
 }
 
 impl Library {
@@ -256,12 +240,52 @@ impl Library {
             diesel_db,
             plugins,
             files_dir,
+            downloads: Arc::new(super::downloads::Downloads::default()),
         }
     }
 
     /// The plugin instance service (instance management, config, calls).
     pub fn plugins(&self) -> &PluginService {
         &self.plugins
+    }
+
+    /// Download this content item without waiting in the acquisition response.
+    fn queue_download(&self, file: &FileMeta) {
+        if !background_content(file) {
+            return;
+        }
+        let library = self.clone();
+        let id = file.id.clone();
+        tokio::spawn(async move {
+            if let Err(error) = library.download_chapters(&id).await {
+                warn!(file = %id, %error, "background chapter download failed");
+            }
+        });
+    }
+
+    async fn download_chapters(&self, id: &str) -> Result<(), ApiError> {
+        let Some(file) = self.get_file(id).await? else {
+            return Ok(());
+        };
+        if file.chapter_count == 0 {
+            self.ensure_titles(&file).await?;
+        }
+        let Some(file) = self.get_file(id).await? else {
+            return Ok(());
+        };
+        for idx in 0..file.chapter_count.max(1) {
+            let _permit = self
+                .downloads
+                .permits
+                .acquire()
+                .await
+                .expect("download limiter stays open");
+            // The existing loader handles cached bodies, file mode and chapter mode.
+            if let Err(error) = self.get_chapter(&file, idx).await {
+                warn!(file = %id, idx, %error, "chapter download failed");
+            }
+        }
+        Ok(())
     }
 
     // ---- plugin sync -----------------------------------------------------
@@ -297,13 +321,15 @@ impl Library {
             let (book_id, file_id) = self
                 .ensure_plugin_book(&catalog.instance, None, &book.book, &titles)
                 .await?;
+
             let file = self
                 .get_file(&file_id)
                 .await?
                 .ok_or_else(|| ApiError::not_found("file"))?;
-            if file.content_source.is_none() {
-                self.upsert_chapters(&file_id, &book.chapters).await?;
-            }
+
+            self.upsert_chapters(&file_id, &book.chapters).await?;
+
+            self.queue_download(&file);
             info!(
                 source = %catalog.instance,
                 book = %book_id,
@@ -391,51 +417,34 @@ impl Library {
         Ok((book, file))
     }
 
-    /// File-mode materialization: store a `get-book-file` result like a
-    /// local upload (format `epub`/`txt` from the file name, chapters +
-    /// hierarchical TOC + sanitized HTML). The metadata comes from the
-    /// source's `book-entry`; afterwards the DB is the source of truth
-    /// and the plugin is not consulted for content.
+    /// Store parsed plugin content using the same original/cache path for
+    /// acquisition and reads. Metadata provenance is never changed here.
     async fn materialize_file_mode(
         &self,
-        source: &str,
-        entry: &SourceBook,
+        file: &FileMeta,
         book_file: &SourceBookFile,
-        book_id: &str,
-    ) -> Result<FileMeta, ApiError> {
-        let mut parsed = mandara_formats::parse(&book_file.bytes, &book_file.filename)?;
+        mut parsed: mandara_formats::ParsedBook,
+    ) -> Result<(FileMeta, Vec<Chapter>), ApiError> {
         ingest_parsed_book(&self.diesel_db, &self.files_dir, &mut parsed).await?;
-        // The virtual row for (source, external_id) under `book_id` was
-        // created by `ensure_plugin_book` / `attach_plugin_file`; rewrite
-        // it into a stored file: self-contained (no content indirection),
-        // real format/toc/chapter count.
-        let file_id: String = schema::book_files::table
-            .filter(
-                schema::book_files::source
-                    .eq(source)
-                    .and(schema::book_files::external_id.eq(&entry.id)),
-            )
-            .select(schema::book_files::id)
-            .first(&mut self.diesel_db.get().await?)
-            .await?;
+        let file_id = &file.id;
+        let source = &file.source;
+        let book_id = &file.book_id;
         let format = detect_format(&book_file.filename);
         let toc_json = serde_json::to_string(&parsed.toc).unwrap_or_else(|_| "[]".into());
         let label = format!("{source} 下载");
         // Cache the fetched bytes as the file's original: the source may
         // disappear later; download/reparse should not depend on it.
         let (orig_ext, orig_sha256, orig_size) = self
-            .store_original(&file_id, format.as_ref(), &book_file.bytes)
+            .store_original(file_id, format.as_ref(), &book_file.bytes)
             .await?;
 
         // Rewrite the virtual row into a stored file: self-contained
         // (no content indirection), real format/toc/chapter count.
-        diesel::update(schema::book_files::table.find(&file_id))
+        diesel::update(schema::book_files::table.find(file_id))
             .set((
                 schema::book_files::format.eq(format.as_ref()),
                 schema::book_files::label.eq(&label),
                 schema::book_files::toc.eq(toc_json),
-                schema::book_files::content_source.eq(Option::<String>::None),
-                schema::book_files::content_external_id.eq(Option::<String>::None),
                 schema::book_files::chapter_count.eq(parsed.chapters.len() as i64),
                 schema::book_files::orig_ext.eq(&orig_ext),
                 schema::book_files::orig_sha256.eq(&orig_sha256),
@@ -443,7 +452,7 @@ impl Library {
             ))
             .execute(&mut self.diesel_db.get().await?)
             .await?;
-        diesel::delete(schema::chapters::table.filter(schema::chapters::file_id.eq(&file_id)))
+        diesel::delete(schema::chapters::table.filter(schema::chapters::file_id.eq(file_id)))
             .execute(&mut self.diesel_db.get().await?)
             .await?;
         {
@@ -451,7 +460,7 @@ impl Library {
             for (idx, chapter) in parsed.chapters.iter().enumerate() {
                 diesel::insert_into(schema::chapters::table)
                     .values((
-                        schema::chapters::file_id.eq(&file_id),
+                        schema::chapters::file_id.eq(file_id),
                         schema::chapters::idx.eq(idx as i64),
                         schema::chapters::title.eq(&chapter.title),
                         schema::chapters::content.eq(&chapter.content),
@@ -470,9 +479,21 @@ impl Library {
             "plugin book materialized in file mode (upload parser)"
         );
 
-        self.get_file(&file_id)
+        let file = self
+            .get_file(file_id)
             .await?
-            .ok_or_else(|| ApiError::not_found("file"))
+            .ok_or_else(|| ApiError::not_found("file"))?;
+        let chapters = parsed
+            .chapters
+            .into_iter()
+            .enumerate()
+            .map(|(idx, chapter)| Chapter {
+                idx: idx as u32,
+                title: chapter.title,
+                content: chapter.content,
+            })
+            .collect();
+        Ok((file, chapters))
     }
 
     /// Import explicit series metadata and only the selected member books, without content.
@@ -679,7 +700,8 @@ impl Library {
             .filter(
                 schema::book_files::source
                     .eq(source_id)
-                    .and(schema::book_files::external_id.eq(&book.id)),
+                    .and(schema::book_files::external_id.eq(&book.id))
+                    .and(schema::book_files::book_id.eq(&book_id)),
             )
             .select(schema::book_files::id)
             .first::<String>(&mut self.diesel_db.get().await?)
@@ -705,15 +727,10 @@ impl Library {
                 file_id
             }
         };
-        // Sync never changes the user-selected content binding or its titles.
-        diesel::update(
-            schema::book_files::table
-                .find(&file_id)
-                .filter(schema::book_files::content_source.is_null()),
-        )
-        .set((schema::book_files::chapter_count.eq(titles.len() as i64),))
-        .execute(&mut self.diesel_db.get().await?)
-        .await?;
+        diesel::update(schema::book_files::table.find(&file_id))
+            .set((schema::book_files::chapter_count.eq(titles.len() as i64),))
+            .execute(&mut self.diesel_db.get().await?)
+            .await?;
         Ok((book_id, file_id))
     }
 
@@ -739,21 +756,26 @@ impl Library {
         Ok(())
     }
 
-    /// Store declared chapter rows (title + body, eager for non-empty
-    /// content). Bodies of chapters that are declared empty stay lazy.
+    /// Store declared chapter rows; missing bodies remain lazy placeholders.
     async fn upsert_chapters(
         &self,
         file_id: &str,
-        chapters: &[SourceChapter],
+        chapters: &[SourceDeclaredChapter],
     ) -> Result<(), ApiError> {
         let mut conn = self.diesel_db.get().await?;
         for (idx, chapter) in chapters.iter().enumerate() {
-            let content = with_stored_dims(
-                &self.diesel_db,
-                &mandara_formats::htmlize::plugin_to_html(&chapter.format, &chapter.content),
-            )
-            .await;
-            // Empty bodies never overwrite materialized content: keep the
+            let content = if let Some(body) = &chapter.content {
+                Some(
+                    with_stored_dims(
+                        &self.diesel_db,
+                        &mandara_formats::htmlize::plugin_to_html(&chapter.format, body),
+                    )
+                    .await,
+                )
+            } else {
+                None
+            };
+            // Missing bodies never overwrite materialized content: keep the
             // stored text when the incoming chapter is a lazy placeholder.
             diesel::insert_into(schema::chapters::table)
                 .values((
@@ -767,8 +789,8 @@ impl Library {
                 .set((
                     schema::chapters::title.eq(diesel::upsert::excluded(schema::chapters::title)),
                     schema::chapters::linear.eq(diesel::upsert::excluded(schema::chapters::linear)),
-                    schema::chapters::content.eq(coalesce_nn(
-                        nullif(diesel::upsert::excluded(schema::chapters::content), ""),
+                    schema::chapters::content.eq(coalesce_opt(
+                        diesel::upsert::excluded(schema::chapters::content),
                         schema::chapters::content,
                     )),
                 ))
@@ -783,13 +805,15 @@ impl Library {
         &self,
         source: &str,
         external_id: &str,
+        book_id: &str,
     ) -> Result<Option<FileMeta>, ApiError> {
         let mut conn = self.diesel_db.get().await?;
         let row: Option<FileRow> = schema::book_files::table
             .filter(
                 schema::book_files::source
                     .eq(source)
-                    .and(schema::book_files::external_id.eq(external_id)),
+                    .and(schema::book_files::external_id.eq(external_id))
+                    .and(schema::book_files::book_id.eq(book_id)),
             )
             .select(FileRow::as_select())
             .first(&mut conn)
@@ -881,6 +905,11 @@ impl Library {
             Some(id) => self.get_series(id).await?,
             None => plan.series,
         };
+        for (_, file) in &books {
+            if let Some(file) = file {
+                self.queue_download(file);
+            }
+        }
         Ok(AcquireOutcome { series, books })
     }
 
@@ -1141,27 +1170,6 @@ impl Library {
                 let entry = self
                     .plugin_book_entry(content_source, content_book_id)
                     .await?;
-                // Single plugin book under the planned metadata: it
-                // must not already live under a different metadata
-                // entry (one plugin book = one library entry).
-                let existing: Option<String> = schema::book_files::table
-                    .filter(
-                        schema::book_files::source
-                            .eq(content_source)
-                            .and(schema::book_files::external_id.eq(&entry.id)),
-                    )
-                    .select(schema::book_files::book_id)
-                    .first(&mut self.diesel_db.get().await?)
-                    .await
-                    .optional()?;
-                if let Some(other) = existing
-                    && other != planned.book_id
-                {
-                    return Err(ApiError::Conflict(format!(
-                        "plugin book `{content_book_id}` is already in the library under \
-                             metadata `{other}`; attach another source instead"
-                    )));
-                }
                 self.attach_plugin_file(content_source, Some(&user.id), &entry, &planned.book_id)
                     .await?;
                 let file = self
@@ -1214,7 +1222,7 @@ impl Library {
     /// The virtual file row of a plugin book attached under an existing
     /// metadata entry (no metadata is created; `ensure_plugin_book` is
     /// bypassed so the entry the user chose wins). The caller must have
-    /// checked the plugin book is not already materialized elsewhere.
+    /// selected this metadata entry and validated the content source.
     async fn attach_plugin_file(
         &self,
         source: &str,
@@ -1226,7 +1234,8 @@ impl Library {
             .filter(
                 schema::book_files::source
                     .eq(source)
-                    .and(schema::book_files::external_id.eq(&book.id)),
+                    .and(schema::book_files::external_id.eq(&book.id))
+                    .and(schema::book_files::book_id.eq(&book_id)),
             )
             .select(schema::book_files::id)
             .first(&mut self.diesel_db.get().await?)
@@ -1255,28 +1264,27 @@ impl Library {
     /// Materialize a plugin book's *content* under an existing metadata
     /// entry. File mode (`get-book-file` through the upload parser,
     /// `book-file` capability) wins; chapter mode (virtual file + title
-    /// placeholders, bodies lazy until first read) is the fallback.
+    /// placeholders, background chapter downloads) is the fallback.
     async fn materialize_plugin_content(
         &self,
         source: &str,
         entry: &SourceBook,
         book_id: &str,
     ) -> Result<FileMeta, ApiError> {
-        if let Some(file) = self.plugin_file(source, &entry.id).await?
-            && file.content_source.is_some()
-        {
-            self.ensure_titles(&file).await?;
-            return self
-                .get_file(&file.id)
-                .await?
-                .ok_or_else(|| ApiError::not_found("file"));
-        }
+        let existing = self
+            .plugin_file(source, &entry.id, book_id)
+            .await?
+            .ok_or_else(|| ApiError::not_found("file"))?;
+
         if self.plugins.declares(source, "book-file").await?
             && let Some(book_file) = self.plugins.get_book_file(source, &entry.id).await?
         {
+            let parsed = mandara_formats::parse(&book_file.bytes, &book_file.filename)?;
+
             return self
-                .materialize_file_mode(source, entry, &book_file, book_id)
-                .await;
+                .materialize_file_mode(&existing, &book_file, parsed)
+                .await
+                .map(|(file, _)| file);
         }
 
         // Chapter mode: virtual file row + title placeholders. The row
@@ -1284,9 +1292,9 @@ impl Library {
         // ensured for metadata-creating paths), so fetch titles directly
         // in that case.
         let file = self
-            .plugin_file(source, &entry.id)
+            .plugin_file(source, &entry.id, book_id)
             .await?
-            .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("plugin file vanished")))?;
+            .ok_or_else(|| ApiError::internal(anyhow::anyhow!("plugin file vanished")))?;
         if file.chapter_count == 0 {
             let (content_inst, content_id) = (source, entry.id.as_str());
             let titles = self
@@ -1301,7 +1309,7 @@ impl Library {
                 self.upsert_placeholder_titles(&file.id, &titles).await?;
             }
         } else {
-            self.ensure_titles(&file).await?;
+            self.ensure_titles_inner(&file).await?;
         }
         self.get_file(&file.id)
             .await?
@@ -1746,7 +1754,7 @@ impl Library {
         }
 
         // Files of this book backed by a plugin source.
-        let plugin_files: Vec<(String, String, String, i64, i64, i64)> = schema::book_files::table
+        let plugin_files: Vec<(String, String, String)> = schema::book_files::table
             .filter(
                 schema::book_files::book_id
                     .eq(book_id)
@@ -1754,19 +1762,8 @@ impl Library {
             )
             .select((
                 schema::book_files::id,
-                coalesce(
-                    schema::book_files::content_source,
-                    schema::book_files::source,
-                )
-                .assume_not_null(),
-                coalesce(
-                    schema::book_files::content_external_id,
-                    schema::book_files::external_id,
-                )
-                .assume_not_null(),
-                schema::book_files::volume_no,
-                schema::book_files::volume_offset,
-                schema::book_files::chapter_count,
+                schema::book_files::source,
+                schema::book_files::external_id,
             ))
             .load(&mut self.diesel_db.get().await?)
             .await?;
@@ -1824,17 +1821,18 @@ impl Library {
         // 2) Chapter-title placeholders / content pointers per file, from
         //    each file's own (content) source. Book metadata is untouched
         //    here — a file's plugin never overwrites it.
-        for (file_id, source_id, external_id, volume_no, volume_offset, _chapter_count) in
-            &plugin_files
-        {
+        for (file_id, source_id, external_id) in &plugin_files {
             let file = self
                 .get_file(file_id)
                 .await?
                 .ok_or_else(|| ApiError::not_found("file"))?;
-            if file.content_source.is_none() && (*volume_no != 0 || *volume_offset != 0) {
+            if file.volume_no != 0 || file.volume_offset != 0 {
                 return Err(ApiError::bad_request(
-                    "legacy split file: rebind to an explicit book ID before refreshing",
+                    "legacy split file: add an explicit plugin book as a new content item",
                 ));
+            }
+            if file.format != FileFormat::Plugin {
+                continue;
             }
             let entry = self.plugins.get_book(source_id, external_id).await?;
             let entry = entry.ok_or_else(|| {
@@ -1862,6 +1860,10 @@ impl Library {
                 .await?;
             if !titles.is_empty() {
                 self.upsert_placeholder_titles(file_id, &titles).await?;
+            }
+
+            if let Some(updated) = self.get_file(file_id).await? {
+                self.queue_download(&updated);
             }
             info!(book = %book_id, source = %source_id, "file chapter titles refreshed from content source");
         }
@@ -2333,53 +2335,9 @@ impl Library {
             .ok_or_else(|| ApiError::not_found("file"))
     }
 
-    /// Rebind a file's chapter source (metadata/content separation). The
-    /// target instance must exist; when it has the `lookup` capability
-    /// the book must resolve via `get-book`. Materialized chapter bodies
-    /// are cleared so the next read re-materializes from the new source.
-    pub async fn set_content_source(
-        &self,
-        file_id: &str,
-        content_source: &str,
-        content_external_id: Option<String>,
-    ) -> Result<FileMeta, ApiError> {
-        let file = self
-            .get_file(file_id)
-            .await?
-            .ok_or_else(|| ApiError::not_found("file"))?;
-        let content_external_id = content_external_id.unwrap_or_else(|| file.external_id.clone());
-        self.plugins
-            .check_content_target(content_source, &content_external_id)
-            .await?;
-        diesel::update(schema::book_files::table.find(file_id))
-            .set((
-                schema::book_files::content_source.eq(content_source),
-                schema::book_files::content_external_id.eq(content_external_id),
-                schema::book_files::volume_offset.eq(0),
-                schema::book_files::chapter_count.eq(0),
-                schema::book_files::toc.eq(""),
-            ))
-            .execute(&mut self.diesel_db.get().await?)
-            .await?;
-        // Bodies from the previous source must not leak through; keep the
-        // title rows as placeholders for the new source.
-        diesel::update(schema::chapters::table.filter(schema::chapters::file_id.eq(file_id)))
-            .set(schema::chapters::content.eq(""))
-            .execute(&mut self.diesel_db.get().await?)
-            .await?;
-        let file = self
-            .get_file(file_id)
-            .await?
-            .ok_or_else(|| ApiError::not_found("file"))?;
-        self.ensure_titles(&file).await?;
-        self.get_file(file_id)
-            .await?
-            .ok_or_else(|| ApiError::not_found("file"))
-    }
-
     /// Re-materialize a plugin file's chapter bodies: clear the stored
-    /// content so every chapter is lazily re-pulled from its content
-    /// source on the next read. This is the retry path for degraded
+    /// content and queue every chapter for background download from its
+    /// content source. This is the retry path for degraded
     /// materializations — e.g. images whose download failed and fell back
     /// to remote URLs; the re-pull stores them via `store-image` this
     /// time. Local uploads are not touched (their content comes from the
@@ -2394,15 +2352,22 @@ impl Library {
                 "local files have no plugin content to re-materialize",
             ));
         }
+
         // Bodies from the previous materialization must not leak through;
         // keep the title rows as placeholders.
         diesel::update(schema::chapters::table.filter(schema::chapters::file_id.eq(id)))
-            .set(schema::chapters::content.eq(""))
+            .set(schema::chapters::content.eq(None::<String>))
             .execute(&mut self.diesel_db.get().await?)
             .await?;
-        self.ensure_titles(&file).await?;
-        info!(file = %id, source = %file.source, "file chapters cleared for re-materialization");
-        Ok(file)
+        self.ensure_titles_inner(&file).await?;
+        let updated = self
+            .get_file(id)
+            .await?
+            .ok_or_else(|| ApiError::not_found("file"))?;
+
+        self.queue_download(&updated);
+        info!(file = %id, source = %file.source, "file chapters queued for re-materialization");
+        Ok(updated)
     }
 
     pub async fn delete_file(&self, id: &str) -> Result<(), ApiError> {
@@ -2484,18 +2449,155 @@ impl Library {
             .collect())
     }
 
-    /// Fetch a chapter, materializing it from its content source on first
-    /// access (or after a rebind cleared the bodies).
-    pub async fn get_chapter(
-        &self,
-        file: &FileMeta,
-        idx: u32,
-    ) -> Result<Option<Chapter>, ApiError> {
-        if idx as i64 >= file.chapter_count as i64 {
-            return Ok(None);
+    /// Read a cached chapter, fetching a pending body on demand if the
+    /// background download has not reached it yet.
+    pub async fn get_chapter(&self, file: &FileMeta, idx: u32) -> Result<Chapter, ApiError> {
+        use super::downloads::{DownloadError, DownloadedContent};
+        let current = self
+            .get_file(&file.id)
+            .await?
+            .ok_or_else(|| ApiError::not_found("file"))?;
+        if idx < current.chapter_count
+            && let Some(chapter) = self.cached_chapter(&current.id, idx).await?
+        {
+            return Ok(chapter);
         }
+        if current.source == "local" {
+            return Err(ApiError::not_found("chapter"));
+        }
+        if current.volume_no != 0 || current.volume_offset != 0 {
+            return Err(ApiError::bad_request(
+                "legacy split file: add an explicit plugin book as a new content item",
+            ));
+        }
+        let file_mode = self.plugins.declares(&current.source, "book-file").await?;
+        if idx >= current.chapter_count && !(idx == 0 && current.chapter_count == 0 && file_mode) {
+            return Err(ApiError::not_found("chapter"));
+        }
+        if file_mode {
+            match Self::wait_download(self.download_missing(current.clone(), idx, true)).await {
+                Ok(content) => return content.chapter(idx).map_err(Self::download_error),
+                // Sources without a usable whole file may still provide chapters.
+                Err(DownloadError::NotFound) => {}
+                Err(error) => return Err(Self::download_error(error)),
+            }
+        }
+        let content: DownloadedContent =
+            Self::wait_download(self.download_missing(current, idx, false))
+                .await
+                .map_err(Self::download_error)?;
+        content.chapter(idx).map_err(Self::download_error)
+    }
+
+    fn download_error(error: super::downloads::DownloadError) -> ApiError {
+        match error {
+            super::downloads::DownloadError::NotFound => ApiError::not_found("chapter"),
+            super::downloads::DownloadError::Failed => ApiError::internal(error),
+        }
+    }
+
+    async fn wait_download(
+        completed: tokio::sync::oneshot::Receiver<super::downloads::DownloadResult>,
+    ) -> super::downloads::DownloadResult {
+        completed
+            .await
+            .unwrap_or(Err(super::downloads::DownloadError::Failed))
+    }
+
+    fn download_missing(
+        &self,
+        file: FileMeta,
+        idx: u32,
+        book_file: bool,
+    ) -> tokio::sync::oneshot::Receiver<super::downloads::DownloadResult> {
+        use super::downloads::{CacheKey, DownloadError};
+        let key = if book_file {
+            CacheKey::BookFile(file.id.clone())
+        } else {
+            CacheKey::Chapter(file.id.clone(), idx)
+        };
+        let (completed, start) = self.downloads.join(key.clone());
+        if start {
+            let library = self.clone();
+            let downloads = self.downloads.clone();
+            tokio::spawn(async move {
+                // Joining also releases waiters when the writer panics.
+                let result = tokio::spawn(async move {
+                    if book_file {
+                        library.load_book_file(&file.id).await
+                    } else {
+                        library.load_chapter(&file, idx).await
+                    }
+                })
+                .await
+                .unwrap_or_else(|error| Err(error.into()));
+                let result = result.map_err(|error| {
+                    if matches!(error, ApiError::NotFound(_)) {
+                        DownloadError::NotFound
+                    } else {
+                        tracing::error!(cache_key = ?key, error = %error, "content download failed");
+                        DownloadError::Failed
+                    }
+                });
+                // Content is sent only after the cache write has completed.
+                downloads.complete(&key, result);
+            });
+        }
+        completed
+    }
+
+    async fn load_book_file(
+        &self,
+        id: &str,
+    ) -> Result<super::downloads::DownloadedContent, ApiError> {
+        use super::downloads::DownloadedContent;
+        let file = self
+            .get_file(id)
+            .await?
+            .ok_or_else(|| ApiError::not_found("file"))?;
+        // A writer may have completed between the caller's cache miss and registration.
+        let cached = schema::chapters::table
+            .filter(schema::chapters::file_id.eq(id))
+            .order(schema::chapters::idx.asc())
+            .select((
+                schema::chapters::idx,
+                schema::chapters::title,
+                schema::chapters::content,
+            ))
+            .load::<ChapterRow>(&mut self.diesel_db.get().await?)
+            .await?
+            .into_iter()
+            .filter_map(ChapterRow::into_model)
+            .collect::<Vec<_>>();
+        if file.chapter_count != 0 && cached.len() == file.chapter_count as usize {
+            let mut chapters = Vec::with_capacity(cached.len());
+            for mut chapter in cached {
+                chapter.content = with_stored_dims(&self.diesel_db, &chapter.content).await;
+                chapters.push(chapter);
+            }
+            return Ok(DownloadedContent::Book(chapters.into()));
+        }
+        let book_file = self
+            .plugins
+            .get_book_file(&file.source, &file.external_id)
+            .await?
+            .ok_or_else(|| ApiError::not_found("book file"))?;
+        let parsed = match mandara_formats::parse(&book_file.bytes, &book_file.filename) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                warn!(source = %file.source,file = %file.id,error = %error,"plugin book-file parse failed; falling back to chapters");
+                return Err(ApiError::not_found("book file"));
+            }
+        };
+        let (_, chapters) = self
+            .materialize_file_mode(&file, &book_file, parsed)
+            .await?;
+        Ok(DownloadedContent::Book(chapters.into()))
+    }
+
+    async fn cached_chapter(&self, file_id: &str, idx: u32) -> Result<Option<Chapter>, ApiError> {
         let row: Option<ChapterRow> = schema::chapters::table
-            .find((&file.id, idx as i64))
+            .find((file_id, idx as i64))
             .select((
                 schema::chapters::idx,
                 schema::chapters::title,
@@ -2505,178 +2607,47 @@ impl Library {
             .await
             .optional()?;
 
-        if let Some(row) = row {
-            // Title-only placeholder rows are materialized by
-            // `ensure_titles`; fetch the real content lazily.
-            if !row.content.is_empty() {
-                let mut model = row.into_model();
-                // Best-effort width/height on stored img tags (chapters
-                // materialized before the dimensions existed lack them;
-                // without them every image load re-anchors the view).
-                model.content = with_stored_dims(&self.diesel_db, &model.content).await;
-                return Ok(Some(model));
-            }
+        if let Some(mut model) = row.and_then(ChapterRow::into_model) {
+            // Best-effort width/height on stored img tags (chapters
+            // materialized before the dimensions existed lack them;
+            // without them every image load re-anchors the view).
+            model.content = with_stored_dims(&self.diesel_db, &model.content).await;
+            return Ok(Some(model));
         }
 
-        // Not stored yet (or placeholder): lazily materialize from the
+        Ok(None)
+    }
+
+    async fn load_chapter(
+        &self,
+        file: &FileMeta,
+        idx: u32,
+    ) -> Result<super::downloads::DownloadedContent, ApiError> {
+        if idx >= file.chapter_count
+            && !(idx == 0
+                && file.chapter_count == 0
+                && file.source != "local"
+                && self.plugins.declares(&file.source, "book-file").await?)
+        {
+            return Err(ApiError::not_found("chapter"));
+        }
+        if let Some(chapter) = self.cached_chapter(&file.id, idx).await? {
+            return Ok(super::downloads::DownloadedContent::Chapter(chapter));
+        }
+
+        // Not stored yet (or placeholder): materialize from the
         // file's content source.
-        let (source_id, external_id) = file_content_target(file);
+        let (source_id, external_id) = (file.source.as_str(), file.external_id.as_str());
         if source_id == "local" {
-            return Ok(None);
+            return Err(ApiError::not_found("chapter"));
         }
 
-        // v3 first-access file mode: a virtual row whose source offers
-        // whole book files is materialized *as a file* on first read
-        // (once; the DB becomes the source of truth afterwards). The
-        // upload parser gives it a real TOC + sanitized HTML for free.
-        // Legacy flat-split caches must not be replaced by a whole-series file.
-        if file.format == FileFormat::Plugin
-            && file.content_source.is_none()
-            && file.volume_no == 0
-            && file.volume_offset == 0
-        {
-            let entry = self
-                .plugins
-                .get_book(source_id, external_id)
-                .await
-                .inspect_err(|e| warn!(source = %source_id, book = %external_id, "file-mode metadata unavailable: {e}"))
-                .ok()
-                .flatten()
-                .and_then(|entry| match SourceBook::try_from(entry) {
-                    Ok(b) => Some(b),
-                    Err(e) => {
-                        warn!(source = %source_id, book = %external_id, "invalid plugin book entry: {e}");
-                        None
-                    }
-                });
-            if self.plugins.declares(source_id, "book-file").await?
-                && let Some(book_file) = self.plugins.get_book_file(source_id, external_id).await?
-            {
-                let parsed = mandara_formats::parse(&book_file.bytes, &book_file.filename)
-                    .inspect_err(|e| warn!(error = %e, "file-mode reparse failed"))
-                    .ok();
-                if let (Some(entry), Some(mut parsed)) = (entry.as_ref(), parsed) {
-                    ingest_parsed_book(&self.diesel_db, &self.files_dir, &mut parsed).await?;
-                    // Rewrite this row like `materialize_file_mode`
-                    // (metadata stays; content becomes self-contained).
-                    // The rewrite is one transaction: a concurrent reader
-                    // racing this block either sees the old virtual row
-                    // (and runs the same idempotent rewrite) or the new
-                    // stored row — never an empty chapter window. Chapter
-                    // rows are upserted, not delete+insert, so a second
-                    // reader's redundant write cannot observe missing
-                    // chapters mid-flight.
-                    let toc_json =
-                        serde_json::to_string(&parsed.toc).unwrap_or_else(|_| "[]".into());
-                    let format = detect_format(&book_file.filename);
-                    let label = format!("{source_id} 下载");
-                    let mut conn = self.diesel_db.get().await?;
-                    diesel::update(schema::book_files::table.find(&file.id))
-                        .set((
-                            schema::book_files::format.eq(format.as_ref()),
-                            schema::book_files::label.eq(&label),
-                            schema::book_files::toc.eq(toc_json),
-                            schema::book_files::content_source.eq(Option::<String>::None),
-                            schema::book_files::content_external_id.eq(Option::<String>::None),
-                            schema::book_files::chapter_count.eq(parsed.chapters.len() as i64),
-                        ))
-                        .execute(&mut conn)
-                        .await?;
-                    // Upsert every chapter; do NOT delete first (a racing
-                    // reader between delete and re-insert would see an
-                    // empty chapter and fall through to a plugin pull).
-                    // Duplicate concurrent rewrites are idempotent.
-                    for (i, chapter) in parsed.chapters.iter().enumerate() {
-                        diesel::insert_into(schema::chapters::table)
-                            .values((
-                                schema::chapters::file_id.eq(&file.id),
-                                schema::chapters::idx.eq(i as i64),
-                                schema::chapters::title.eq(&chapter.title),
-                                schema::chapters::content.eq(&chapter.content),
-                                schema::chapters::linear.eq(i64::from(chapter.linear)),
-                            ))
-                            .on_conflict((schema::chapters::file_id, schema::chapters::idx))
-                            .do_update()
-                            .set((
-                                schema::chapters::title
-                                    .eq(diesel::upsert::excluded(schema::chapters::title)),
-                                schema::chapters::content
-                                    .eq(diesel::upsert::excluded(schema::chapters::content)),
-                                schema::chapters::linear
-                                    .eq(diesel::upsert::excluded(schema::chapters::linear)),
-                            ))
-                            .execute(&mut conn)
-                            .await?;
-                    }
-                    // Drop stale placeholder rows beyond the new chapter
-                    // count (the virtual row may have had title
-                    // placeholders from an earlier ensure_titles). Rows
-                    // within the new range were upserted above, so this
-                    // cannot leave a gap.
-                    diesel::delete(
-                        schema::chapters::table.filter(
-                            schema::chapters::file_id
-                                .eq(&file.id)
-                                .and(schema::chapters::idx.ge(parsed.chapters.len() as i64)),
-                        ),
-                    )
-                    .execute(&mut conn)
-                    .await?;
-                    // Keep the metadata fresh from the source entry.
-                    let authors =
-                        serde_json::to_string(&entry.authors).unwrap_or_else(|_| "[]".into());
-                    let ext_json = source_ext_column(entry.ext.as_ref())?;
-                    diesel::update(schema::books::table.find(&file.book_id))
-                        .set((
-                            schema::books::title.eq(&entry.title),
-                            schema::books::authors.eq(authors),
-                            schema::books::description.eq(&entry.description),
-                            schema::books::cover_url.eq(&entry.cover_url),
-                            schema::books::ext_meta.eq(&ext_json),
-                        ))
-                        .execute(&mut conn)
-                        .await?;
-                    info!(
-                        source = %source_id,
-                        book = %file.book_id,
-                        file = %file.id,
-                        format = %format,
-                        chapters = parsed.chapters.len(),
-                        "plugin book materialized in file mode on first access"
-                    );
-                } else {
-                    warn!(
-                        source = %source_id,
-                        book = %external_id,
-                        "could not materialize book file (metadata or parse); \
-                         falling back to chapter mode"
-                    );
-                }
-            }
-        }
-
-        // Re-read after a possible file-mode materialization.
-        if let Some(row) = schema::chapters::table
-            .find((&file.id, idx as i64))
-            .select((
-                schema::chapters::idx,
-                schema::chapters::title,
-                schema::chapters::content,
-            ))
-            .first::<ChapterRow>(&mut self.diesel_db.get().await?)
-            .await
-            .optional()?
-            && !row.content.is_empty()
-        {
-            return Ok(Some(row.into_model()));
-        }
-
-        if file.content_source.is_none() && (file.volume_no != 0 || file.volume_offset != 0) {
+        if file.volume_no != 0 || file.volume_offset != 0 {
             return Err(ApiError::bad_request(
-                "legacy split file: select an explicit volume book ID via content rebinding",
+                "legacy split file: add an explicit plugin book as a new content item",
             ));
         }
-        // Chapter mode (lazy per-chapter pulls from the content source).
+        // Chapter mode (background or foreground pulls from the content source).
         // Plugin indices are book-local. Plugin text is
         // normalized to canonical HTML at the ingest boundary (including
         // the illustration conventions; see mandara_formats::htmlize).
@@ -2685,14 +2656,8 @@ impl Library {
             .get_chapter(source_id, external_id, idx)
             .await?
         else {
-            return Ok(None);
+            return Err(ApiError::not_found("chapter"));
         };
-        // Empty body from the source is treated as "no chapter" (same
-        // rule as the wenku8 guest's own empty check) — never store a
-        // blank row that would shadow the placeholder for later pulls.
-        if chapter.content.trim().is_empty() {
-            return Ok(None);
-        }
         let content = with_stored_dims(
             &self.diesel_db,
             &mandara_formats::htmlize::plugin_to_html(&chapter.format, &chapter.content),
@@ -2714,7 +2679,7 @@ impl Library {
             ))
             .execute(&mut self.diesel_db.get().await?)
             .await?;
-        Ok(Some(Chapter {
+        Ok(super::downloads::DownloadedContent::Chapter(Chapter {
             idx,
             title: chapter.title,
             content,
@@ -2728,17 +2693,17 @@ impl Library {
         titles: &[String],
     ) -> Result<(), ApiError> {
         let mut conn = self.diesel_db.get().await?;
-        // Materialized rows are left untouched (the legacy statement had
-        // `DO UPDATE ... WHERE content = ''`; the guard moved here because
-        // Diesel's typed WHERE needs a Bool-typed expression).
+        // Preserve all cached bodies, including valid empty chapters.
         let has_body: std::collections::HashSet<i64> = schema::chapters::table
-            .filter(schema::chapters::file_id.eq(file_id))
-            .select((schema::chapters::idx, schema::chapters::content))
-            .load::<(i64, String)>(&mut conn)
+            .filter(
+                schema::chapters::file_id
+                    .eq(file_id)
+                    .and(schema::chapters::content.is_not_null()),
+            )
+            .select(schema::chapters::idx)
+            .load::<i64>(&mut conn)
             .await?
             .into_iter()
-            .filter(|(_, c)| !c.is_empty())
-            .map(|(idx, _)| idx)
             .collect();
         for (idx, title) in titles.iter().enumerate() {
             let idx = idx as i64;
@@ -2750,7 +2715,7 @@ impl Library {
                     schema::chapters::file_id.eq(file_id),
                     schema::chapters::idx.eq(idx),
                     schema::chapters::title.eq(title.trim()),
-                    schema::chapters::content.eq(""),
+                    schema::chapters::content.eq(None::<String>),
                 ))
                 .on_conflict((schema::chapters::file_id, schema::chapters::idx))
                 .do_update()
@@ -2765,14 +2730,19 @@ impl Library {
     /// `chapter_titles` works for books never read yet). Titles come from
     /// the file's *content* instance.
     pub async fn ensure_titles(&self, file: &FileMeta) -> Result<(), ApiError> {
-        if file.chapter_count == 0 && file.content_source.is_none() {
-            return Ok(());
-        }
-        let (source_id, external_id) = file_content_target(file);
+        let current = self
+            .get_file(&file.id)
+            .await?
+            .ok_or_else(|| ApiError::not_found("file"))?;
+        self.ensure_titles_inner(&current).await
+    }
+
+    async fn ensure_titles_inner(&self, file: &FileMeta) -> Result<(), ApiError> {
+        let (source_id, external_id) = (file.source.as_str(), file.external_id.as_str());
         if source_id == "local" {
             return Ok(());
         }
-        if file.content_source.is_none() && (file.volume_no != 0 || file.volume_offset != 0) {
+        if file.volume_no != 0 || file.volume_offset != 0 {
             return Ok(());
         }
         let titles = self
@@ -2786,19 +2756,16 @@ impl Library {
         if titles.is_empty() {
             return Ok(());
         }
-        // The plugin returns only this book's chapter titles.
-        if titles.is_empty() {
-            return Ok(());
-        }
+        // The plugin returns only this content item's chapter titles.
         self.upsert_placeholder_titles(&file.id, &titles).await?;
         // Placeholder rows beyond the book's range are stale (previous
-        // content source, or a chapter count that shrank); drop the
-        // empty ones. Materialized bodies stay untouched.
+        // chapter count that shrank); drop the
+        // uncached ones. Materialized bodies stay untouched.
         diesel::delete(
             schema::chapters::table.filter(
                 schema::chapters::file_id
                     .eq(&file.id)
-                    .and(schema::chapters::content.eq(""))
+                    .and(schema::chapters::content.is_null())
                     .and(schema::chapters::idx.ge(titles.len() as i64)),
             ),
         )
@@ -2814,15 +2781,9 @@ impl Library {
     }
 }
 
-/// Effective (instance, book id) for chapter reads of a file: the file's
-/// content columns when set, otherwise its own source/external id.
-fn file_content_target(file: &FileMeta) -> (&str, &str) {
-    (
-        file.content_source.as_deref().unwrap_or(&file.source),
-        file.content_external_id
-            .as_deref()
-            .unwrap_or(&file.external_id),
-    )
+/// Legacy split caches must be replaced by explicit, independently added books.
+fn background_content(file: &FileMeta) -> bool {
+    file.source != "local" && file.volume_no == 0 && file.volume_offset == 0
 }
 
 fn detect_format(filename: &str) -> FileFormat {
@@ -3127,6 +3088,406 @@ mod tests {
     use super::*;
     use mandara_formats::ParsedImage;
 
+    async fn download_fixture() -> (Library, FileMeta, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("mandara-download-{}", uuid::Uuid::new_v4()));
+        let path = dir.join("library.db");
+        crate::db::run_migrations(&path).await.unwrap();
+        let db = crate::db::connect_diesel(&path).unwrap();
+        let images = crate::service::images::DbImageStore::new(db.clone(), dir.join("files"));
+        let wasm = Arc::new(
+            mandara_plugin::WasmPlugin::load(
+                "fixture.wasm",
+                include_bytes!("../../../mandara-plugin/tests/fixtures/hello.wasm").to_vec(),
+                Arc::new(mandara_plugin::FetchPolicy::default()),
+                images,
+            )
+            .unwrap(),
+        );
+        let plugins = Arc::new(PluginService::new(db.clone(), vec![wasm]));
+        plugins
+            .register(
+                "fixture",
+                "fixture.wasm",
+                serde_json::json!({"site-name": "示例"}),
+            )
+            .await
+            .unwrap();
+        let library = Library::new(db, plugins, dir.join("files"));
+        let book = SourceBook {
+            id: "hello-1".into(),
+            title: "示例".into(),
+            authors: vec![],
+            description: None,
+            cover_url: None,
+            ext: None,
+            series: None,
+            volume_no: 0,
+        };
+        let (_, id) = library
+            .ensure_plugin_book("fixture", None, &book, &["第一章".into(), "第二章".into()])
+            .await
+            .unwrap();
+        library
+            .upsert_placeholder_titles(&id, &["第一章".into(), "第二章".into()])
+            .await
+            .unwrap();
+        let file = library.get_file(&id).await.unwrap().unwrap();
+        (library, file, dir)
+    }
+
+    async fn await_download(library: &Library, id: &str) {
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                let file = library.get_file(id).await.unwrap().unwrap();
+                if cached_count(library, &file).await >= i64::from(file.chapter_count) {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("background downloads populate the persistent cache");
+    }
+
+    async fn cached_count(library: &Library, file: &FileMeta) -> i64 {
+        schema::chapters::table
+            .filter(
+                schema::chapters::file_id
+                    .eq(&file.id)
+                    .and(schema::chapters::content.is_not_null()),
+            )
+            .count()
+            .get_result(&mut library.diesel_db.get().await.unwrap())
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn declared_bodies_preserve_presence_through_ingestion() {
+        let (library, file, dir) = download_fixture().await;
+        let catalog = library
+            .plugins
+            .declared_catalog("fixture")
+            .await
+            .unwrap()
+            .unwrap();
+        let book = catalog
+            .books
+            .into_iter()
+            .find(|book| {
+                book.chapters
+                    .iter()
+                    .any(|chapter| chapter.content.is_none())
+            })
+            .expect("fixture declares a lazy chapter");
+        assert_eq!(book.chapters[1].content, None);
+        assert_eq!(book.chapters[2].content.as_deref(), Some(""));
+        library
+            .upsert_chapters(&file.id, &book.chapters)
+            .await
+            .unwrap();
+        let original = library
+            .cached_chapter(&file.id, 0)
+            .await
+            .unwrap()
+            .unwrap()
+            .content;
+        assert!(original.contains("声明式"));
+        assert!(library.cached_chapter(&file.id, 1).await.unwrap().is_none());
+        assert_eq!(
+            library
+                .cached_chapter(&file.id, 2)
+                .await
+                .unwrap()
+                .unwrap()
+                .content,
+            ""
+        );
+        assert_eq!(cached_count(&library, &file).await, 2);
+
+        // A missing declaration keeps an existing body, even an empty one.
+        let missing = book
+            .chapters
+            .iter()
+            .map(|chapter| SourceDeclaredChapter {
+                title: chapter.title.clone(),
+                format: chapter.format.clone(),
+                content: None,
+            })
+            .collect::<Vec<_>>();
+        library.upsert_chapters(&file.id, &missing).await.unwrap();
+        assert_eq!(
+            library
+                .cached_chapter(&file.id, 0)
+                .await
+                .unwrap()
+                .unwrap()
+                .content,
+            original
+        );
+        assert_eq!(
+            library
+                .cached_chapter(&file.id, 2)
+                .await
+                .unwrap()
+                .unwrap()
+                .content,
+            ""
+        );
+
+        // Supplied empty, blank and sanitized-away bodies are all materialized.
+        let supplied = vec![
+            SourceDeclaredChapter {
+                title: "空章".into(),
+                format: "text".into(),
+                content: Some("".into()),
+            },
+            SourceDeclaredChapter {
+                title: "空白章".into(),
+                format: "text".into(),
+                content: Some(" \n\t".into()),
+            },
+            SourceDeclaredChapter {
+                title: "过滤后空章".into(),
+                format: "html".into(),
+                content: Some("<script>removed</script>".into()),
+            },
+        ];
+        library.upsert_chapters(&file.id, &supplied).await.unwrap();
+        assert_eq!(cached_count(&library, &file).await, 3);
+        for idx in 0..3 {
+            assert_eq!(
+                library
+                    .cached_chapter(&file.id, idx)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .content,
+                ""
+            );
+        }
+        assert_eq!(library.get_chapter(&file, 0).await.unwrap().content, "");
+        library.delete_file(&file.id).await.unwrap();
+        assert_eq!(dir.parent(), Some(std::env::temp_dir().as_path()));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn empty_cached_bodies_are_distinct_from_null_placeholders() {
+        use super::super::downloads::{CacheKey, DownloadError};
+        let (library, file, dir) = download_fixture().await;
+        assert!(library.cached_chapter(&file.id, 0).await.unwrap().is_none());
+        assert_eq!(cached_count(&library, &file).await, 0);
+        for (idx, body) in [(0_i64, ""), (1_i64, " \n\t")] {
+            diesel::update(schema::chapters::table.find((&file.id, idx)))
+                .set(schema::chapters::content.eq(body))
+                .execute(&mut library.diesel_db.get().await.unwrap())
+                .await
+                .unwrap();
+        }
+        assert_eq!(cached_count(&library, &file).await, 2);
+        // Cache hits return empty content without contacting the source.
+        assert_eq!(library.get_chapter(&file, 0).await.unwrap().content, "");
+        assert_eq!(
+            library.get_chapter(&file, 1).await.unwrap().content,
+            " \n\t"
+        );
+        let book = library.load_book_file(&file.id).await.unwrap();
+        assert_eq!(book.clone().chapter(0).unwrap().content, "");
+        assert_eq!(book.chapter(1).unwrap().content, " \n\t");
+        library
+            .upsert_placeholder_titles(
+                &file.id,
+                &["新标题一".into(), "新标题二".into(), "未下载".into()],
+            )
+            .await
+            .unwrap();
+        assert_eq!(library.get_chapter(&file, 0).await.unwrap().title, "第一章");
+        assert!(library.cached_chapter(&file.id, 2).await.unwrap().is_none());
+        // Lazy declarations cannot replace an already cached empty body with NULL.
+        library
+            .upsert_chapters(
+                &file.id,
+                &[SourceDeclaredChapter {
+                    title: "空章".into(),
+                    content: None,
+                    format: "text".into(),
+                }],
+            )
+            .await
+            .unwrap();
+        assert_eq!(library.get_chapter(&file, 0).await.unwrap().content, "");
+        assert_eq!(cached_count(&library, &file).await, 2);
+        diesel::insert_into(schema::chapters::table)
+            .values((
+                schema::chapters::file_id.eq(&file.id),
+                schema::chapters::idx.eq(3_i64),
+                schema::chapters::title.eq("空附录"),
+                schema::chapters::content.eq(""),
+            ))
+            .execute(&mut library.diesel_db.get().await.unwrap())
+            .await
+            .unwrap();
+        library.ensure_titles(&file).await.unwrap();
+        assert!(library.cached_chapter(&file.id, 2).await.unwrap().is_none());
+        assert_eq!(
+            library
+                .cached_chapter(&file.id, 3)
+                .await
+                .unwrap()
+                .unwrap()
+                .content,
+            ""
+        );
+        // Keep background writers pending so invalidation can be inspected directly.
+        let first = CacheKey::Chapter(file.id.clone(), 0);
+        let second = CacheKey::Chapter(file.id.clone(), 1);
+        let (_, start) = library.downloads.join(first.clone());
+        assert!(start);
+        let (_, start) = library.downloads.join(second.clone());
+        assert!(start);
+        library.rematerialize_file(&file.id).await.unwrap();
+        assert_eq!(cached_count(&library, &file).await, 0);
+        assert!(library.cached_chapter(&file.id, 0).await.unwrap().is_none());
+        library
+            .downloads
+            .complete(&first, Err(DownloadError::NotFound));
+        library
+            .downloads
+            .complete(&second, Err(DownloadError::NotFound));
+        library.delete_file(&file.id).await.unwrap();
+        drop(library);
+        assert_eq!(dir.parent(), Some(std::env::temp_dir().as_path()));
+        tokio::fs::remove_dir_all(dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn cached_reads_bypass_inflight_fetches_and_other_chapters_can_load() {
+        let (library, file, dir) = download_fixture().await;
+        let key = super::super::downloads::CacheKey::Chapter(file.id.clone(), 0);
+        let (pending, start) = library.downloads.join(key.clone());
+        assert!(start);
+        let (waiting, start) = library.downloads.join(key.clone());
+        assert!(!start);
+        let mut reader = {
+            let library = library.clone();
+            let file = file.clone();
+            tokio::spawn(async move { library.get_chapter(&file, 0).await })
+        };
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), &mut reader)
+                .await
+                .is_err()
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            // A different missing chapter must not wait for chapter zero.
+            assert_eq!(library.get_chapter(&file, 1).await.unwrap().idx, 1);
+            diesel::update(schema::chapters::table.find((&file.id, 0_i64)))
+                .set(schema::chapters::content.eq("<p>已缓存</p>"))
+                .execute(&mut library.diesel_db.get().await.unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                library.get_chapter(&file, 0).await.unwrap().content,
+                "<p>已缓存</p>"
+            );
+        })
+        .await
+        .expect("cached reads and different chapters bypass the slow fetch");
+        // The waiter must return the delivered content, even if the cache changes.
+        let delivered = library.cached_chapter(&file.id, 0).await.unwrap().unwrap();
+        diesel::update(schema::chapters::table.find((&file.id, 0_i64)))
+            .set(schema::chapters::content.eq(None::<String>))
+            .execute(&mut library.diesel_db.get().await.unwrap())
+            .await
+            .unwrap();
+        library.downloads.complete(
+            &key,
+            Ok(super::super::downloads::DownloadedContent::Chapter(
+                delivered,
+            )),
+        );
+        pending.await.unwrap().unwrap();
+        waiting.await.unwrap().unwrap();
+        assert_eq!(reader.await.unwrap().unwrap().content, "<p>已缓存</p>");
+        library.delete_file(&file.id).await.unwrap();
+        assert!(library.get_file(&file.id).await.unwrap().is_none());
+        drop(library);
+        assert_eq!(dir.parent(), Some(std::env::temp_dir().as_path()));
+        tokio::fs::remove_dir_all(dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn background_downloads_reuse_cache_and_keep_content_items_independent() {
+        let (library, first, dir) = download_fixture().await;
+        assert!(background_content(&first));
+        let mut local = first.clone();
+        local.source = "local".into();
+        assert!(!background_content(&local));
+        let mut legacy = first.clone();
+        legacy.volume_no = 1;
+        assert!(!background_content(&legacy));
+        diesel::update(schema::chapters::table.find((&first.id, 0_i64)))
+            .set(schema::chapters::content.eq("<p>保留缓存</p>"))
+            .execute(&mut library.diesel_db.get().await.unwrap())
+            .await
+            .unwrap();
+        library
+            .plugins
+            .register(
+                "second",
+                "fixture.wasm",
+                serde_json::json!({"site-name":"示例", "mode":1}),
+            )
+            .await
+            .unwrap();
+        let book = SourceBook {
+            id: "hello-1".into(),
+            title: "示例".into(),
+            authors: vec![],
+            description: None,
+            cover_url: None,
+            ext: None,
+            series: None,
+            volume_no: 0,
+        };
+        library
+            .attach_plugin_file("second", None, &book, &first.book_id)
+            .await
+            .unwrap();
+        let second = library
+            .materialize_plugin_content("second", &book, &first.book_id)
+            .await
+            .unwrap();
+        assert_ne!(first.id, second.id);
+        assert_eq!(first.book_id, second.book_id);
+        library.queue_download(&first);
+        library.queue_download(&first);
+        library.queue_download(&second);
+        await_download(&library, &first.id).await;
+        await_download(&library, &second.id).await;
+        assert_eq!(cached_count(&library, &first).await, 2);
+        assert_eq!(cached_count(&library, &second).await, 2);
+        assert_eq!(
+            library.get_chapter(&first, 0).await.unwrap().content,
+            "<p>保留缓存</p>"
+        );
+        let alternate = library.get_chapter(&second, 0).await.unwrap().content;
+        assert!(alternate.contains("alt"));
+        library.rematerialize_file(&second.id).await.unwrap();
+        await_download(&library, &second.id).await;
+        assert_eq!(cached_count(&library, &second).await, 2);
+        library.delete_file(&first.id).await.unwrap();
+        assert!(library.get_file(&first.id).await.unwrap().is_none());
+        assert_eq!(
+            library.get_chapter(&second, 0).await.unwrap().content,
+            alternate
+        );
+        drop(library);
+        assert_eq!(dir.parent(), Some(std::env::temp_dir().as_path()));
+        tokio::fs::remove_dir_all(dir).await.unwrap();
+    }
+
     #[tokio::test]
     async fn explicit_series_groups_books_by_instance_and_opaque_series_id() {
         let dir = std::env::temp_dir().join(format!("mandara-series-{}", uuid::Uuid::new_v4()));
@@ -3205,71 +3566,6 @@ mod tests {
         assert_eq!(
             count, 0,
             "declared metadata books do not invent a content file"
-        );
-    }
-
-    #[tokio::test]
-    async fn sync_preserves_user_selected_content_binding() {
-        let dir = std::env::temp_dir().join(format!("mandara-binding-{}", uuid::Uuid::new_v4()));
-        let path = dir.join("library.db");
-        crate::db::run_migrations(&path).await.unwrap();
-        let db = crate::db::connect_diesel(&path).unwrap();
-        let library = Library::new(
-            db.clone(),
-            Arc::new(PluginService::new(db.clone(), vec![])),
-            dir.join("files"),
-        );
-        let book = SourceBook {
-            id: "plugin-defined-id".into(),
-            title: "单卷".into(),
-            authors: vec![],
-            description: None,
-            cover_url: None,
-            ext: None,
-            series: None,
-            volume_no: 0,
-        };
-        let (_, file_id) = library
-            .ensure_plugin_book("metadata", None, &book, &["目录".into()])
-            .await
-            .unwrap();
-        diesel::update(schema::book_files::table.find(&file_id))
-            .set((
-                schema::book_files::content_source.eq("chosen-content"),
-                schema::book_files::content_external_id.eq("opaque-book-id"),
-            ))
-            .execute(&mut db.get().await.unwrap())
-            .await
-            .unwrap();
-        library
-            .sync_catalog(&DeclaredCatalog {
-                instance: "metadata".into(),
-                has_content: true,
-                books: vec![crate::service::plugins::DeclaredCatalogBook {
-                    book,
-                    chapters: vec![SourceChapter {
-                        title: "目录".into(),
-                        format: "text".into(),
-                        content: "来源正文".into(),
-                    }],
-                }],
-            })
-            .await
-            .unwrap();
-        let file = library.get_file(&file_id).await.unwrap().unwrap();
-        assert_eq!(
-            file_content_target(&file),
-            ("chosen-content", "opaque-book-id")
-        );
-        let count: i64 = schema::chapters::table
-            .filter(schema::chapters::file_id.eq(&file_id))
-            .count()
-            .get_result(&mut db.get().await.unwrap())
-            .await
-            .unwrap();
-        assert_eq!(
-            count, 0,
-            "sync must not inject the original source's bodies after rebinding"
         );
     }
 

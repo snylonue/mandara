@@ -14,8 +14,6 @@ diesel::table! {
         book_id -> Text,
         source -> Text,
         external_id -> Text,
-        content_source -> Nullable<Text>,
-        content_external_id -> Nullable<Text>,
         format -> Text,
         label -> Text,
         visibility -> Text,
@@ -55,7 +53,7 @@ diesel::table! {
         file_id -> Text,
         idx -> BigInt,
         title -> Text,
-        content -> Text,
+        content -> Nullable<Text>,
         linear -> BigInt,
     }
 }
