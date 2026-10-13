@@ -1,6 +1,6 @@
 // Add either one book with independently selected content, or an explicit series.
-// Plugin series selection previews members; only checked books are imported,
-// as metadata without files. Manual series creation remains metadata-only.
+// Series members may be matched to independent plugin content or local files.
+// Unmatched members and manual series creation remain metadata-only.
 
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -8,6 +8,7 @@ import { api } from "../api";
 import { ExtMetaForm, type ExtRecord } from "./ExtMetaForm";
 import { Modal } from "./Modal";
 import { PluginContentChoice } from "./PluginContentChoice";
+import { SeriesContentMatch, type SeriesContentPlan } from "./SeriesContentMatch";
 import { SourceSearchPane, type SourcePick, type SeriesSourcePick } from "./SourceSearch";
 import { useToast } from "./toast";
 import type {
@@ -101,6 +102,10 @@ export function AddDialog({
   const [pluginMetaRef, setPluginMetaRef] = useState<SourcePick | null>(null);
   const [pluginSeriesRef, setPluginSeriesRef] = useState<SeriesSourcePick | null>(null);
   const [selectedVolumes, setSelectedVolumes] = useState<string[]>([]);
+  const [seriesContentPlan, setSeriesContentPlan] = useState<SeriesContentPlan>({ ready: true, assignments: [] });
+  const [importedSeries, setImportedSeries] = useState<SeriesBrief | null>(null);
+  const [seriesDone, setSeriesDone] = useState<string[]>([]);
+  const [seriesFailures, setSeriesFailures] = useState<Record<string, string>>({});
 
   // Manual metadata fields.
   const [title, setTitle] = useState("");
@@ -123,6 +128,10 @@ export function AddDialog({
     setPluginMetaRef(null);
     setPluginSeriesRef(null);
     setSelectedVolumes([]);
+    setSeriesContentPlan({ ready: true, assignments: [] });
+    setImportedSeries(null);
+    setSeriesDone([]);
+    setSeriesFailures({});
     setTitle("");
     setAuthors("");
     setDescription("");
@@ -150,12 +159,20 @@ export function AddDialog({
   function clearPluginSeries() {
     setPluginSeriesRef(null);
     setSelectedVolumes([]);
+    setSeriesContentPlan({ ready: true, assignments: [] });
+    setImportedSeries(null);
+    setSeriesDone([]);
+    setSeriesFailures({});
     setDialogError(null);
   }
 
   function usePluginSeries(pick: SeriesSourcePick) {
     setPluginSeriesRef(pick);
-    setSelectedVolumes([]);
+    setSelectedVolumes(pick.books.map((book) => book.id));
+    setSeriesContentPlan({ ready: true, assignments: [] });
+    setImportedSeries(null);
+    setSeriesDone([]);
+    setSeriesFailures({});
     setDialogError(null);
   }
 
@@ -335,38 +352,66 @@ export function AddDialog({
   }
 
   async function submitSeries() {
+    if (uploading) return;
     if (seriesMeta === "manual" && !seriesTitle.trim()) {
       setDialogError(t("library.manualNeedsTitle"));
       return;
     }
-    if (seriesMeta === "plugin" && !pluginSeriesRef) {
-      setDialogError(t("library.pickMetaFromSeries"));
+    if (seriesMeta === "plugin" && (!pluginSeriesRef || !seriesContentPlan.ready)) {
+      setDialogError(t(pluginSeriesRef ? "library.seriesUnconfirmedContent" : "library.pickMetaFromSeries"));
       return;
     }
     setUploading(true);
     setDialogError(null);
+    setSeriesFailures({});
+    const assignments = seriesContentPlan.assignments.filter((entry) => entry.content);
+    setUploadTotal(assignments.length);
+    setUploadDone(seriesDone.length);
     try {
       let series: SeriesBrief;
       if (seriesMeta === "plugin") {
-        // Import the series itself and only explicitly checked book metadata.
-        series = await api<SeriesBrief>(`/plugins/${pluginSeriesRef!.instance.id}/series`, {
+        // Import only the metadata provider's identities, never the content catalog.
+        series = importedSeries ?? await api<SeriesBrief>("/plugins/" + encodeURIComponent(pluginSeriesRef!.instance.id) + "/series", {
           method: "POST",
           body: JSON.stringify({ series_id: pluginSeriesRef!.item.id, book_ids: selectedVolumes }),
         });
-        toast.push("success", t("series.created", { title: series.title }));
-        onSeriesCreated?.(series);
+        setImportedSeries(series);
+        const failures: Record<string, string> = {};
+        let done = seriesDone.length;
+        for (const entry of assignments) {
+          if (seriesDone.includes(entry.metadataId)) continue;
+          const content = entry.content!;
+          try {
+            await acquire({ kind: content.kind, visibility: entry.visibility, label: entry.label }, (form) => {
+              form.append("meta_plugin_source", pluginSeriesRef!.instance.id);
+              form.append("meta_plugin_book_id", entry.metadataId);
+              if (content.kind === "file") form.append("file", content.file);
+              else {
+                form.append("plugin_source", content.source);
+                form.append("plugin_book_id", content.id);
+              }
+            });
+            setSeriesDone((prev) => [...prev, entry.metadataId]);
+            setUploadDone(++done);
+          } catch (error) {
+            failures[entry.metadataId] = error instanceof Error ? error.message : t("common.failed");
+          }
+        }
+        if (Object.keys(failures).length > 0) {
+          setSeriesFailures(failures);
+          setDialogError(t("library.seriesContentPartial", { failed: Object.keys(failures).length }));
+          onAdded();
+          return;
+        }
       } else {
         const body: Record<string, unknown> = { title: seriesTitle.trim() };
         if (seriesAuthors.trim()) body.authors = splitAuthors(seriesAuthors);
         if (seriesDescription.trim()) body.description = seriesDescription.trim();
         if (Object.keys(seriesExt).length > 0) body.ext = seriesExt;
-        series = await api<SeriesBrief>("/series", {
-          method: "POST",
-          body: JSON.stringify(body),
-        });
-        toast.push("success", t("series.created", { title: series.title }));
-        onSeriesCreated?.(series);
+        series = await api<SeriesBrief>("/series", { method: "POST", body: JSON.stringify(body) });
       }
+      toast.push("success", t("series.created", { title: series.title }));
+      onSeriesCreated?.(series);
       reset();
       onClose();
       onAdded();
@@ -423,11 +468,11 @@ export function AddDialog({
           <h3>{t("library.sectionWhat")}</h3>
           <div className="row">
             <label className="radio">
-              <input type="radio" checked={inBookMode} onChange={() => { setMode("book"); setDialogError(null); }} />
+              <input type="radio" checked={inBookMode} disabled={Boolean(importedSeries)} onChange={() => { setMode("book"); setDialogError(null); }} />
               {t("library.whatBook")}
             </label>
             <label className="radio">
-              <input type="radio" checked={!inBookMode} onChange={() => { setMode("series"); setDialogError(null); }} />
+              <input type="radio" checked={!inBookMode} disabled={Boolean(importedSeries)} onChange={() => { setMode("series"); setDialogError(null); }} />
               {t("library.whatSeries")}
             </label>
           </div>
@@ -594,80 +639,90 @@ export function AddDialog({
             </section>
           </>
         ) : (
-          <section className="modal-section">
-            <h3>{t("library.sectionSeriesMeta")}</h3>
-            <div className="row">
-              <label className="radio">
-                <input
-                  type="radio"
-                  checked={seriesMeta === "manual"}
-                  onChange={() => setSeriesMeta("manual")}
-                />
-                {t("library.modeManual")}
-              </label>
-              <label className="radio">
-                <input
-                  type="radio"
-                  checked={seriesMeta === "plugin"}
-                  onChange={() => setSeriesMeta("plugin")}
-                />
-                {t("library.modePlugin")}
-              </label>
-            </div>
-            {seriesMeta === "manual" && (
-              <div className="field">
-                <input
-                  placeholder={t("book.seriesTitlePlaceholder")}
-                  value={seriesTitle}
-                  onChange={(e) => setSeriesTitle(e.target.value)}
-                />
-                <input
-                  placeholder={t("library.authorsPlaceholder")}
-                  value={seriesAuthors}
-                  onChange={(e) => setSeriesAuthors(e.target.value)}
-                />
-                <textarea
-                  placeholder={t("library.descriptionPlaceholder")}
-                  value={seriesDescription}
-                  onChange={(e) => setSeriesDescription(e.target.value)}
-                />
-                <ExtMetaForm kind="series" value={seriesExt} onChange={setSeriesExt} />
-                <p className="hint">{t("series.createHint")}</p>
-              </div>
-            )}
-            {seriesMeta === "plugin" && <div className="field">{seriesPane}</div>}
-            {seriesMeta === "plugin" && pluginSeriesRef && (
-              <div className="field">
-                <p className="strong">{t("library.selectedSeries", { title: pluginSeriesRef.item.title })}</p>
-                <p className="hint">{pluginSeriesRef.item.authors.join(" / ")}</p>
-                {pluginSeriesRef.item.description && <p className="hint">{pluginSeriesRef.item.description}</p>}
-                <h3>{t("library.seriesMemberSelection", { count: selectedVolumes.length })}</h3>
-                <p className="hint">{t("library.seriesMetadataOnlyHint")}</p>
-                {pluginSeriesRef.books.length > 0 && <div className="row">
-                  <button disabled={uploading} onClick={() => setSelectedVolumes(pluginSeriesRef.books.map((book) => book.id))}>{t("library.selectAllVolumes")}</button>
-                  <button disabled={uploading} onClick={() => setSelectedVolumes([])}>{t("library.clearVolumes")}</button>
-                </div>}
-                <ul className="source-results">
-                  {pluginSeriesRef.books.map((book) => (
-                    <li key={book.id} className="source-result">
-                      <label className="radio">
-                        <input
-                          type="checkbox"
-                          disabled={uploading}
-                          checked={selectedVolumes.includes(book.id)}
-                          onChange={(e) => {
-                            const checked = e.target.checked;
-                            setSelectedVolumes((prev) => checked ? [...prev, book.id] : prev.filter((id) => id !== book.id));
-                          }}
-                        />
-                        <span>{book.title}</span>
-                      </label>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </section>
+          <>
+            <fieldset className="add-form" disabled={Boolean(importedSeries)}>
+              <section className="modal-section">
+                <h3>{t("library.sectionSeriesMeta")}</h3>
+                <div className="row">
+                  <label className="radio">
+                    <input
+                      type="radio"
+                      checked={seriesMeta === "manual"}
+                      onChange={() => setSeriesMeta("manual")}
+                    />
+                    {t("library.modeManual")}
+                  </label>
+                  <label className="radio">
+                    <input
+                      type="radio"
+                      checked={seriesMeta === "plugin"}
+                      onChange={() => setSeriesMeta("plugin")}
+                    />
+                    {t("library.modePlugin")}
+                  </label>
+                </div>
+                {seriesMeta === "manual" && (
+                  <div className="field">
+                    <input
+                      placeholder={t("book.seriesTitlePlaceholder")}
+                      value={seriesTitle}
+                      onChange={(e) => setSeriesTitle(e.target.value)}
+                    />
+                    <input
+                      placeholder={t("library.authorsPlaceholder")}
+                      value={seriesAuthors}
+                      onChange={(e) => setSeriesAuthors(e.target.value)}
+                    />
+                    <textarea
+                      placeholder={t("library.descriptionPlaceholder")}
+                      value={seriesDescription}
+                      onChange={(e) => setSeriesDescription(e.target.value)}
+                    />
+                    <ExtMetaForm kind="series" value={seriesExt} onChange={setSeriesExt} />
+                    <p className="hint">{t("series.createHint")}</p>
+                  </div>
+                )}
+                {seriesMeta === "plugin" && <div className="field">{seriesPane}</div>}
+                {seriesMeta === "plugin" && pluginSeriesRef && (
+                  <div className="field">
+                    <p className="strong">{t("library.selectedSeries", { title: pluginSeriesRef.item.title })}</p>
+                    <p className="hint">{pluginSeriesRef.item.authors.join(" / ")}</p>
+                    {pluginSeriesRef.item.description && <p className="hint">{pluginSeriesRef.item.description}</p>}
+                    <h3>{t("library.seriesMemberSelection", { count: selectedVolumes.length })}</h3>
+                    <p className="hint">{t("library.seriesMetadataOnlyHint")}</p>
+                    {pluginSeriesRef.books.length > 0 && <div className="row">
+                      <button disabled={uploading} onClick={() => setSelectedVolumes(pluginSeriesRef.books.map((book) => book.id))}>{t("library.selectAllVolumes")}</button>
+                      <button disabled={uploading} onClick={() => setSelectedVolumes([])}>{t("library.clearVolumes")}</button>
+                    </div>}
+                    <ul className="source-results">
+                      {pluginSeriesRef.books.map((book) => (
+                        <li key={book.id} className="source-result">
+                          <label className="radio">
+                            <input
+                              type="checkbox"
+                              disabled={uploading}
+                              checked={selectedVolumes.includes(book.id)}
+                              onChange={(e) => {
+                                const checked = e.target.checked;
+                                setSelectedVolumes((prev) => checked ? [...prev, book.id] : prev.filter((id) => id !== book.id));
+                              }}
+                            />
+                            <span>{book.title}</span>
+                          </label>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </section>
+            </fieldset>
+          {seriesMeta === "plugin" && pluginSeriesRef && <SeriesContentMatch
+            key={pluginSeriesRef.instance.id + ":" + pluginSeriesRef.item.id}
+            metadata={pluginSeriesRef} selectedIds={selectedVolumes} instances={instances}
+            disabled={uploading || Boolean(importedSeries)} completedIds={seriesDone} failures={seriesFailures}
+            onChange={setSeriesContentPlan}
+          />}
+          </>
         )}
 
         {dialogError && <div className="error">{dialogError}</div>}
@@ -684,8 +739,10 @@ export function AddDialog({
                   : t(contentCount === 0 && meta !== "file" ? "library.addMetadataOnly" : "library.addBook")}
             </button>
           ) : (
-            <button className="btn primary" onClick={() => void submitSeries()} disabled={uploading || (seriesMeta === "plugin" && !pluginSeriesRef)}>
-              {uploading ? t("library.uploading") : t("series.create")}
+            <button className="btn primary" onClick={() => void submitSeries()} disabled={uploading || (seriesMeta === "plugin" && (!pluginSeriesRef || !seriesContentPlan.ready))}>
+              {uploading ? uploadTotal > 0 ? t("library.uploadingProgress", { done: uploadDone, total: uploadTotal }) : t("library.uploading")
+                 : importedSeries ? t("library.seriesRetryFailedContent")
+                 : seriesMeta === "plugin" && seriesContentPlan.assignments.some((entry) => entry.content) ? t("library.seriesCreateWithContent") : t("series.create")}
             </button>
           )}
         </div>

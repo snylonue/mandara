@@ -116,6 +116,7 @@ type SourceSearchProps = {
   filter: (i: PluginInstance) => boolean;
   pickLabel?: (item: PluginSearchItem) => string;
   disabled?: boolean;
+  onLoadingChange?: (loading: boolean) => void;
 } & ({
   target?: "book";
   onPick: (pick: SourcePick) => Promise<void> | void;
@@ -141,6 +142,7 @@ export function SourceSearchPane(props: SourceSearchProps) {
   const [nextOffset, setNextOffset] = useState(0);
   const seq = useRef(0);
   useEffect(() => () => { ++seq.current; }, []);
+  useEffect(() => { props.onLoadingChange?.(loading || picking !== null); }, [loading, picking, props.onLoadingChange]);
 
   const selected = options.find((i) => i.id === sel);
   const interaction = selected ? sourceInteraction(selected) : null;

@@ -53,6 +53,11 @@
   border-bottom: 1px solid var(--border);
 }
 
+.series-match-row {
+  padding: var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+
 .config-form {
   display: flex;
   flex-direction: column;
