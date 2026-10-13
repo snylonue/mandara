@@ -2,11 +2,13 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api, ApiError } from "../api";
-import type { PluginContentPreview, PluginInstance, Visibility } from "../types";
+import type { BookMeta, PluginContentPreview, PluginInstance, Visibility } from "../types";
 import { SourceSearchPane, type SeriesSourcePick } from "./SourceSearch";
 
+export type SeriesContentTarget = Pick<BookMeta, "id" | "title">;
+
 export type SeriesContentAssignment = {
-  metadataId: string;
+  targetId: string;
   content: { kind: "file"; file: File } | { kind: "plugin"; source: string; id: string } | null;
   visibility: Visibility;
   label: string;
@@ -70,8 +72,10 @@ function CandidatePreview({ candidate, disabled, patch, load }: {
   );
 }
 
-export function SeriesContentMatch({ metadata, selectedIds, instances, disabled, completedIds, failures, onChange }: {
-  metadata: SeriesSourcePick;
+export function SeriesContentMatch({ targets, selectedIds, instances, disabled, completedIds, failures, onChange, heading, skipLabel }: {
+  targets: SeriesContentTarget[];
+  heading?: string;
+  skipLabel?: string;
   selectedIds: string[];
   instances: PluginInstance[];
   disabled: boolean;
@@ -107,7 +111,7 @@ export function SeriesContentMatch({ metadata, selectedIds, instances, disabled,
       ? { ...candidate, ...value } : candidate));
   }, []);
   function matchInOrder(items: Candidate[]) {
-    return Object.fromEntries(metadata.books.map((book, index) => [book.id, items[index]?.key ?? ""]));
+    return Object.fromEntries(targets.map((book, index) => [book.id, items[index]?.key ?? ""]));
   }
   function chooseCandidates(items: Candidate[], title: string) {
     setCandidates(items);
@@ -128,16 +132,16 @@ export function SeriesContentMatch({ metadata, selectedIds, instances, disabled,
     }));
     chooseCandidates(items, pick.item.title);
   }
-  function changeMatch(metadataId: string, key: string) {
+  function changeMatch(targetId: string, key: string) {
     setMatches((prev) => {
-      const next = { ...prev, [metadataId]: key };
+      const next = { ...prev, [targetId]: key };
       // Swap instead of silently binding the same candidate to two selected volumes.
-      const other = key && selectedIds.find((id) => id !== metadataId && prev[id] === key);
-      if (other) next[other] = prev[metadataId] ?? "";
+      const other = key && selectedIds.find((id) => id !== targetId && prev[id] === key);
+      if (other) next[other] = prev[targetId] ?? "";
       return next;
     });
   }
-  const selected = metadata.books.filter((book) => selectedIds.includes(book.id));
+  const selected = targets.filter((book) => selectedIds.includes(book.id));
   const signatures = new Set<string>();
   let ready = !sourceLoading;
   let duplicate = false;
@@ -152,16 +156,16 @@ export function SeriesContentMatch({ metadata, selectedIds, instances, disabled,
       if (content && signatures.has(signature)) { duplicate = true; ready = false; }
       if (content) signatures.add(signature);
     }
-    return { metadataId: book.id, content, ...(settings[book.id] ?? defaults) };
+    return { targetId: book.id, content, ...(settings[book.id] ?? defaults) };
   });
   // The parent owns submission; report the draft only when its inputs change.
   useLayoutEffect(() => {
     onChange({ ready, assignments });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [candidates, matches, settings, metadata, selectedIds, sourceLoading, onChange]);
+  }, [candidates, matches, settings, targets, selectedIds, sourceLoading, onChange]);
   return (
     <section className="modal-section">
-      <h3>{t("library.sectionSeriesContent")}</h3>
+      <h3>{heading ?? t("library.sectionSeriesContent")}</h3>
       <p className="hint">{t("library.seriesContentMatchHint")}</p>
       <fieldset className="add-form" disabled={disabled}>
         <div className="row">
@@ -189,7 +193,7 @@ export function SeriesContentMatch({ metadata, selectedIds, instances, disabled,
             <button onClick={() => setMatches(matchInOrder(candidates))}>{t("library.seriesMatchByOrder")}</button>
             <button className="btn link" onClick={clear}>{t("library.seriesClearContent")}</button>
           </div>
-          {candidates.length !== metadata.books.length && <p className="hint">{t("library.seriesContentCountMismatch", { metadata: metadata.books.length, content: candidates.length })}</p>}
+          {candidates.length !== targets.length && <p className="hint">{t("library.seriesContentCountMismatch", { metadata: targets.length, content: candidates.length })}</p>}
           <details className="additional-content">
             <summary>{t("library.seriesContentCandidates", { count: candidates.length })}</summary>
             <ul className="source-results">
@@ -206,7 +210,7 @@ export function SeriesContentMatch({ metadata, selectedIds, instances, disabled,
               <label className="field">
                 <span className="strong">{book.title}</span><span className="hint">{book.id}</span>
                 <select aria-label={t("library.seriesMatchFor", { title: book.title })} value={matches[book.id] ?? ""} onChange={(event) => changeMatch(book.id, event.target.value)}>
-                  <option value="">{t("library.seriesNoContent")}</option>
+                  <option value="">{skipLabel ?? t("library.seriesNoContent")}</option>
                   {candidates.map((item, index) => <option key={item.key} value={item.key}>{index + 1}. {item.title}</option>)}
                 </select>
               </label>

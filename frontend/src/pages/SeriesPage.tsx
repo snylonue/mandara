@@ -2,13 +2,14 @@
 // for the series creator/admin (edit metadata, reorder, add/remove books,
 // delete the series). Volumes are ordinary books (`BookMeta.volume_no`).
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { useAuth } from "../auth";
 import { BookCover } from "../components/BookCover";
 import { ShelfBookCard } from "../components/ShelfCard";
+import { SeriesBatchContentDialog, canAttachVolume } from "../components/SeriesBatchContentDialog";
 import { ExtMetaForm, ExtMetaTable, extMergePatch, type ExtRecord } from "../components/ExtMetaForm";
 import {
   IconArrowLeft,
@@ -61,10 +62,9 @@ function VolumeCard({
   const { book, files } = entry;
   const readable = files.length > 0;
   // A metadata-only volume (e.g. one 卷 of a bangumi series import) has
-  // no file yet: its page is the only place to attach content, so its
-  // owner/admin must still be able to open it. Volumes whose files all
-  // belong to someone else stay unlinked — `GET /api/books/{id}` answers
-  // 404 for them.
+  // no file yet: its owner/admin can still open it to attach content,
+  // either here in bulk or on the book page. Other volumes without a
+  // visible file stay unlinked — their book detail is inaccessible.
   const openable =
     readable || book.created_by === user?.id || user?.role === "admin";
   const chapterCount = files.reduce((n, f) => n + f.chapter_count, 0);
@@ -119,25 +119,35 @@ export function SeriesPage() {
   const { t } = useTranslation();
   const { user } = useAuth();
   const toast = useToast();
+  const currentId = useRef(id);
+  currentId.current = id;
 
   const [detail, setDetail] = useState<SeriesDetail | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
   const [sessions, setSessions] = useState<SessionList>([]);
   // Local working copy of the member order while managing (saved on 保存).
   const [order, setOrder] = useState<string[] | null>(null);
   const [editOpen, setEditOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
+  const [batchDraft, setBatchDraft] = useState<{ seriesId: string; books: BookDetail[] } | null>(null);
+  useEffect(() => { setBatchDraft(null); }, [id]);
   const [pick, setPick] = useState<Set<string>>(new Set());
   const [unassigned, setUnassigned] = useState<BookListEntry[]>([]);
 
   const load = useCallback(async () => {
+    if (currentId.current !== id) return;
+    setRefreshing(true);
     try {
       const d = await api<SeriesDetail>(`/series/${id}`);
+      if (currentId.current !== id) return;
       setDetail(d);
       setOrder(null);
       setLoadError(null);
     } catch (err) {
-      setLoadError(err instanceof Error ? err.message : t("common.failed"));
+      if (currentId.current === id) setLoadError(err instanceof Error ? err.message : t("common.failed"));
+    } finally {
+      if (currentId.current === id) setRefreshing(false);
     }
   }, [id, t]);
 
@@ -322,6 +332,12 @@ export function SeriesPage() {
                 {t("series.continueReading", { volume: continueTarget.volumeNo })}
               </Link>
             )}
+            {series?.id === id && detail.books.some((entry) => canAttachVolume(entry, user)) && (
+              <button className="btn ghost" disabled={orderDirty || refreshing} title={orderDirty ? t("series.batchSaveOrderFirst") : refreshing ? t("common.loading") : undefined}
+                onClick={() => setBatchDraft({ seriesId: series.id, books: detail.books })}>
+                <IconPlus size={14} /> {t("series.batchContentTitle")}
+              </button>
+            )}
             {canManage && (
               <>
                 {!continueTarget && (
@@ -387,6 +403,11 @@ export function SeriesPage() {
           />
         ))}
       </div>
+
+      {batchDraft && series && batchDraft.seriesId === series.id && series.id === id && <SeriesBatchContentDialog
+        series={series} books={batchDraft.books}
+        onClose={() => setBatchDraft((prev) => prev === batchDraft ? null : prev)} onChanged={load}
+      />}
 
       <EditSeriesDialog
         open={editOpen}

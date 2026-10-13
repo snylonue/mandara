@@ -379,22 +379,22 @@ export function AddDialog({
         const failures: Record<string, string> = {};
         let done = seriesDone.length;
         for (const entry of assignments) {
-          if (seriesDone.includes(entry.metadataId)) continue;
+          if (seriesDone.includes(entry.targetId)) continue;
           const content = entry.content!;
           try {
             await acquire({ kind: content.kind, visibility: entry.visibility, label: entry.label }, (form) => {
               form.append("meta_plugin_source", pluginSeriesRef!.instance.id);
-              form.append("meta_plugin_book_id", entry.metadataId);
+              form.append("meta_plugin_book_id", entry.targetId);
               if (content.kind === "file") form.append("file", content.file);
               else {
                 form.append("plugin_source", content.source);
                 form.append("plugin_book_id", content.id);
               }
             });
-            setSeriesDone((prev) => [...prev, entry.metadataId]);
+            setSeriesDone((prev) => [...prev, entry.targetId]);
             setUploadDone(++done);
           } catch (error) {
-            failures[entry.metadataId] = error instanceof Error ? error.message : t("common.failed");
+            failures[entry.targetId] = error instanceof Error ? error.message : t("common.failed");
           }
         }
         if (Object.keys(failures).length > 0) {
@@ -718,7 +718,7 @@ export function AddDialog({
             </fieldset>
           {seriesMeta === "plugin" && pluginSeriesRef && <SeriesContentMatch
             key={pluginSeriesRef.instance.id + ":" + pluginSeriesRef.item.id}
-            metadata={pluginSeriesRef} selectedIds={selectedVolumes} instances={instances}
+            targets={pluginSeriesRef.books} selectedIds={selectedVolumes} instances={instances}
             disabled={uploading || Boolean(importedSeries)} completedIds={seriesDone} failures={seriesFailures}
             onChange={setSeriesContentPlan}
           />}

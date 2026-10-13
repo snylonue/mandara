@@ -301,7 +301,18 @@
     "noUnassigned": "没有可加入系列的书籍（书籍不在任何系列中，且由你管理）。",
     "create": "新建系列",
     "created": "已创建系列《{{title}}》",
-    "createHint": "创建系列后可以立即在其中添加卷（书籍）。"
+    "createHint": "创建系列后可以立即在其中添加卷（书籍）。",
+    "batchContentTitle": "批量添加内容",
+    "batchContentHint": "使用现有卷作为目标，不重新导入书目信息。默认勾选没有可见内容的卷，也可勾选已有内容的卷添加其他版本。请确认顺序和对应关系。",
+    "batchSelectMissing": "仅选择暂无内容的卷",
+    "batchNoPermission": "无权添加内容",
+    "batchExistingFiles": "已有 {{count}} 个可见版本",
+    "batchContentSource": "选择内容来源并匹配单卷",
+    "batchSkipContent": "跳过此卷（不添加内容）",
+    "batchSaveOrderFirst": "请先保存或取消卷顺序调整，再批量添加内容",
+    "batchAddContent": "添加 {{count}} 卷内容",
+    "batchContentAdded": "已为 {{count}} 卷添加内容",
+    "batchContentPartial": "{{failed}} 卷的内容添加失败，已成功的卷会保留。可以仅重试失败内容；关闭对话框后会更新系列页面。"
   },
   "ext": {
     "subtitle": "副标题",
