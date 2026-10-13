@@ -85,12 +85,11 @@ pub struct CreateShare {
 }
 
 pub async fn create_share(
-    user: AuthenticatedUser,
+    AuthenticatedUser(user): AuthenticatedUser,
     State(st): State<St>,
     Path(file_id): Path<String>,
     Json(req): Json<CreateShare>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = user.into_inner();
     let file = load_visible_file(&st, &user, &file_id).await?;
     // Private files are shareable by their owner (or admins) only; public
     // files (e.g. plugin catalogs) may be shared by any viewer.
@@ -347,11 +346,10 @@ pub async fn share_chapter(
 // DELETE /api/shares/{token} ------------------------------------------------------
 
 pub async fn delete_share(
-    user: AuthenticatedUser,
+    AuthenticatedUser(user): AuthenticatedUser,
     State(st): State<St>,
     Path(token): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = user.into_inner();
     let row = load_share(&st, &token).await?;
     let is_creator = row.created_by.as_deref() == Some(user.id.as_str());
     if !is_creator && user.role != mandara_core::model::Role::Admin {

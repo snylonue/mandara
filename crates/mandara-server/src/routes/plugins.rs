@@ -15,7 +15,7 @@ use crate::routes::St;
 // GET /api/plugins ------------------------------------------------------------
 
 pub async fn list_plugins(
-    _user: AuthenticatedUser,
+    AuthenticatedUser(_user): AuthenticatedUser,
     State(st): State<St>,
 ) -> Result<impl IntoResponse, ApiError> {
     // any logged-in user may list instances (for the source browser and
@@ -27,7 +27,7 @@ pub async fn list_plugins(
 // POST /api/plugins/sync (admin) ----------------------------------------------
 
 pub async fn sync_plugins(
-    _admin: AdminUser,
+    AdminUser(_admin): AdminUser,
     State(st): State<St>,
 ) -> Result<impl IntoResponse, ApiError> {
     let synced = st.library.sync_plugins().await?;
@@ -39,7 +39,7 @@ pub async fn sync_plugins(
 // Re-catalogue ONE instance (the admin page's per-instance 重同步).
 
 pub async fn sync_instance(
-    _admin: AdminUser,
+    AdminUser(_admin): AdminUser,
     State(st): State<St>,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
@@ -53,7 +53,7 @@ pub async fn sync_instance(
 // the instance registration form.
 
 pub async fn wasm_files(
-    _admin: AdminUser,
+    AdminUser(_admin): AdminUser,
     State(st): State<St>,
 ) -> Result<impl IntoResponse, ApiError> {
     Ok(Json(st.library.plugins().wasm_files()))
@@ -76,7 +76,7 @@ fn default_config() -> serde_json::Value {
 }
 
 pub async fn register_instance(
-    _admin: AdminUser,
+    AdminUser(_admin): AdminUser,
     State(st): State<St>,
     Json(req): Json<RegisterInstance>,
 ) -> Result<impl IntoResponse, ApiError> {
@@ -106,7 +106,7 @@ pub async fn register_instance(
 // DELETE /api/plugins/instances/{id} (admin) -------------------------------------
 
 pub async fn delete_instance(
-    _admin: AdminUser,
+    AdminUser(_admin): AdminUser,
     State(st): State<St>,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
@@ -122,7 +122,7 @@ pub struct EnableInstance {
 }
 
 pub async fn set_instance_enabled(
-    _admin: AdminUser,
+    AdminUser(_admin): AdminUser,
     State(st): State<St>,
     Path(id): Path<String>,
     Json(req): Json<EnableInstance>,
@@ -138,7 +138,7 @@ pub async fn set_instance_enabled(
 // GET /api/plugins/{id}/config-schema (admin) --------------------------------------
 
 pub async fn plugin_config_schema(
-    _admin: AdminUser,
+    AdminUser(_admin): AdminUser,
     State(st): State<St>,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
@@ -157,7 +157,7 @@ pub struct PutConfig {
 }
 
 pub async fn put_plugin_config(
-    _admin: AdminUser,
+    AdminUser(_admin): AdminUser,
     State(st): State<St>,
     Path(id): Path<String>,
     Json(req): Json<PutConfig>,
@@ -212,7 +212,7 @@ pub struct SearchResponse {
 }
 
 pub async fn search_plugins(
-    _user: AuthenticatedUser,
+    AuthenticatedUser(_user): AuthenticatedUser,
     State(st): State<St>,
     Path(id): Path<String>,
     Query(params): Query<SearchParams>,
@@ -257,12 +257,11 @@ pub struct MaterializeBook {
 }
 
 pub async fn materialize_book(
-    user: AuthenticatedUser,
+    AuthenticatedUser(user): AuthenticatedUser,
     State(st): State<St>,
     Path(id): Path<String>,
     Json(req): Json<MaterializeBook>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = user.into_inner();
     // Legacy endpoint (superseded by the unified acquisition endpoint);
     // each plugin book is one independently addressable volume.
     let (book, _file) = st
@@ -309,7 +308,7 @@ pub struct SeriesLookupResponse {
 }
 
 pub async fn lookup_series(
-    _user: AuthenticatedUser,
+    AuthenticatedUser(_user): AuthenticatedUser,
     State(st): State<St>,
     Path(id): Path<String>,
     Query(params): Query<LookupParams>,
@@ -341,12 +340,11 @@ pub struct ImportSeries {
 }
 
 pub async fn import_series(
-    user: AuthenticatedUser,
+    AuthenticatedUser(user): AuthenticatedUser,
     State(st): State<St>,
     Path(id): Path<String>,
     Json(req): Json<ImportSeries>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = user.into_inner();
     let series = st
         .library
         .import_plugin_series(&user, &id, &req.series_id, &req.book_ids)
@@ -363,7 +361,7 @@ pub struct LookupParams {
 }
 
 pub async fn lookup_plugin(
-    _user: AuthenticatedUser,
+    AuthenticatedUser(_user): AuthenticatedUser,
     State(st): State<St>,
     Path(id): Path<String>,
     Query(params): Query<LookupParams>,

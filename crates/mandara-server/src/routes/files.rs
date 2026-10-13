@@ -24,11 +24,10 @@ pub struct FileDetail {
 // GET /api/files/{id} ---------------------------------------------------------
 
 pub async fn get_file(
-    user: AuthenticatedUser,
+    AuthenticatedUser(user): AuthenticatedUser,
     State(st): State<St>,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = user.into_inner();
     let file = load_visible_file(&st, &user, &id).await?;
     st.library.ensure_titles(&file).await?;
     let chapters = st.library.chapter_titles(&file.id).await?;
@@ -55,11 +54,10 @@ pub struct ChapterPath {
 }
 
 pub async fn get_chapter(
-    user: AuthenticatedUser,
+    AuthenticatedUser(user): AuthenticatedUser,
     State(st): State<St>,
     Path(path): Path<ChapterPath>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = user.into_inner();
     let file = load_visible_file(&st, &user, &path.id).await?;
     Ok(Json(st.library.get_chapter(&file, path.idx).await?))
 }
@@ -71,11 +69,10 @@ pub async fn get_chapter(
 // Files without a retained original (plugin chapter-mode, pre-retention
 // uploads) answer 404.
 pub async fn download_file(
-    user: AuthenticatedUser,
+    AuthenticatedUser(user): AuthenticatedUser,
     State(st): State<St>,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = user.into_inner();
     let file = load_visible_file(&st, &user, &id).await?;
     let (bytes, ext) = st
         .library
@@ -141,12 +138,11 @@ pub struct PatchFile {
 }
 
 pub async fn patch_file(
-    user: AuthenticatedUser,
+    AuthenticatedUser(user): AuthenticatedUser,
     State(st): State<St>,
     Path(id): Path<String>,
     Json(req): Json<PatchFile>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = user.into_inner();
     let file = load_visible_file(&st, &user, &id).await?;
     if !can_manage_file(&user, &file) {
         return Err(ApiError::Forbidden);
@@ -166,11 +162,10 @@ pub async fn patch_file(
 // download failed — the re-pull stores them via `store-image`).
 
 pub async fn rematerialize_file(
-    user: AuthenticatedUser,
+    AuthenticatedUser(user): AuthenticatedUser,
     State(st): State<St>,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = user.into_inner();
     let file = load_visible_file(&st, &user, &id).await?;
     if !can_manage_file(&user, &file) {
         return Err(ApiError::Forbidden);
@@ -182,11 +177,10 @@ pub async fn rematerialize_file(
 // DELETE /api/files/{id} -------------------------------------------------------
 
 pub async fn delete_file(
-    user: AuthenticatedUser,
+    AuthenticatedUser(user): AuthenticatedUser,
     State(st): State<St>,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = user.into_inner();
     let file = load_visible_file(&st, &user, &id).await?;
     if !can_manage_file(&user, &file) {
         return Err(ApiError::Forbidden);

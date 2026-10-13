@@ -73,10 +73,9 @@ pub struct SeriesDetail {
 // GET /api/series -----------------------------------------------------------
 
 pub async fn list_series(
-    user: AuthenticatedUser,
+    AuthenticatedUser(user): AuthenticatedUser,
     State(st): State<St>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = user.into_inner();
     let series_list = st.library.list_series(&user).await?;
     let mut out = Vec::with_capacity(series_list.len());
     for (series, count) in series_list {
@@ -97,11 +96,10 @@ pub struct CreateSeries {
 }
 
 pub async fn create_series(
-    user: AuthenticatedUser,
+    AuthenticatedUser(user): AuthenticatedUser,
     State(st): State<St>,
     Json(req): Json<CreateSeries>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = user.into_inner();
     let title = req.title.trim();
     if title.is_empty() {
         return Err(ApiError::bad_request("series title must not be empty"));
@@ -156,11 +154,10 @@ async fn load_series_detail(
 }
 
 pub async fn get_series_detail(
-    user: AuthenticatedUser,
+    AuthenticatedUser(user): AuthenticatedUser,
     State(st): State<St>,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = user.into_inner();
     Ok(Json(load_series_detail(&st, &user, &id).await?))
 }
 
@@ -177,12 +174,11 @@ pub struct PatchSeries {
 }
 
 pub async fn patch_series(
-    user: AuthenticatedUser,
+    AuthenticatedUser(user): AuthenticatedUser,
     State(st): State<St>,
     Path(id): Path<String>,
     Json(req): Json<PatchSeries>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = user.into_inner();
     let updated = st
         .library
         .update_series(
@@ -209,12 +205,11 @@ pub struct PutMembers {
 }
 
 pub async fn put_series_members(
-    user: AuthenticatedUser,
+    AuthenticatedUser(user): AuthenticatedUser,
     State(st): State<St>,
     Path(id): Path<String>,
     Json(req): Json<PutMembers>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = user.into_inner();
     st.library
         .set_series_members(&user, &id, &req.book_ids)
         .await?;
@@ -224,11 +219,10 @@ pub async fn put_series_members(
 // DELETE /api/series/{id} ------------------------------------------------------
 
 pub async fn delete_series(
-    user: AuthenticatedUser,
+    AuthenticatedUser(user): AuthenticatedUser,
     State(st): State<St>,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = user.into_inner();
     st.library.delete_series(&user, &id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

@@ -12,26 +12,14 @@ use crate::auth::AuthService;
 use crate::error::ApiError;
 use crate::state::St;
 
-/// A database-backed user whose request credentials have been verified.
-/// The private field prevents handlers from constructing unchecked users.
+/// Extracts a database-backed user after verifying request credentials.
+/// The public field supports destructuring directly in handler parameters.
 #[derive(Debug)]
-pub struct AuthenticatedUser(User);
+pub struct AuthenticatedUser(pub User);
 
-impl AuthenticatedUser {
-    pub fn user(&self) -> &User {
-        &self.0
-    }
-
-    pub fn into_inner(self) -> User {
-        self.0
-    }
-}
-
-/// A guard proving that the authenticated user has the admin role.
+/// Extracts a user after verifying request credentials and the admin role.
 #[derive(Debug)]
-pub struct AdminUser {
-    _user: AuthenticatedUser,
-}
+pub struct AdminUser(pub User);
 
 impl FromRequestParts<St> for AuthenticatedUser {
     type Rejection = ApiError;
@@ -49,9 +37,9 @@ impl FromRequestParts<St> for AdminUser {
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, state: &St) -> Result<Self, Self::Rejection> {
-        let user = AuthenticatedUser::from_request_parts(parts, state).await?;
-        AuthService::require_admin(user.user())?;
-        Ok(Self { _user: user })
+        let AuthenticatedUser(user) = AuthenticatedUser::from_request_parts(parts, state).await?;
+        AuthService::require_admin(&user)?;
+        Ok(Self(user))
     }
 }
 

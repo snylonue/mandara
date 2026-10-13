@@ -148,8 +148,7 @@ pub async fn logout(State(st): State<St>) -> impl IntoResponse {
     )
 }
 
-pub async fn me(user: AuthenticatedUser) -> Result<impl IntoResponse, ApiError> {
-    let user = user.into_inner();
+pub async fn me(AuthenticatedUser(user): AuthenticatedUser) -> Result<impl IntoResponse, ApiError> {
     Ok(Json(user))
 }
 

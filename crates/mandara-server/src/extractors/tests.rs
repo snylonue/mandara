@@ -348,30 +348,34 @@ async fn guards_preserve_bodies_and_do_not_run_denied_handlers() {
     let app = Router::new()
         .route(
             "/json",
-            post(move |_admin: AdminUser, Json(body): Json<Value>| {
-                let calls = json_calls.clone();
-                async move {
-                    calls.fetch_add(1, Ordering::SeqCst);
-                    Json(body)
-                }
-            }),
+            post(
+                move |AdminUser(_admin): AdminUser, Json(body): Json<Value>| {
+                    let calls = json_calls.clone();
+                    async move {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        Json(body)
+                    }
+                },
+            ),
         )
         .route(
             "/multipart",
-            post(move |_user: AuthenticatedUser, mut multipart: Multipart| {
-                let calls = multipart_calls.clone();
-                async move {
-                    calls.fetch_add(1, Ordering::SeqCst);
-                    multipart
-                        .next_field()
-                        .await
-                        .unwrap()
-                        .unwrap()
-                        .text()
-                        .await
-                        .unwrap()
-                }
-            }),
+            post(
+                move |AuthenticatedUser(_user): AuthenticatedUser, mut multipart: Multipart| {
+                    let calls = multipart_calls.clone();
+                    async move {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        multipart
+                            .next_field()
+                            .await
+                            .unwrap()
+                            .unwrap()
+                            .text()
+                            .await
+                            .unwrap()
+                    }
+                },
+            ),
         )
         .with_state(fixture.state.clone());
     let user = fixture.token("user", Role::User);

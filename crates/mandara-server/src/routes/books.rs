@@ -305,11 +305,10 @@ fn overrides(fields: &UploadFields) -> Result<MetadataOverrides, ApiError> {
 // GET /api/books -----------------------------------------------------------
 
 pub async fn list_books(
-    user: AuthenticatedUser,
+    AuthenticatedUser(user): AuthenticatedUser,
     State(st): State<St>,
     Query(params): Query<ListParams>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = user.into_inner();
     let entries = st
         .library
         .list_books(params.q.as_deref(), params.source.as_deref(), &user)
@@ -347,11 +346,10 @@ pub async fn list_books(
 // `cover_url` override the produced metadata (never when attaching).
 
 pub async fn upload_book(
-    user: AuthenticatedUser,
+    AuthenticatedUser(user): AuthenticatedUser,
     State(st): State<St>,
     multipart: Multipart,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = user.into_inner();
     let (fields, file, visibility, label) = read_upload(multipart).await?;
     let overrides = overrides(&fields)?;
     let request = AcquisitionRequest::resolve(&fields, &file, &overrides, visibility, label)?;
@@ -390,12 +388,11 @@ pub async fn upload_book(
 // POST /api/books/{id}/files (multipart: attach another edition) -------------
 
 pub async fn attach_file(
-    user: AuthenticatedUser,
+    AuthenticatedUser(user): AuthenticatedUser,
     State(st): State<St>,
     Path(book_id): Path<String>,
     multipart: Multipart,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = user.into_inner();
     // The book itself must exist. Visibility of the new file follows the
     // global upload rule: private unless the caller explicitly picks
     // public (the old "most visible existing file" default could silently
@@ -434,11 +431,10 @@ pub async fn attach_file(
 // GET /api/books/{id} -------------------------------------------------------
 
 pub async fn get_book(
-    user: AuthenticatedUser,
+    AuthenticatedUser(user): AuthenticatedUser,
     State(st): State<St>,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = user.into_inner();
     let book = st
         .library
         .get_book(&id)
@@ -505,12 +501,11 @@ pub struct PatchBook {
 }
 
 pub async fn patch_book(
-    user: AuthenticatedUser,
+    AuthenticatedUser(user): AuthenticatedUser,
     State(st): State<St>,
     Path(id): Path<String>,
     Json(req): Json<PatchBook>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = user.into_inner();
     let book = st
         .library
         .get_book(&id)
@@ -549,11 +544,10 @@ pub async fn patch_book(
 // Re-pull metadata from the plugin source(s) backing this book.
 
 pub async fn refresh_book(
-    user: AuthenticatedUser,
+    AuthenticatedUser(user): AuthenticatedUser,
     State(st): State<St>,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = user.into_inner();
     let book = st.library.refresh_book(&user, &id).await?;
     Ok(Json(book))
 }
@@ -564,11 +558,10 @@ pub async fn refresh_book(
 // every file of the book has been deleted explicitly (409 otherwise).
 
 pub async fn delete_book(
-    user: AuthenticatedUser,
+    AuthenticatedUser(user): AuthenticatedUser,
     State(st): State<St>,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = user.into_inner();
     let book = st
         .library
         .get_book(&id)
