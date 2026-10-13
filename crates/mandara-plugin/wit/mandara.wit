@@ -1,8 +1,8 @@
-// Plugin protocol v10: declared bodies are explicitly optional.
+// Plugin protocol v13: content declarations include loading and chapter information.
 // Plugins adapt upstream data and define opaque, stable IDs.
 // Metadata/content source selection belongs exclusively to the host.
 
-package mandara:plugin@0.10.0;
+package mandara:plugin@0.13.0;
 
 /// Shared types between mandara and plugins.
 interface types {
@@ -16,6 +16,9 @@ interface types {
         /// SeriesExt JSON object, validated by the host.
         extra: option<string>,
     }
+
+    /// Content loading is selected by the plugin, never inferred by the host.
+    enum content-mode { chapters, file }
 
     /// A book offered by a plugin source.
     record book-entry {
@@ -56,11 +59,18 @@ interface types {
         format: string,
     }
 
-    /// One book of a `declare` catalog: metadata plus (optionally eager)
-    /// chapter bodies.
+    /// Content identity and loading, independent of book metadata.
+    record declared-content {
+        id: string,
+        mode: content-mode,
+        chapters: list<declared-chapter>,
+    }
+
+    /// A catalog association between metadata and optional content.
+    /// Their IDs are independent; neither record contains the other.
     record declared-book {
         book: book-entry,
-        chapters: list<declared-chapter>,
+        content: option<declared-content>,
     }
 
     /// Paginated catalog search result.
@@ -76,7 +86,8 @@ interface types {
         series(series-entry),
     }
 
-    /// Every member has a stable book ID accepted by get-book/content exports.
+    /// Every member has a stable metadata ID accepted by get-book.
+    /// Content IDs are independent and selected separately.
     record series-result {
         series: series-entry,
         books: list<book-entry>,
@@ -266,7 +277,7 @@ world mandara-plugin {
     // Types used by this world's exports come from the imported `types`
     // interface; WIT requires an explicit `use` to bring them into the
     // world scope.
-    use types.{book-entry, chapter, declared-chapter, declared-book, search-result, book-file, source-info, series-entry, series-result, catalog-entry};
+    use types.{book-entry, content-mode, chapter, declared-chapter, declared-content, declared-book, search-result, book-file, source-info, series-entry, series-result, catalog-entry};
     use config.{config-field, config-value};
 
     /// Human-readable name of this plugin (same for all instances).
@@ -290,12 +301,11 @@ world mandara-plugin {
     ///   - `lookup`   -> single books can be fetched with `get-book`
     ///     (materialize-on-demand, refresh);
     ///   - `identify` -> the source takes part in upload identification;
-    ///   - `content`  -> the source provides `chapter-titles` and
-    ///     `get-chapter` (chapter mode);
+    ///   - `content`  -> the source declares chapters via `get-content` and
+    ///     supplies missing bodies via `get-chapter` (chapter mode);
     ///   - `book-file`-> the source provides whole book files via
-    ///     `get-book-file` (file mode). When both `content` and
-    ///     `book-file` are declared, file mode wins and chapter mode is
-    ///     the fallback when `get-book-file` returns `none`.
+    ///     `get-book-file` (file mode). These are discovery hints; the
+    ///     content declaration selects loading. Plugins own fallback.
     /// Metadata-only plugins declare everything except `content`/
     /// `book-file`.
     export capabilities: func() -> list<string>;
@@ -313,15 +323,16 @@ world mandara-plugin {
     /// found.
     export get-book: func(book-id: string) -> option<book-entry>;
 
+    /// Declare content identity, loading form and chapters together.
+    /// none = content unavailable; this says nothing about metadata.
+    /// The host persists the form at acquisition; plugins own fallback.
+    export get-content: func(content-id: string) -> option<declared-content>;
+
     /// Series lookup; IDs may be different from upstream website IDs.
     export get-series: func(series-id: string) -> option<series-result>;
 
-    /// Chapter titles of `book-id`, in reading order. Indices returned
-    /// here are the same indices passed to `get-chapter`.
-    export chapter-titles: func(book-id: string) -> list<string>;
-
-    /// Fetch one chapter of `book-id` by index. `none` means not found.
-    export get-chapter: func(book-id: string, index: u32) -> option<chapter>;
+    /// Fetch one chapter of `content-id` by index. `none` means not found.
+    export get-chapter: func(content-id: string, index: u32) -> option<chapter>;
 
     /// Try to identify the book behind an uploaded file.
     ///
@@ -333,9 +344,7 @@ world mandara-plugin {
     export identify-upload: func(filename: string, file-hash: string) -> option<book-entry>;
 
     /// Fetch a whole book file (epub/txt download, `book-file` capability).
-    /// `none` = not available as a file (fall back to chapter mode).
-    /// Permanent `fetch` errors should surface as `none` too (the guest
-    /// logs the underlying error; the host logs and falls back to chapter
-    /// mode as well).
-    export get-book-file: func(book-id: string) -> option<book-file>;
+    /// `none` = unavailable; the host reports missing content, never
+    /// changes content mode. Any upstream fallback belongs in this export.
+    export get-book-file: func(content-id: string) -> option<book-file>;
 }

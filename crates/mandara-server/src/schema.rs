@@ -21,11 +21,10 @@ diesel::table! {
         chapter_count -> BigInt,
         toc -> Text,
         created_at -> Text,
-        volume_no -> BigInt,
-        volume_offset -> BigInt,
         orig_ext -> Nullable<Text>,
         orig_sha256 -> Nullable<Text>,
         orig_size -> Nullable<BigInt>,
+        content_mode -> Text,
     }
 }
 

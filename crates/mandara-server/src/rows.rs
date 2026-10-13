@@ -1,8 +1,8 @@
 //! Database row structs mapped into core models.
 
 use mandara_core::model::{
-    BookMeta, Chapter, ChapterMeta, FileFormat, FileMeta, InChapter, OriginalInfo, Position,
-    ReadingSession, Role, SeriesMeta, Share, ShareKind, User, Visibility,
+    BookMeta, Chapter, ChapterMeta, ContentMode, FileFormat, FileMeta, InChapter, OriginalInfo,
+    Position, ReadingSession, Role, SeriesMeta, Share, ShareKind, User, Visibility,
 };
 use mandara_core::{BookExt, SeriesExt};
 
@@ -107,8 +107,7 @@ pub struct FileRow {
     pub owner_id: Option<String>,
     pub chapter_count: i64,
     pub created_at: String,
-    pub volume_no: i64,
-    pub volume_offset: i64,
+    pub content_mode: String,
     pub orig_ext: Option<String>,
     pub orig_sha256: Option<String>,
     pub orig_size: Option<i64>,
@@ -133,8 +132,10 @@ impl FileRow {
             owner_id: self.owner_id,
             chapter_count: self.chapter_count.max(0) as u32,
             created_at: DbTs::from_str(self.created_at).parse(),
-            volume_no: self.volume_no.max(0) as u32,
-            volume_offset: self.volume_offset.max(0) as u32,
+            content_mode: self
+                .content_mode
+                .parse::<ContentMode>()
+                .map_err(ApiError::internal)?,
             original: match (self.orig_ext, self.orig_sha256, self.orig_size) {
                 (Some(ext), Some(sha), Some(size)) => Some(OriginalInfo {
                     ext,

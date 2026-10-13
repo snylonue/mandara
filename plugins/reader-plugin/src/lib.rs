@@ -12,7 +12,7 @@
 //! `base-url` at any HTTP API with the same shape:
 //!   GET /api/search?q=&page_size=&offset=&limit= -> {"total","items":[...]}
 //!   GET /api/books/{id}                          -> book-entry | 404
-//!   GET /api/books/{id}/chapters?max=            -> {"titles":[...]}
+//!   GET /api/books/{id}/content?max=             -> {"mode","chapters":[...]} | 404
 //!   GET /api/books/{id}/chapters/{i}             -> {"title","content"} | 404
 //!
 //! Fetch failures surface as empty results / `none` (the guest logs the
@@ -216,9 +216,7 @@ impl Guest for ReaderPlugin {
     }
 
     fn capabilities() -> Vec<String> {
-        // Chapter mode (`content`) + file mode (`book-file`): the host
-        // tries the whole-file download first and falls back to
-        // per-chapter pulls when `get-book-file` returns none.
+        // Availability in upstream metadata selects each book's content form.
         vec![
             "search".into(),
             "lookup".into(),
@@ -287,36 +285,51 @@ impl Guest for ReaderPlugin {
         }
     }
 
-    fn chapter_titles(book_id: String) -> Vec<String> {
+    fn get_content(content_id: String) -> Option<DeclaredContent> {
         let base = config_string("base-url", DEFAULT_BASE_URL);
         let max = config_number("max-chapters", 3);
-        let url = format!("{base}/api/books/{book_id}/chapters?max={max}");
+        let url = format!("{base}/api/books/{content_id}/content?max={max}");
         match http_get(&url) {
-            Ok((200, body)) => match serde_json::from_slice::<serde_json::Value>(&body) {
-                Ok(value) => value
-                    .get("titles")
-                    .and_then(|t| t.as_array())
-                    .map(|titles| {
-                        titles
-                            .iter()
-                            .filter_map(|t| t.as_str().map(String::from))
-                            .collect()
+            Ok((200, body)) => {
+                let value: serde_json::Value = serde_json::from_slice(&body)
+                    .map_err(|e| log_error("get-content", &url, &e))
+                    .ok()?;
+                let mode = match value.get("mode")?.as_str()? {
+                    "file" => ContentMode::File,
+                    "chapters" => ContentMode::Chapters,
+                    _ => return None,
+                };
+                let chapters = value
+                    .get("chapters")?
+                    .as_array()?
+                    .iter()
+                    .map(|chapter| {
+                        Some(DeclaredChapter {
+                            title: chapter.get("title")?.as_str()?.into(),
+                            format: chapter.get("format")?.as_str()?.into(),
+                            content: match chapter.get("content")? {
+                                serde_json::Value::Null => None,
+                                serde_json::Value::String(body) => Some(body.clone()),
+                                _ => return None,
+                            },
+                        })
                     })
-                    .unwrap_or_default(),
-                Err(e) => {
-                    log_error("chapter-titles", &url, &format!("json: {e}"));
-                    Vec::new()
-                }
-            },
+                    .collect::<Option<Vec<_>>>()?;
+                Some(DeclaredContent {
+                    id: content_id,
+                    mode,
+                    chapters,
+                })
+            }
             Ok((status, _)) => {
                 if status != 404 {
-                    log_error("chapter-titles", &url, &format!("status {status}"));
+                    log_error("get-content", &url, &format!("status {status}"));
                 }
-                Vec::new()
+                None
             }
-            Err(e) => {
-                log_error("chapter-titles", &url, &e);
-                Vec::new()
+            Err(error) => {
+                log_error("get-content", &url, &error);
+                None
             }
         }
     }

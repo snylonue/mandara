@@ -1083,25 +1083,28 @@ impl Guest for Wenku8Plugin {
             .find(|b| b.id == book_id)
     }
 
-    fn chapter_titles(book_id: String) -> Vec<String> {
-        let Some((book, anchor)) = parse_volume_id(&book_id) else {
-            return vec![];
-        };
-        let Some(info) = fetch_toc(&book) else {
-            return vec![];
-        };
-        let Some(volume) = info
+    fn get_content(content_id: String) -> Option<DeclaredContent> {
+        let (book, anchor) = parse_volume_id(&content_id)?;
+        let info = fetch_toc(&book)?;
+        let volume = info
             .volumes
             .iter()
-            .position(|v| volume_anchor(v) == Some(anchor))
-        else {
-            return vec![];
-        };
-        info.order
+            .position(|v| volume_anchor(v) == Some(anchor))?;
+        let chapters = info
+            .order
             .into_iter()
             .filter(|c| c.volume == volume)
-            .map(|c| c.title)
-            .collect()
+            .map(|c| DeclaredChapter {
+                title: c.title,
+                format: "text".into(),
+                content: None,
+            })
+            .collect();
+        Some(DeclaredContent {
+            id: content_id,
+            mode: ContentMode::Chapters,
+            chapters,
+        })
     }
 
     fn get_chapter(book_id: String, index: u32) -> Option<Chapter> {

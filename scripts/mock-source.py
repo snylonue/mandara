@@ -301,11 +301,6 @@ class Handler(BaseHTTPRequestHandler):
             self.send(404, "text/plain", b"not found")
             return
 
-        if action == "chapters" and len(parts) == 5:
-            max_ch = int(query.get("max", ["10"])[0])
-            titles = book[4][:max_ch]
-            self.json({"titles": titles})
-            return
         if action == "chapters" and len(parts) == 6:
             try:
                 index = int(parts[5])
@@ -317,7 +312,16 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self.json({"title": book[4][index], "content": chapter_text(book[0], book[4][index])})
             return
+        if action == "content":
+            mode = "chapters" if book[0] == "r-beta" else "file"
+            max_ch = int(query.get("max", ["10"])[0])
+            chapters = [{"title": title, "format": "text", "content": None} for title in book[4][:max_ch]] if mode == "chapters" else []
+            self.json({"mode": mode, "chapters": chapters})
+            return
         if action == "download":
+            if book[0] == "r-beta":
+                self.send(404, "text/plain", b"chapter-only upstream book")
+                return
             self.send(
                 200,
                 "application/epub+zip",

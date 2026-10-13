@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use serde::Serialize;
 
-use mandara_core::source::{SourceBook, SourceBookFile, SourceChapter, SourceDeclaredChapter};
+use mandara_core::source::{SourceBook, SourceBookFile, SourceChapter, SourceDeclaredContent};
 use mandara_plugin::error::Error as PluginError;
 use mandara_plugin::{
     BookEntry, ConfigErrors, ConfigField, ConfigKind, ConfigValue, SearchResult, SourceInfo,
@@ -108,13 +108,11 @@ pub struct ConfigFieldView {
 /// One declared book plus its declared chapters (sync path).
 pub struct DeclaredCatalogBook {
     pub book: SourceBook,
-    /// Declared chapters in reading order; supplied bodies are cached eagerly.
-    pub chapters: Vec<SourceDeclaredChapter>,
+    pub content: Option<SourceDeclaredContent>,
 }
 
 pub struct DeclaredCatalog {
     pub instance: String,
-    pub has_content: bool,
     pub books: Vec<DeclaredCatalogBook>,
 }
 
@@ -509,25 +507,13 @@ impl PluginService {
             .unwrap_or_default();
             out.push(DeclaredCatalog {
                 instance: row.id,
-                has_content: wasm
-                    .capabilities
-                    .iter()
-                    .any(|c| c == "content" || c == "book-file"),
                 books: declared
                     .into_iter()
                     .map(|b| -> Result<_, ApiError> {
                         let book = SourceBook::try_from(b.book)?;
                         Ok(DeclaredCatalogBook {
                             book,
-                            chapters: b
-                                .chapters
-                                .into_iter()
-                                .map(|c| SourceDeclaredChapter {
-                                    title: c.title,
-                                    format: c.format,
-                                    content: c.content,
-                                })
-                                .collect(),
+                            content: b.content.map(Into::into),
                         })
                     })
                     .collect::<Result<Vec<_>, _>>()?,
@@ -558,25 +544,13 @@ impl PluginService {
             .unwrap_or_default();
             return Ok(Some(DeclaredCatalog {
                 instance: row.id,
-                has_content: wasm
-                    .capabilities
-                    .iter()
-                    .any(|c| c == "content" || c == "book-file"),
                 books: declared
                     .into_iter()
                     .map(|b| -> Result<_, ApiError> {
                         let book = SourceBook::try_from(b.book)?;
                         Ok(DeclaredCatalogBook {
                             book,
-                            chapters: b
-                                .chapters
-                                .into_iter()
-                                .map(|c| SourceDeclaredChapter {
-                                    title: c.title,
-                                    format: c.format,
-                                    content: c.content,
-                                })
-                                .collect(),
+                            content: b.content.map(Into::into),
                         })
                     })
                     .collect::<Result<Vec<_>, _>>()?,
@@ -622,14 +596,6 @@ impl PluginService {
         .await
     }
 
-    pub async fn chapter_titles(&self, id: &str, book_id: &str) -> Result<Vec<String>, ApiError> {
-        let book_id = book_id.to_string();
-        self.call(id, false, move |wasm, values| {
-            wasm.chapter_titles(values, &book_id)
-        })
-        .await
-    }
-
     /// One chapter (requires `content`; allowed for disabled instances).
     pub async fn get_chapter(
         &self,
@@ -644,47 +610,31 @@ impl PluginService {
         .await
     }
 
-    /// Does the instance's wasm declare `cap`? (Used to pick acquisition
-    /// modes before calling into the plugin, e.g. file mode vs chapter
-    /// mode.)
-    pub async fn declares(&self, id: &str, cap: &str) -> Result<bool, ApiError> {
-        let row = self
-            .row(id)
-            .await?
-            .ok_or_else(|| ApiError::not_found("plugin instance"))?;
-        let wasm = self.wasm_info(&row.wasm_file).ok_or_else(|| {
-            ApiError::bad_request(format!("wasm file `{}` is not loaded", row.wasm_file))
-        })?;
-        Ok(wasm.capabilities.iter().any(|c| c == cap))
+    /// Fetch one complete content declaration, independently of book metadata.
+    pub async fn get_content(
+        &self,
+        id: &str,
+        content_id: &str,
+        require_enabled: bool,
+    ) -> Result<Option<SourceDeclaredContent>, ApiError> {
+        let content_id = content_id.to_string();
+        self.call(id, require_enabled, move |wasm, values| {
+            wasm.get_content(values, &content_id)
+        })
+        .await
     }
 
-    /// Whole-book file (`book-file` capability, file mode). Per the
-    /// design, plugin errors are logged and treated as "no file" — the
-    /// caller falls back to chapter mode.
+    /// Execute the plugin's file provider without host-owned fallback policy.
     pub async fn get_book_file(
         &self,
         id: &str,
         book_id: &str,
     ) -> Result<Option<SourceBookFile>, ApiError> {
         let book_id = book_id.to_string();
-        let result = self
-            .call(id, true, {
-                let book_id = book_id.clone();
-                move |wasm, values| wasm.get_book_file(values, &book_id)
-            })
-            .await;
-        match result {
-            Ok(file) => Ok(file),
-            Err(e) => {
-                tracing::warn!(
-                    source = %id,
-                    book = %book_id,
-                    error = %e,
-                    "get-book-file failed; falling back to chapter mode"
-                );
-                Ok(None)
-            }
-        }
+        self.call(id, false, move |wasm, values| {
+            wasm.get_book_file(values, &book_id)
+        })
+        .await
     }
 
     /// Ask every enabled `identify`-capable instance in creation order;

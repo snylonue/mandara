@@ -22,7 +22,7 @@ Two acquisition patterns are supported:
 
 - **Chapter mode** — the source exposes per-chapter text (typical for
   reading sites): `search-books` / `get-book` return metadata,
-  `chapter-titles` / `get-chapter` provide chapters. This already exists;
+  `get-content` declares chapters and loading; `get-chapter` provides lazy bodies. This already exists;
   what was missing is the network access behind it.
 - **Book-file mode** — the source offers whole files (epub/txt downloads,
   typical for archive sites): a new `get-book-file` export returns the
@@ -171,12 +171,13 @@ capabilities:   ["search", "lookup", "content"]   // chapter mode
                                                   // exclusive with content)
 
 chapter mode:
-    chapter-titles(id): fetch the chapter list -> titles
+    get-content(id): fetch content identity, mode and chapter declarations
     get-chapter(id, i): fetch one chapter page -> extract text
                         (or return the raw HTML and let the host sanitize —
                          see open question Q4)
 
 file mode:
+    get-content(id): declare file loading, with an empty chapter list
     get-book-file(id): fetch {base-url}/files/{id}/download
                        -> book-file { filename, mime, bytes }
 ```
@@ -185,7 +186,7 @@ Materialization rules (host side, extending §6 of the v2 design):
 
 - **Chapter mode**: unchanged — titles placeholders, bodies lazy on first
   read, refresh never touches materialized bodies.
-- **File mode**: declarers of `book-file` are materialized by fetching the
+- **File mode**: content declaring `file` through `get-content` is materialized by fetching the
   file *once* (on first access / on the unified acquisition endpoint
   `POST /api/books` with `plugin_source` + `plugin_book_id`) and
   running the **existing upload parser** (`mandara-formats::parse`):
@@ -193,11 +194,12 @@ Materialization rules (host side, extending §6 of the v2 design):
   for free; the file row is stored like a local upload
   (`format` = `epub`|`txt` from the mime). The DB remains the single
   source of truth — afterwards the plugin is not consulted for content.
-- Priority when both `content` and `book-file` are declared: **file mode
-  first**, chapter mode as fallback when `get-book-file` returns `none` /
-  errors.
+- The plugin declares loading separately from book metadata through
+  `get-content(content-id)`, alongside chapter declarations; the host stores it at
+  acquisition and never infers loading from capabilities. Plugins own any
+  upstream fallback. File `none`/failure is an error, not a mode switch.
 - `identify-upload` is unchanged; an instance with `book-file` may
-  recognize uploads and supply `book-entry.content-source` as usual.
+  recognize uploads and supply book metadata, never content selection.
 
 ### 4.3 Retry guidance for plugin authors
 

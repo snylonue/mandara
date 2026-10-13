@@ -183,7 +183,7 @@ impl Guest for HelloPlugin {
         Some(vec![
             DeclaredBook {
                 book: book1,
-                chapters: vec![
+                content: Some(DeclaredContent { id: "hello-content-1".into(), mode: ContentMode::Chapters, chapters: vec![
                     DeclaredChapter {
                         title: "第一章 你好，书架".into(),
                         content: Some(format!(
@@ -193,14 +193,14 @@ impl Guest for HelloPlugin {
                     },
                     DeclaredChapter {
                         title: "第二章 世界很大".into(),
-                        content: Some("你可以用同样的方式写出自己的书籍来源插件：实现 capabilities、declare（或 search-books/get-book）、chapter-titles 和 get-chapter 即可。\n\n参考 docs/plugins.md。".into()),
+                        content: Some("你可以用同样的方式写出自己的书籍来源插件：实现 capabilities、declare（或 search-books/get-book）、get-content 和 get-chapter 即可。\n\n参考 docs/plugins.md。".into()),
                         format: "text".into(),
                     },
-                ],
+                ], }),
             },
             DeclaredBook {
                 book: book2,
-                chapters: vec![DeclaredChapter {
+                content: Some(DeclaredContent { id: "hello-content-2".into(), mode: ContentMode::Chapters, chapters: vec![DeclaredChapter {
                     title: "幕后".into(),
                     content: Some("这个插件的目录是声明式的数据，行为由配置驱动：\n\n- site-name 改变书名与正文；\n- mode 切换正文变体；\n- verbose 让插件记录宿主日志；\n- tags 附加到描述中。\n\n每次调用宿主都注入配置，插件内部没有任何跨调用状态。".into()),
                     format: "text".into(),
@@ -212,7 +212,7 @@ impl Guest for HelloPlugin {
                     title: "空章节".into(),
                     content: Some(String::new()),
                     format: "text".into(),
-                }],
+                }], }),
             },
         ])
     }
@@ -231,12 +231,26 @@ impl Guest for HelloPlugin {
         None
     }
 
-    fn chapter_titles(book_id: String) -> Vec<String> {
-        match book_id.as_str() {
-            "hello-1" => vec!["第一章 你好，书架".into(), "第二章 世界很大".into()],
-            "hello-2" => vec!["幕后".into(), "延迟加载".into(), "空章节".into()],
-            _ => Vec::new(),
-        }
+    fn get_content(content_id: String) -> Option<DeclaredContent> {
+        let titles = match content_id.as_str() {
+            "hello-content-1" => vec!["第一章 你好，书架", "第二章 世界很大"],
+            "hello-content-2" => vec!["幕后", "延迟加载", "空章节"],
+            _ => return None,
+        };
+        let chapters = titles
+            .into_iter()
+            .enumerate()
+            .map(|(index, title)| DeclaredChapter {
+                title: title.into(),
+                format: "text".into(),
+                content: (content_id == "hello-content-2" && index == 2).then(String::new),
+            })
+            .collect();
+        Some(DeclaredContent {
+            id: content_id,
+            mode: ContentMode::Chapters,
+            chapters,
+        })
     }
 
     fn get_chapter(book_id: String, index: u32) -> Option<Chapter> {
@@ -257,37 +271,37 @@ impl Guest for HelloPlugin {
         let mode = config_enum_index("mode");
         let alt = mode == 1;
         match (book_id.as_str(), index, alt) {
-            ("hello-1", 0, false) => Some(Chapter {
+            ("hello-content-1", 0, false) => Some(Chapter {
                 title: "第一章 你好，书架".into(),
                 content: "你成功加载了一个 wasm 插件！\n\n这本书由 Rust 编写、以 WebAssembly 组件的形式运行在服务器上。\n\n插件在沙箱中运行，只能调用宿主提供的 log 接口。".into(),
                 format: "text".into(),
             }),
-            ("hello-1", 0, true) => Some(Chapter {
+            ("hello-content-1", 0, true) => Some(Chapter {
                 title: "第一章 你好，书架（变体）".into(),
                 content: "配置里选择了 alt 版本：这一章的正文与 default 版本不同。\n\n你成功加载了一个 wasm 插件，并且配置注入生效了！".into(),
                 format: "text".into(),
             }),
-            ("hello-1", 1, false) => Some(Chapter {
+            ("hello-content-1", 1, false) => Some(Chapter {
                 title: "第二章 世界很大".into(),
                 content: "你可以用同样的方式写出自己的书籍来源插件：实现 capabilities、declare（或 search-books/get-book）、chapter-titles 和 get-chapter 即可。\n\n参考 docs/plugins.md。".into(),
                 format: "text".into(),
             }),
-            ("hello-1", 1, true) => Some(Chapter {
+            ("hello-content-1", 1, true) => Some(Chapter {
                 title: "第二章 世界很大（变体）".into(),
                 content: "（alt 变体）不同配置实例可以指向同一个 wasm 文件：实例 id 是源 id，配置归属实例。".into(),
                 format: "text".into(),
             }),
-            ("hello-2", 0, _) => Some(Chapter {
+            ("hello-content-2", 0, _) => Some(Chapter {
                 title: "幕后".into(),
                 content: "这个插件的目录是声明式的数据，行为由配置驱动。\n\n每次调用宿主都注入配置，插件内部没有任何跨调用状态。".into(),
                 format: "text".into(),
             }),
-            ("hello-2", 1, _) => Some(Chapter {
+            ("hello-content-2", 1, _) => Some(Chapter {
                 title: "延迟加载".into(),
                 content: "声明目录只提供了标题，这段正文在读取时下载。".into(),
                 format: "text".into(),
             }),
-            ("hello-2", 2, _) => Some(Chapter {
+            ("hello-content-2", 2, _) => Some(Chapter {
                 title: "空章节".into(),
                 content: String::new(),
                 format: "text".into(),

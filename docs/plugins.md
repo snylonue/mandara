@@ -37,14 +37,14 @@ the full design. This guide is for plugin authors.
   materialized until a user acquires a book through the unified
   acquisition flow (`POST /api/books` with `plugin_source` +
   `plugin_book_id` — 获取书籍 → 添加元数据).
-- Acquisition modes on materialize (v3): **file mode first** when the
-  instance declares `book-file` — the host calls `get-book-file` and runs
-  the bytes through the normal upload parser (chapters, hierarchical TOC,
-  sanitized HTML; stored like a local upload, format `epub`/`txt`). If
-  `get-book-file` returns `none` or errors, the host falls back to
-  **chapter mode** (`get-book` + title placeholders; bodies downloaded
-  automatically in the background after acquisition). Declared virtual
-  rows are also queued for background materialization.
+- Metadata and content have independent IDs and interfaces. `get-book`
+  returns only metadata; `get-content(content-id)` returns one declaration
+  containing identity, loading form and chapter titles with optional bodies. Its `none` means that content ID is unavailable, not a metadata
+  classification. Content attachment never requires `get-book`. The host stores
+  that form on the content item at acquisition; reads never infer it from
+  capabilities. Plugins own any upstream fallback within the declared form.
+  Uploaded files provide `file` content through the same parser, cache and
+  completion pipeline. Chapter-mode content is queued for background loading.
 - Content acquisition returns without waiting for all chapter
   bodies. Background downloads fill missing bodies in chapter order, with
   at most two background fetches active globally. Cached bodies are skipped;
@@ -52,8 +52,6 @@ the full design. This guide is for plugin authors.
 - Refresh queues newly discovered chapters; rematerialize clears cached
   bodies and queues a download of the same content item. Existing downloads
   are joined rather than restarted; deletion does not wait for remote requests.
-  Legacy split caches remain readable but cannot fetch uncached chapters;
-  add an explicit plugin book as a separate content item instead.
 - Readers and background downloads use the same start-or-join operation for
   each cache key. Its short critical section only selects one writer and
   registers completion waiters; it does not hold cache data or cache states.
@@ -78,12 +76,13 @@ the full design. This guide is for plugin authors.
 ## Interface (WIT)
 
 Interface file: `crates/mandara-plugin/wit/mandara.wit`, world
-`mandara:plugin/mandara-plugin@0.10.0`. Every export is **required**
+`mandara:plugin/mandara-plugin@0.13.0`. Every export is **required**
 (the WIT parser has no optional exports) — unsupported features return
 `none`/empty and are declared via `capabilities()`:
 
 ```wit
 interface types {
+    enum content-mode { chapters, file }
     record series-entry {
         id: string, title: string, authors: list<string>,
         description: option<string>, cover-url: option<string>,
@@ -102,7 +101,8 @@ interface types {
     }
     record chapter { title: string, content: string, format: string }
     record declared-chapter { title: string, content: option<string>, format: string }
-    record declared-book { book: book-entry, chapters: list<declared-chapter> }
+    record declared-content { id: string, mode: content-mode, chapters: list<declared-chapter> }
+    record declared-book { book: book-entry, content: option<declared-content> }
     variant catalog-entry { single(book-entry), series(series-entry) }
     record search-result { total: u64, items: list<catalog-entry> }
     record series-result { series: series-entry, books: list<book-entry> }
@@ -133,6 +133,16 @@ interface http {
 }
 ```
 
+**Independent declarations (v0.13.0).** `book-entry` is pure metadata.
+`get-content` returns `declared-content` with identity, loading form and
+chapter declarations in a single call; `none`
+only means content is unavailable. `declared-content` carries its own ID,
+loading form and optional chapter bodies. A catalog envelope explicitly
+associates metadata and content without requiring their IDs to match. The
+hello plugin demonstrates `hello-1` metadata with `hello-content-1` content.
+The host persists the form at acquisition and never switches to chapters on
+file failure. Rebuild all components with the current WIT.
+
 **Declared bodies (v0.10.0).** `declared-chapter.content` is explicitly optional:
 `none` requests lazy loading, while `some("")` supplies a valid empty chapter.
 The host normalizes every supplied body and preserves its cache presence even
@@ -151,16 +161,16 @@ World exports:
 | `declare()` | always | Small static catalog (`None` for large sources) |
 | `search-books(query, offset, limit)` | `search` | Paginated catalog browsing |
 | `get-book(book-id)` | `lookup` | Single book (materialize on demand, refresh) |
+| `get-content(content-id)` | content acquisition | Identity, loading form and chapter declarations together |
 | `get-series(series-id)` | `lookup` | Series metadata plus independently addressable member books |
-| `chapter-titles(book-id)` | `content` | Titles in reading order |
-| `get-chapter(book-id, index)` | `content` | One chapter body |
+| `get-chapter(content-id, index)` | `content` | One chapter body |
 | `identify-upload(filename, file-hash)` | `identify` | Upload recognition |
-| `get-book-file(book-id)` | `book-file` | Whole book file (epub/txt download) |
+| `get-book-file(content-id)` | `book-file` | Whole book file (epub/txt download) |
 
 **One volume = one book (v0.9.0).** A plugin adapts its source into
 explicit series and individual books. `get-series` returns series metadata
-and member `BookEntry` values; every member ID must work with `get-book`,
-`chapter-titles`, `get-chapter` and/or `get-book-file` as applicable.
+and member `BookEntry` values; member IDs are used by `get-book`. Content
+IDs are selected independently and used by the content exports.
 Chapter indices always start at zero within that book. `BookEntry.series`
 carries the parent's metadata; `volume-no` is display order, never identity.
 The host stores one book/file per selection and groups parent series by
@@ -180,12 +190,8 @@ Search hits distinguish books from series. The source picker resolves a
 series through `GET /api/plugins/{instance}/lookup?q={id}` and lets the
 user select one member. Manual website IDs go through the same lookup.
 
-**Upgrade:** rebuild all components after the WIT change. Existing cached
-chapters and reading sessions are retained. Legacy flat-split files are
-not changed in place: add an explicitly selected volume as a separate
-content item for uncached reads. Metadata provenance stays independent.
-Legacy numeric-series metadata may need to
-be acquired anew to refresh; no positional ID migration is attempted.
+**Upgrade:** rebuild all components after the WIT change. Metadata
+provenance and content identity remain independent.
 
 **Extended metadata (`book-entry.extra`, v0.7.0).** A source may
 attach a JSON object with catalog-style fields to every `book-entry`
@@ -404,9 +410,9 @@ sessions, shares and archived original bytes. Colliding legacy items are kept.
   `GET /v0/subjects/{id}/subjects` (not adaptations). Relation failures
   never synthesize volumes from a count. Search stays one paginated request.
 - `plugins/reader-plugin/` — reading-site source over HTTP: `search` +
-  `lookup` + `content` + `book-file`; chapter mode for `r-N` books, and
-  `get-book-file` returning the epub the source serves (file mode wins,
-  chapter mode is the fallback).
+  `lookup` + `content` + `book-file`; the upstream `content` endpoint
+  supplies loading and chapter declarations in one response. Metadata responses carry no
+  content availability or loading fields.
 - `plugins/wenku8-plugin/` — a **real-world** source: 轻小说文库
   (`https://www.wenku8.net/`, GBK-encoded pages). `lookup` + `content`
   only: wenku8's search and listings are login-walled, so books are

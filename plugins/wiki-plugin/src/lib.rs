@@ -288,8 +288,8 @@ impl Guest for WikiPlugin {
         }
     }
 
-    fn chapter_titles(_book_id: String) -> Vec<String> {
-        Vec::new() // no `content` capability; host never calls this
+    fn get_content(_content_id: String) -> Option<DeclaredContent> {
+        None
     }
 
     fn get_chapter(_book_id: String, _index: u32) -> Option<Chapter> {

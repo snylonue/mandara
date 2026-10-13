@@ -29,7 +29,7 @@ use crate::http_fetch::{self, FetchPolicy};
 //   - `MandaraPlugin` world handle with `add_to_linker` / `instantiate`
 //     and `call_name`, `call_config_schema`, `call_capabilities`,
 //     `call_declare`, `call_search_books`, `call_get_book`,
-//     `call_chapter_titles`, `call_get_chapter`, `call_identify_upload`,
+//     `call_get_content`, `call_get_chapter`, `call_identify_upload`,
 //     `call_get_book_file`.
 wasmtime::component::bindgen!({
     path: "wit",
@@ -292,7 +292,11 @@ impl WasmPlugin {
     pub fn declare(&self, config: &[ConfigValue]) -> Result<Option<Vec<DeclaredBook>>> {
         let declared = self.call(config, |store, b| b.call_declare(store))?;
         if let Some(books) = &declared {
-            let chapters = books.iter().map(|b| b.chapters.len()).sum::<usize>();
+            let chapters = books
+                .iter()
+                .filter_map(|b| b.content.as_ref())
+                .map(|c| c.chapters.len())
+                .sum::<usize>();
             if books.len() > MAX_DECLARE_BOOKS || chapters > MAX_DECLARE_CHAPTERS {
                 return Err(Error::CatalogLimit {
                     file: self.file.clone(),
@@ -336,11 +340,6 @@ impl WasmPlugin {
         self.call(config, |store, b| b.call_get_book(store, book_id))
     }
 
-    /// Chapter titles of a book (`content` capability).
-    pub fn chapter_titles(&self, config: &[ConfigValue], book_id: &str) -> Result<Vec<String>> {
-        self.call(config, |store, b| b.call_chapter_titles(store, book_id))
-    }
-
     /// Fetch one chapter (`content` capability). Content is capped at
     /// [`MAX_CHAPTER_CONTENT_BYTES`] per call.
     pub fn get_chapter(
@@ -367,6 +366,27 @@ impl WasmPlugin {
             }
             None => Ok(None),
         }
+    }
+
+    /// Content identity, loading and chapter declarations from one plugin call.
+    pub fn get_content(
+        &self,
+        config: &[ConfigValue],
+        content_id: &str,
+    ) -> Result<Option<mandara_core::source::SourceDeclaredContent>> {
+        let content = self.call(config, |store, bindings| {
+            bindings.call_get_content(store, content_id)
+        })?;
+        if let Some(content) = &content
+            && content.chapters.len() > MAX_DECLARE_CHAPTERS
+        {
+            return Err(Error::ContentLimit {
+                file: self.file.clone(),
+                resource: "content chapters",
+                limit: MAX_DECLARE_CHAPTERS,
+            });
+        }
+        Ok(content.map(Into::into))
     }
 
     /// Upload identification (`identify` capability).
@@ -412,7 +432,7 @@ impl WasmPlugin {
         Ok(result)
     }
 
-    /// Fetch a whole book file (`book-file` capability). `None` = chapter mode.
+    /// Fetch a whole content file. `None` means content is unavailable.
     /// Bytes are capped at [`MAX_BOOK_FILE_BYTES`].
     pub fn get_book_file(
         &self,
@@ -436,6 +456,33 @@ impl WasmPlugin {
                 }))
             }
             None => Ok(None),
+        }
+    }
+}
+
+impl From<ContentMode> for mandara_core::model::ContentMode {
+    fn from(mode: ContentMode) -> Self {
+        match mode {
+            ContentMode::Chapters => Self::Chapters,
+            ContentMode::File => Self::File,
+        }
+    }
+}
+
+impl From<DeclaredContent> for mandara_core::source::SourceDeclaredContent {
+    fn from(content: DeclaredContent) -> Self {
+        Self {
+            id: content.id,
+            mode: content.mode.into(),
+            chapters: content
+                .chapters
+                .into_iter()
+                .map(|chapter| mandara_core::source::SourceDeclaredChapter {
+                    title: chapter.title,
+                    format: chapter.format,
+                    content: chapter.content,
+                })
+                .collect(),
         }
     }
 }

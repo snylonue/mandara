@@ -629,9 +629,9 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Clear a plugin file's stored chapter bodies (owner/admin only) so
-         *     they are downloaded automatically from its content source in the
-         *     background. The retry path for degraded materializations — e.g. images
+         * Clear stored chapter bodies (owner/admin only) and reload them in
+         *     the background using the acquisition-time content form. Uploads use
+         *     the retained original; plugin content uses the declared provider. The retry path for degraded materializations — e.g. images
          *     that fell back to remote URLs because the download failed; the
          *     re-pull stores them via the plugin's store-image import.
          */
@@ -905,16 +905,10 @@ export interface components {
             /** Format: date-time */
             created_at: string;
             /**
-             * @description Legacy flat-split marker, retained for existing cached files.
-             *     New plugin files are complete individual books with value 0.
+             * @description Immutable content form declared at acquisition; uploads provide files.
+             * @enum {string}
              */
-            volume_no: number;
-            /**
-             * @description Legacy flat offset, retained for existing caches. New plugin
-             *     books use local chapter indices and value 0. Legacy uncached
-             *     reads require adding an explicit plugin book as a new content item.
-             */
-            volume_offset: number;
+            content_mode: "chapters" | "file";
             /**
              * @description Retained original file bytes (`data/files/`, served by
              *     `GET /api/files/{id}/download`). null = plugin chapter-mode
@@ -1846,15 +1840,15 @@ export interface operations {
                     book_id?: string;
                     /**
                      * @description Together with `plugin_book_id`: the *content* comes
-                     *     from this plugin source's book (materialized into the
-                     *     library; whole-book files via `get-book-file`, else
-                     *     automatic background chapter downloads). The response
+                     *     from this plugin source's content ID. Its independent
+                     *     `get-content` declares loading and chapter information together;
+                     *     content acquisition does not call `get-book`. The response
                      *     does not wait for all chapter bodies. When no `file`,
                      *     `meta_plugin_source`, or `book_id` is given, the
                      *     plugin's own entry also provides the metadata.
                      */
                     plugin_source?: string;
-                    /** @description Id of the book inside the plugin's catalog */
+                    /** @description Opaque content ID accepted by the content exports, independent of metadata IDs */
                     plugin_book_id?: string;
                     /**
                      * @description Together with `meta_plugin_book_id`: the metadata

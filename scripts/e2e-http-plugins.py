@@ -90,12 +90,25 @@ def main():
             detail = result["books"][0]
             book_id, file = detail["book"]["id"], detail["files"][0]
             assert detail["book"]["volume_no"] == 2
-            assert file["external_id"] == "r-beta" and file["volume_offset"] == 0 and file["volume_no"] == 0
+            assert file["external_id"] == "r-beta" and file["content_mode"] == "chapters"
+            assert "volume_offset" not in file and "volume_no" not in file
+            assert file["format"] == "plugin"  # Guest declares chapter content despite both capabilities.
             assert file["chapter_count"] == 2
             chapter = request("GET", f'/files/{file["id"]}/chapters/0')
             assert chapter["title"] == "第三章 觉醒"
             assert "mock-source.py" in chapter["content"]
             print("ok: selected metadata/content books stay independent; chapter zero is volume-local")
+
+            request("POST", "/plugins/instances", {"id": "hello", "wasm_file": "hello.wasm", "config": {"site-name": "独立内容源"}})
+            attached = acquire({"plugin_source": "hello", "plugin_book_id": "hello-content-2", "book_id": book_id, "visibility": "public"})["books"][0]
+            assert attached["book"]["id"] == book_id
+            assert attached["book"]["title"] == detail["book"]["title"]
+            content_only = next(f for f in attached["files"] if f["source"] == "hello")
+            assert content_only["external_id"] == "hello-content-2"
+            assert content_only["content_mode"] == "chapters"
+            assert request("GET", f'/files/{content_only["id"]}/chapters/2')["content"] == ""
+            request("DELETE", f'/files/{content_only["id"]}')
+            print("ok: content IDs attach without provider metadata lookup")
 
             first = acquire({"plugin_source": "wiki", "plugin_book_id": "w-alpha", "metadata_only": "true"})
             assert first["series"]["id"] == result["series"]["id"]
@@ -118,6 +131,11 @@ def main():
             print("ok: multiple content items are independently selectable, refreshable and deletable")
 
             uploaded = acquire({"visibility": "public"}, upload=True)["books"][0]
+            local = uploaded["files"][0]
+            assert local["content_mode"] == "file"
+            before = request("GET", f'/files/{local["id"]}/chapters/0')
+            request("POST", f'/files/{local["id"]}/rematerialize')
+            assert request("GET", f'/files/{local["id"]}/chapters/0') == before
             attached = acquire({"book_id": uploaded["book"]["id"], "visibility": "public"}, upload=True)
             assert attached["books"][0]["book"]["id"] == uploaded["book"]["id"]
             plugin = acquire({"plugin_source": "reader", "plugin_book_id": "r-2", "book_id": uploaded["book"]["id"]})

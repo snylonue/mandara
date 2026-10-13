@@ -159,7 +159,7 @@ pub async fn patch_file(
 
 // POST /api/files/{id}/rematerialize -------------------------------------------
 //
-// Clear a plugin file's stored chapter bodies and queue background downloads
+// Clear stored chapter bodies and queue background downloads
 // from its content source. The retry path for degraded
 // materializations (e.g. images that fell back to remote URLs because the
 // download failed — the re-pull stores them via `store-image`).
@@ -174,7 +174,7 @@ pub async fn rematerialize_file(
     if !can_manage_file(&user, &file) {
         return Err(ApiError::Forbidden);
     }
-    let updated = st.library.rematerialize_file(&id).await?;
+    let updated = st.library.rematerialize_file(&file).await?;
     Ok(Json(updated))
 }
 

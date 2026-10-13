@@ -32,6 +32,14 @@ pub struct SourceBook {
     pub volume_no: u32,
 }
 
+/// Independently identified content offered in a declared catalog.
+#[derive(Debug, Clone)]
+pub struct SourceDeclaredContent {
+    pub id: String,
+    pub mode: crate::model::ContentMode,
+    pub chapters: Vec<SourceDeclaredChapter>,
+}
+
 /// A chapter advertised in a declared catalog.
 #[derive(Debug, Clone)]
 pub struct SourceDeclaredChapter {

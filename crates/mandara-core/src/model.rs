@@ -14,6 +14,8 @@ pub enum ModelError {
     Visibility,
     #[error("unknown file format")]
     FileFormat,
+    #[error("unknown content mode")]
+    ContentMode,
     #[error("unknown share kind")]
     ShareKind,
     #[error("invalid image id")]
@@ -138,6 +140,45 @@ pub struct BookMeta {
     pub volume_no: u32,
 }
 
+/// Loading operations selected when a content item is added.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContentMode {
+    Chapters,
+    File,
+}
+
+impl ContentMode {
+    pub fn has_file(self) -> bool {
+        matches!(self, Self::File)
+    }
+
+    pub fn has_chapters(self) -> bool {
+        matches!(self, Self::Chapters)
+    }
+}
+
+impl AsRef<str> for ContentMode {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::Chapters => "chapters",
+            Self::File => "file",
+        }
+    }
+}
+
+impl std::str::FromStr for ContentMode {
+    type Err = ModelError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "chapters" => Ok(Self::Chapters),
+            "file" => Ok(Self::File),
+            _ => Err(ModelError::ContentMode),
+        }
+    }
+}
+
 /// One actual book file (a local upload or a virtual plugin book).
 /// Chapters, sessions and shares attach to files.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -157,12 +198,8 @@ pub struct FileMeta {
     pub owner_id: Option<String>,
     pub chapter_count: u32,
     pub created_at: DateTime<Utc>,
-    /// Volume slice of the source book this file covers (0 = the whole
-    /// book, today's semantics).
-    pub volume_no: u32,
-    /// Flat chapter index of this volume's first chapter inside the
-    /// source (persisted because the plugin is stateless).
-    pub volume_offset: u32,
+    /// Immutable loading operations selected at acquisition.
+    pub content_mode: ContentMode,
     /// Retained original file bytes (`data/files/{id}.{ext}`), when the
     /// content came with one (uploads, plugin file-mode pulls). Enables
     /// `GET /api/files/{id}/download` and `--reparse-originals`.

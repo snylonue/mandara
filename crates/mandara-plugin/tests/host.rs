@@ -166,6 +166,29 @@ fn config_is_injected_into_calls() {
     assert_eq!(declared.len(), 2);
     let first = &declared[0];
     assert_eq!(first.book.id, "hello-1");
+    let content = first.content.as_ref().unwrap();
+    assert_eq!(content.id, "hello-content-1");
+    assert_ne!(content.id, first.book.id);
+    assert!(matches!(
+        content.mode,
+        mandara_plugin::ContentMode::Chapters
+    ));
+    let loaded = plugin.get_content(&values, &content.id).unwrap().unwrap();
+    assert_eq!(loaded.id, content.id);
+    assert_eq!(loaded.mode, mandara_core::model::ContentMode::Chapters);
+    assert_eq!(loaded.chapters.len(), 2);
+    assert!(
+        loaded
+            .chapters
+            .iter()
+            .all(|chapter| chapter.content.is_none())
+    );
+    assert!(
+        plugin
+            .get_content(&values, &first.book.id)
+            .unwrap()
+            .is_none()
+    );
     assert!(first.book.title.contains("测试站点"));
     assert!(
         first
@@ -175,9 +198,9 @@ fn config_is_injected_into_calls() {
             .unwrap()
             .contains("tag1、tag2")
     );
-    assert_eq!(first.chapters.len(), 2);
+    assert_eq!(content.chapters.len(), 2);
     assert!(
-        first.chapters[0]
+        content.chapters[0]
             .content
             .as_deref()
             .unwrap()
@@ -186,7 +209,7 @@ fn config_is_injected_into_calls() {
 
     // Chapters serve the injected site name and mode variant.
     let ch = plugin
-        .get_chapter(&values, "hello-1", 0)
+        .get_chapter(&values, "hello-content-1", 0)
         .unwrap()
         .expect("chapter");
     assert!(ch.content.contains("wasm 插件"));
@@ -195,7 +218,7 @@ fn config_is_injected_into_calls() {
         &validate_config(&fields, &serde_json::json!({ "site-name": "x", "mode": 1 })).unwrap(),
     );
     let ch = plugin
-        .get_chapter(&alt, "hello-1", 0)
+        .get_chapter(&alt, "hello-content-1", 0)
         .unwrap()
         .expect("chapter");
     assert!(ch.title.contains("变体"));
@@ -213,20 +236,22 @@ fn config_is_injected_into_calls() {
 fn declared_bodies_preserve_absence_and_empty_content() {
     let plugin = load();
     let declared = plugin.declare(&[]).unwrap().unwrap();
-    let chapters = &declared[1].chapters;
+    let content = declared[1].content.as_ref().unwrap();
+    let chapters = &content.chapters;
     assert_eq!(chapters.len(), 3);
     assert!(chapters[0].content.is_some());
     assert_eq!(chapters[1].content, None);
     assert_eq!(chapters[2].content.as_deref(), Some(""));
-    let empty = plugin
-        .get_chapter(&[], &declared[1].book.id, 2)
-        .unwrap()
-        .unwrap();
+    let declared_content = plugin.get_content(&[], &content.id).unwrap().unwrap();
+    assert_eq!(
+        declared_content.mode,
+        mandara_core::model::ContentMode::Chapters
+    );
+    assert_eq!(declared_content.chapters[1].content, None);
+    assert_eq!(declared_content.chapters[2].content.as_deref(), Some(""));
+    let empty = plugin.get_chapter(&[], &content.id, 2).unwrap().unwrap();
     assert_eq!(empty.content, "");
-    let lazy = plugin
-        .get_chapter(&[], &declared[1].book.id, 1)
-        .unwrap()
-        .unwrap();
+    let lazy = plugin.get_chapter(&[], &content.id, 1).unwrap().unwrap();
     assert!(lazy.content.contains("正文"));
 }
 
@@ -270,7 +295,7 @@ fn runaway_plugin_is_trapped_by_fuel() {
     .unwrap();
     let values = values_from_config(&fields, &config);
     let err = plugin
-        .get_chapter(&values, "hello-1", 0)
+        .get_chapter(&values, "hello-content-1", 0)
         .expect_err("spin must trap");
     match err {
         Error::Runtime(source) => {
