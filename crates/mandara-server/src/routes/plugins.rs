@@ -3,24 +3,23 @@
 
 use axum::Json;
 use axum::extract::{Path, Query, State};
-use axum::http::HeaderMap;
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 
 use mandara_plugin::{MAX_SEARCH_LIMIT, MAX_SEARCH_OFFSET};
 
 use crate::error::ApiError;
-use crate::routes::{St, current_user};
+use crate::extractors::{AdminUser, AuthenticatedUser};
+use crate::routes::St;
 
 // GET /api/plugins ------------------------------------------------------------
 
 pub async fn list_plugins(
+    AuthenticatedUser(_user): AuthenticatedUser,
     State(st): State<St>,
-    headers: HeaderMap,
 ) -> Result<impl IntoResponse, ApiError> {
     // any logged-in user may list instances (for the source browser and
     // upload picker)
-    current_user(&st, &headers).await?;
     let instances = st.library.plugins().infos().await?;
     Ok(Json(instances))
 }
@@ -28,11 +27,9 @@ pub async fn list_plugins(
 // POST /api/plugins/sync (admin) ----------------------------------------------
 
 pub async fn sync_plugins(
+    AdminUser(_admin): AdminUser,
     State(st): State<St>,
-    headers: HeaderMap,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = current_user(&st, &headers).await?;
-    crate::auth::AuthService::require_admin(&user)?;
     let synced = st.library.sync_plugins().await?;
     Ok(Json(serde_json::json!({ "synced": synced })))
 }
@@ -42,12 +39,10 @@ pub async fn sync_plugins(
 // Re-catalogue ONE instance (the admin page's per-instance 重同步).
 
 pub async fn sync_instance(
+    AdminUser(_admin): AdminUser,
     State(st): State<St>,
-    headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = current_user(&st, &headers).await?;
-    crate::auth::AuthService::require_admin(&user)?;
     let synced = st.library.sync_instance(&id).await?;
     Ok(Json(serde_json::json!({ "synced": synced })))
 }
@@ -58,11 +53,9 @@ pub async fn sync_instance(
 // the instance registration form.
 
 pub async fn wasm_files(
+    AdminUser(_admin): AdminUser,
     State(st): State<St>,
-    headers: HeaderMap,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = current_user(&st, &headers).await?;
-    crate::auth::AuthService::require_admin(&user)?;
     Ok(Json(st.library.plugins().wasm_files()))
 }
 
@@ -83,12 +76,10 @@ fn default_config() -> serde_json::Value {
 }
 
 pub async fn register_instance(
+    AdminUser(_admin): AdminUser,
     State(st): State<St>,
-    headers: HeaderMap,
     Json(req): Json<RegisterInstance>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = current_user(&st, &headers).await?;
-    crate::auth::AuthService::require_admin(&user)?;
     let id = req
         .id
         .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
@@ -115,12 +106,10 @@ pub async fn register_instance(
 // DELETE /api/plugins/instances/{id} (admin) -------------------------------------
 
 pub async fn delete_instance(
+    AdminUser(_admin): AdminUser,
     State(st): State<St>,
-    headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = current_user(&st, &headers).await?;
-    crate::auth::AuthService::require_admin(&user)?;
     st.library.plugins().unregister(&id).await?;
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
@@ -133,13 +122,11 @@ pub struct EnableInstance {
 }
 
 pub async fn set_instance_enabled(
+    AdminUser(_admin): AdminUser,
     State(st): State<St>,
-    headers: HeaderMap,
     Path(id): Path<String>,
     Json(req): Json<EnableInstance>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = current_user(&st, &headers).await?;
-    crate::auth::AuthService::require_admin(&user)?;
     let info = st.library.plugins().set_enabled(&id, req.enabled).await?;
     // Enabling a declare-capable instance re-syncs its catalog.
     if req.enabled && info.capabilities.iter().any(|c| c == "declare") {
@@ -151,12 +138,10 @@ pub async fn set_instance_enabled(
 // GET /api/plugins/{id}/config-schema (admin) --------------------------------------
 
 pub async fn plugin_config_schema(
+    AdminUser(_admin): AdminUser,
     State(st): State<St>,
-    headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = current_user(&st, &headers).await?;
-    crate::auth::AuthService::require_admin(&user)?;
     let (fields, config) = st.library.plugins().config_schema(&id).await?;
     Ok(Json(
         serde_json::json!({ "fields": fields, "config": config }),
@@ -172,13 +157,11 @@ pub struct PutConfig {
 }
 
 pub async fn put_plugin_config(
+    AdminUser(_admin): AdminUser,
     State(st): State<St>,
-    headers: HeaderMap,
     Path(id): Path<String>,
     Json(req): Json<PutConfig>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = current_user(&st, &headers).await?;
-    crate::auth::AuthService::require_admin(&user)?;
     let info = st.library.plugins().set_config(&id, req.config).await?;
     // Config changes trigger a re-sync for declare-capable instances.
     if info.enabled && info.capabilities.iter().any(|c| c == "declare") {
@@ -229,13 +212,12 @@ pub struct SearchResponse {
 }
 
 pub async fn search_plugins(
+    AuthenticatedUser(_user): AuthenticatedUser,
     State(st): State<St>,
-    headers: HeaderMap,
     Path(id): Path<String>,
     Query(params): Query<SearchParams>,
 ) -> Result<impl IntoResponse, ApiError> {
     // any logged-in user may browse a source's catalog
-    current_user(&st, &headers).await?;
     // Host caps (design R4): reject instead of clamping.
     if params.limit == 0 || params.limit > MAX_SEARCH_LIMIT {
         return Err(ApiError::bad_request(format!(
@@ -275,12 +257,11 @@ pub struct MaterializeBook {
 }
 
 pub async fn materialize_book(
+    AuthenticatedUser(user): AuthenticatedUser,
     State(st): State<St>,
-    headers: HeaderMap,
     Path(id): Path<String>,
     Json(req): Json<MaterializeBook>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = current_user(&st, &headers).await?;
     // Legacy endpoint (superseded by the unified acquisition endpoint);
     // each plugin book is one independently addressable volume.
     let (book, _file) = st
@@ -327,12 +308,11 @@ pub struct SeriesLookupResponse {
 }
 
 pub async fn lookup_series(
+    AuthenticatedUser(_user): AuthenticatedUser,
     State(st): State<St>,
-    headers: HeaderMap,
     Path(id): Path<String>,
     Query(params): Query<LookupParams>,
 ) -> Result<impl IntoResponse, ApiError> {
-    current_user(&st, &headers).await?;
     if params.q.trim().is_empty() {
         return Err(ApiError::bad_request("series ID must not be empty"));
     }
@@ -360,12 +340,11 @@ pub struct ImportSeries {
 }
 
 pub async fn import_series(
+    AuthenticatedUser(user): AuthenticatedUser,
     State(st): State<St>,
-    headers: HeaderMap,
     Path(id): Path<String>,
     Json(req): Json<ImportSeries>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = current_user(&st, &headers).await?;
     let series = st
         .library
         .import_plugin_series(&user, &id, &req.series_id, &req.book_ids)
@@ -382,12 +361,11 @@ pub struct LookupParams {
 }
 
 pub async fn lookup_plugin(
+    AuthenticatedUser(_user): AuthenticatedUser,
     State(st): State<St>,
-    headers: HeaderMap,
     Path(id): Path<String>,
     Query(params): Query<LookupParams>,
 ) -> Result<impl IntoResponse, ApiError> {
-    current_user(&st, &headers).await?;
     if params.q.is_empty() {
         return Err(ApiError::bad_request("lookup ID must not be empty"));
     }

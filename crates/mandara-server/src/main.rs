@@ -4,6 +4,7 @@ mod auth;
 mod config;
 mod db;
 mod error;
+mod extractors;
 mod routes;
 mod rows;
 /// Diesel schema (generated from the migrations; see `just schema`).

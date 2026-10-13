@@ -4,7 +4,7 @@
 
 use axum::Json;
 use axum::extract::{Multipart, Path, Query, State};
-use axum::http::{HeaderMap, StatusCode, header};
+use axum::http::{StatusCode, header};
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 
@@ -12,8 +12,9 @@ use mandara_core::BookExt;
 use mandara_core::model::{BookMeta, FileMeta, SeriesMeta, Visibility};
 
 use crate::error::ApiError;
+use crate::extractors::AuthenticatedUser;
 use crate::routes::series::SeriesBrief;
-use crate::routes::{ListParams, St, current_user};
+use crate::routes::{ListParams, St};
 use crate::service::library::{AcquireContent, AcquireMetadata, MetadataOverrides};
 
 #[derive(Serialize)]
@@ -304,11 +305,10 @@ fn overrides(fields: &UploadFields) -> Result<MetadataOverrides, ApiError> {
 // GET /api/books -----------------------------------------------------------
 
 pub async fn list_books(
+    AuthenticatedUser(user): AuthenticatedUser,
     State(st): State<St>,
-    headers: HeaderMap,
     Query(params): Query<ListParams>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = current_user(&st, &headers).await?;
     let entries = st
         .library
         .list_books(params.q.as_deref(), params.source.as_deref(), &user)
@@ -346,11 +346,10 @@ pub async fn list_books(
 // `cover_url` override the produced metadata (never when attaching).
 
 pub async fn upload_book(
+    AuthenticatedUser(user): AuthenticatedUser,
     State(st): State<St>,
-    headers: HeaderMap,
     multipart: Multipart,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = current_user(&st, &headers).await?;
     let (fields, file, visibility, label) = read_upload(multipart).await?;
     let overrides = overrides(&fields)?;
     let request = AcquisitionRequest::resolve(&fields, &file, &overrides, visibility, label)?;
@@ -389,12 +388,11 @@ pub async fn upload_book(
 // POST /api/books/{id}/files (multipart: attach another edition) -------------
 
 pub async fn attach_file(
+    AuthenticatedUser(user): AuthenticatedUser,
     State(st): State<St>,
-    headers: HeaderMap,
     Path(book_id): Path<String>,
     multipart: Multipart,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = current_user(&st, &headers).await?;
     // The book itself must exist. Visibility of the new file follows the
     // global upload rule: private unless the caller explicitly picks
     // public (the old "most visible existing file" default could silently
@@ -433,11 +431,10 @@ pub async fn attach_file(
 // GET /api/books/{id} -------------------------------------------------------
 
 pub async fn get_book(
+    AuthenticatedUser(user): AuthenticatedUser,
     State(st): State<St>,
-    headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = current_user(&st, &headers).await?;
     let book = st
         .library
         .get_book(&id)
@@ -504,12 +501,11 @@ pub struct PatchBook {
 }
 
 pub async fn patch_book(
+    AuthenticatedUser(user): AuthenticatedUser,
     State(st): State<St>,
-    headers: HeaderMap,
     Path(id): Path<String>,
     Json(req): Json<PatchBook>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = current_user(&st, &headers).await?;
     let book = st
         .library
         .get_book(&id)
@@ -548,11 +544,10 @@ pub async fn patch_book(
 // Re-pull metadata from the plugin source(s) backing this book.
 
 pub async fn refresh_book(
+    AuthenticatedUser(user): AuthenticatedUser,
     State(st): State<St>,
-    headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = current_user(&st, &headers).await?;
     let book = st.library.refresh_book(&user, &id).await?;
     Ok(Json(book))
 }
@@ -563,11 +558,10 @@ pub async fn refresh_book(
 // every file of the book has been deleted explicitly (409 otherwise).
 
 pub async fn delete_book(
+    AuthenticatedUser(user): AuthenticatedUser,
     State(st): State<St>,
-    headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = current_user(&st, &headers).await?;
     let book = st
         .library
         .get_book(&id)

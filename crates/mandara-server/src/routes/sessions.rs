@@ -3,7 +3,7 @@
 
 use axum::Json;
 use axum::extract::{Path, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 
@@ -16,7 +16,8 @@ use diesel::prelude::SelectableHelper as _;
 use diesel_async::RunQueryDsl as _;
 
 use crate::error::ApiError;
-use crate::routes::{St, current_user, load_visible_file};
+use crate::extractors::AuthenticatedUser;
+use crate::routes::{St, load_visible_file};
 use crate::rows::SessionRow;
 #[allow(unused_imports)]
 use crate::schema::sessions;
@@ -33,11 +34,9 @@ pub struct SessionsResponse {
 /// and series pages use it to show per-book/per-volume progress without
 /// one request per file.
 pub async fn list_my_sessions(
+    AuthenticatedUser(user): AuthenticatedUser,
     State(st): State<St>,
-    headers: HeaderMap,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = current_user(&st, &headers).await?;
-
     let mut conn = st.diesel_db.get().await?;
     let rows: Vec<SessionRow> = sessions::table
         .filter(sessions::user_id.eq(&user.id))
@@ -53,11 +52,10 @@ pub async fn list_my_sessions(
 // GET /api/files/{id}/sessions ------------------------------------------------
 
 pub async fn list_file_sessions(
+    AuthenticatedUser(user): AuthenticatedUser,
     State(st): State<St>,
-    headers: HeaderMap,
     Path(file_id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = current_user(&st, &headers).await?;
     // `load_visible_file` enforces the caller can view the file; its
     // return value is otherwise unused here.
     let _file = load_visible_file(&st, &user, &file_id).await?;
@@ -84,12 +82,11 @@ pub struct CreateSession {
 }
 
 pub async fn create_session(
+    AuthenticatedUser(user): AuthenticatedUser,
     State(st): State<St>,
-    headers: HeaderMap,
     Path(file_id): Path<String>,
     Json(req): Json<CreateSession>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = current_user(&st, &headers).await?;
     load_visible_file(&st, &user, &file_id).await?;
 
     let label = req
@@ -137,13 +134,11 @@ pub struct UpdatePosition {
 }
 
 pub async fn update_session(
+    AuthenticatedUser(user): AuthenticatedUser,
     State(st): State<St>,
-    headers: HeaderMap,
     Path(session_id): Path<String>,
     Json(req): Json<UpdatePosition>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = current_user(&st, &headers).await?;
-
     let mut conn = st.diesel_db.get().await?;
     let row: Option<SessionRow> = sessions::table
         .find(&session_id)
@@ -196,11 +191,10 @@ pub async fn update_session(
 // DELETE /api/sessions/{id} ----------------------------------------------------
 
 pub async fn delete_session(
+    AuthenticatedUser(user): AuthenticatedUser,
     State(st): State<St>,
-    headers: HeaderMap,
     Path(session_id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = current_user(&st, &headers).await?;
     let mut conn = st.diesel_db.get().await?;
     let owner: Option<String> = sessions::table
         .find(&session_id)

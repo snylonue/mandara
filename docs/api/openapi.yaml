@@ -14,6 +14,12 @@ info:
     one metadata entry. Chapters, reading sessions and shares attach to
     files. Every file is either `private` (owner + admins only) or `public`
     (all logged-in users).
+
+    Protected endpoints authenticate requests before parsing path, query,
+    or body data. Missing, invalid, or expired credentials and deleted
+    accounts return 401; authenticated users without the required role
+    return 403, even when the request data is malformed. Roles are checked
+    against the current database user, not the role stored in the JWT.
 servers:
   - url: http://127.0.0.1:8080
     description: Local development server (default)

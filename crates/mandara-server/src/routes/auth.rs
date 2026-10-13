@@ -2,7 +2,7 @@
 
 use axum::Json;
 use axum::extract::State;
-use axum::http::header::{HeaderMap, SET_COOKIE};
+use axum::http::header::SET_COOKIE;
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
@@ -16,7 +16,8 @@ use mandara_core::model::{Role, User};
 use diesel::OptionalExtension as _;
 
 use crate::error::ApiError;
-use crate::routes::{St, current_user};
+use crate::extractors::AuthenticatedUser;
+use crate::routes::St;
 use crate::rows::UserRow;
 #[allow(unused_imports)]
 use crate::schema::users;
@@ -147,8 +148,7 @@ pub async fn logout(State(st): State<St>) -> impl IntoResponse {
     )
 }
 
-pub async fn me(State(st): State<St>, headers: HeaderMap) -> Result<impl IntoResponse, ApiError> {
-    let user = current_user(&st, &headers).await?;
+pub async fn me(AuthenticatedUser(user): AuthenticatedUser) -> Result<impl IntoResponse, ApiError> {
     Ok(Json(user))
 }
 
