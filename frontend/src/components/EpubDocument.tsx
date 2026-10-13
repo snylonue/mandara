@@ -105,6 +105,10 @@ export function EpubDocument({ content, title, settings, onFraction, onReady, on
       // A vertical block can be wider than the viewport, so 100% alone does
       // not constrain publisher image dimensions. Bound both physical axes.
       defaults.textContent += " :where(img){max-width:calc(100vw - 3em);max-height:calc(100vh - 3em);width:auto;height:auto} :where(html[data-mandara-image-only] body){display:grid;place-items:center;width:100vw;height:100vh;box-sizing:border-box} :where(html[data-mandara-image-only] img){display:block}";
+      // Gaiji are inline character images, not illustrations. Some EPUBs lose
+      // their stylesheets; scale these glyphs with the surrounding text rather
+      // than their bitmap dimensions. Publication rules still take precedence.
+      defaults.textContent += " :where(img.gaiji){display:inline;width:auto;height:1em;vertical-align:baseline}";
       doc.documentElement.toggleAttribute("data-mandara-image-only", imageOnly);
     }
   }
