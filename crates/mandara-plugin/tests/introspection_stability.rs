@@ -1,3 +1,6 @@
+#[allow(dead_code)]
+mod common;
+
 /// No-op image store: the introspection calls never touch images.
 struct NoImages;
 
@@ -31,17 +34,17 @@ fn introspection_is_stable_under_fuel_metering() {
         let mut fails = 0;
         let mut last = String::new();
         for _ in 0..30 {
-            let r = plugin.name();
+            let r = plugin.name(common::state());
             if r.is_err() {
                 fails += 1;
                 last = format!("{r:?}");
             }
-            let c = plugin.capabilities();
+            let c = plugin.capabilities(common::state());
             if c.is_err() && fails < 1 {
                 fails += 1;
                 last = format!("{c:?}");
             }
-            let s = plugin.config_schema();
+            let s = plugin.config_schema(common::state());
             if s.is_err() && fails < 1 {
                 fails += 1;
                 last = format!("{s:?}");

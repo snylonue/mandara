@@ -31,7 +31,7 @@ use mandara_plugin::{
 
 use crate::error::ApiError;
 
-/// Facts about one wasm file, computed once at load time.
+/// Plugin information read in a registered instance context.
 struct WasmInfo {
     wasm: Arc<WasmPlugin>,
     /// Human-readable plugin name.
@@ -119,66 +119,16 @@ pub struct DeclaredCatalog {
 /// Compiled wasm files + the instance registry.
 pub struct PluginService {
     db: crate::db::DieselDb,
-    wasm_by_file: HashMap<String, Arc<WasmInfo>>,
+    wasm_by_file: HashMap<String, Arc<WasmPlugin>>,
 }
 
 impl PluginService {
-    /// Compile all wasm files and cache per-file facts. A file whose
-    /// `name`/`capabilities`/`config-schema` cannot be fetched is kept
-    /// with empty capabilities (its exports can never be reached through
-    /// the capability gates) and a warning.
+    /// Keep compiled components without executing any plugin code.
     pub fn new(db: crate::db::DieselDb, wasms: Vec<Arc<WasmPlugin>>) -> Self {
-        let mut wasm_by_file = HashMap::new();
-        for wasm in wasms {
-            let (name, capabilities, schema, source_info) = match (
-                wasm.name(),
-                wasm.capabilities(),
-                wasm.config_schema(),
-                wasm.source_info(),
-            ) {
-                (Ok(name), Ok(capabilities), Ok(schema), Ok(source_info)) => {
-                    (name, capabilities, schema, source_info)
-                }
-                (name, capabilities, schema, source_info) => {
-                    // Log the actual causes: this almost always means the
-                    // deployed wasm was built against an older WIT world
-                    // than the host expects (rebuild + redeploy the
-                    // plugins, see scripts/build-plugins.sh).
-                    fn describe<E: std::fmt::Display>(r: &Result<impl Sized, E>) -> Option<String> {
-                        r.as_ref().err().map(|e| e.to_string())
-                    }
-                    tracing::warn!(
-                        file = wasm.file(),
-                        name_err = ?describe(&name),
-                        caps_err = ?describe(&capabilities),
-                        schema_err = ?describe(&schema),
-                        srcinfo_err = ?describe(&source_info),
-                        "could not introspect plugin; treating it as capability-less"
-                    );
-                    (
-                        name.unwrap_or_else(|_| wasm.file().to_string()),
-                        capabilities.unwrap_or_default(),
-                        schema.unwrap_or_default(),
-                        source_info.unwrap_or_else(|_| SourceInfo {
-                            kind: String::new(),
-                            id_kind: String::new(),
-                            id_hint: None,
-                            search_hint: None,
-                        }),
-                    )
-                }
-            };
-            wasm_by_file.insert(
-                wasm.file().to_string(),
-                Arc::new(WasmInfo {
-                    wasm,
-                    name,
-                    capabilities,
-                    schema,
-                    source_info,
-                }),
-            );
-        }
+        let wasm_by_file = wasms
+            .into_iter()
+            .map(|wasm| (wasm.file().to_string(), wasm))
+            .collect();
         Self { db, wasm_by_file }
     }
 
@@ -244,12 +194,40 @@ impl PluginService {
         }))
     }
 
-    fn wasm_info(&self, wasm_file: &str) -> Option<Arc<WasmInfo>> {
+    fn wasm(&self, wasm_file: &str) -> Option<Arc<WasmPlugin>> {
         self.wasm_by_file.get(wasm_file).cloned()
     }
 
-    fn info(&self, row: &InstanceRow) -> InstanceInfo {
-        let wasm = self.wasm_info(&row.wasm_file);
+    async fn wasm_info(&self, row: &InstanceRow) -> Result<WasmInfo, ApiError> {
+        let wasm = self.wasm(&row.wasm_file).ok_or_else(|| {
+            ApiError::bad_request(format!("wasm file `{}` is not loaded", row.wasm_file))
+        })?;
+        let compiled = wasm.clone();
+        run_wasm(
+            wasm,
+            Vec::new(),
+            super::plugin_state::DbPluginState::new(self.db.clone(), row.id.clone()),
+            move |wasm, _, state| {
+                Ok(WasmInfo {
+                    wasm: compiled,
+                    name: wasm.name(state.clone())?,
+                    capabilities: wasm.capabilities(state.clone())?,
+                    schema: wasm.config_schema(state.clone())?,
+                    source_info: wasm.source_info(state)?,
+                })
+            },
+        )
+        .await
+    }
+
+    async fn info(&self, row: &InstanceRow) -> InstanceInfo {
+        let wasm = match self.wasm_info(row).await {
+            Ok(info) => Some(info),
+            Err(error) => {
+                tracing::warn!(instance = %row.id, %error, "could not read plugin information");
+                None
+            }
+        };
         InstanceInfo {
             id: row.id.clone(),
             wasm_file: row.wasm_file.clone(),
@@ -276,7 +254,11 @@ impl PluginService {
 
     /// All instances in creation order.
     pub async fn infos(&self) -> Result<Vec<InstanceInfo>, ApiError> {
-        Ok(self.rows().await?.iter().map(|r| self.info(r)).collect())
+        let mut out = Vec::new();
+        for row in self.rows().await? {
+            out.push(self.info(&row).await);
+        }
+        Ok(out)
     }
 
     // ---- instance management (admin) -------------------------------------
@@ -289,18 +271,12 @@ impl PluginService {
         Ok(validate_config(&wasm.schema, input)?)
     }
 
-    /// Register an instance for a compiled wasm file. Config defaults to
-    /// `{}` (schema defaults fill the rest).
-    pub async fn register(
-        &self,
-        id: &str,
-        wasm_file: &str,
-        config: serde_json::Value,
-    ) -> Result<InstanceInfo, ApiError> {
-        let wasm = self.wasm_info(wasm_file).ok_or_else(|| {
+    /// Register an instance before executing plugin code. Configuration is
+    /// empty until saved through the configuration endpoint.
+    pub async fn register(&self, id: &str, wasm_file: &str) -> Result<InstanceInfo, ApiError> {
+        self.wasm(wasm_file).ok_or_else(|| {
             ApiError::bad_request(format!("no wasm file `{wasm_file}` is loaded"))
         })?;
-        let config = self.validate(&wasm, &config)?;
         let mut conn = self.db.get().await?;
         use diesel::ExpressionMethods as _;
         use diesel_async::RunQueryDsl as _;
@@ -308,7 +284,6 @@ impl PluginService {
             .values((
                 crate::schema::plugin_instances::id.eq(id),
                 crate::schema::plugin_instances::wasm_file.eq(wasm_file),
-                crate::schema::plugin_instances::config.eq(config.to_string()),
             ))
             .execute(&mut conn)
             .await;
@@ -328,7 +303,7 @@ impl PluginService {
             .row(id)
             .await?
             .ok_or_else(|| ApiError::not_found("plugin instance"))?;
-        Ok(self.info(&row))
+        Ok(self.info(&row).await)
     }
 
     /// Delete an instance only after removing its content items (409 otherwise).
@@ -372,7 +347,7 @@ impl PluginService {
             .row(id)
             .await?
             .ok_or_else(|| ApiError::not_found("plugin instance"))?;
-        Ok(self.info(&row))
+        Ok(self.info(&row).await)
     }
 
     /// Validate and store an instance's configuration.
@@ -385,9 +360,7 @@ impl PluginService {
             .row(id)
             .await?
             .ok_or_else(|| ApiError::not_found("plugin instance"))?;
-        let wasm = self.wasm_info(&row.wasm_file).ok_or_else(|| {
-            ApiError::bad_request(format!("wasm file `{}` is not loaded", row.wasm_file))
-        })?;
+        let wasm = self.wasm_info(&row).await?;
         let config = self.validate(&wasm, &config)?;
         use diesel::ExpressionMethods as _;
         use diesel::QueryDsl as _;
@@ -400,7 +373,7 @@ impl PluginService {
             .row(id)
             .await?
             .ok_or_else(|| ApiError::not_found("plugin instance"))?;
-        Ok(self.info(&row))
+        Ok(self.info(&row).await)
     }
 
     /// The config schema plus the current values, for the admin form.
@@ -412,9 +385,7 @@ impl PluginService {
             .row(id)
             .await?
             .ok_or_else(|| ApiError::not_found("plugin instance"))?;
-        let wasm = self.wasm_info(&row.wasm_file).ok_or_else(|| {
-            ApiError::bad_request(format!("wasm file `{}` is not loaded", row.wasm_file))
-        })?;
+        let wasm = self.wasm_info(&row).await?;
         let fields = wasm
             .schema
             .iter()
@@ -465,7 +436,13 @@ impl PluginService {
         &self,
         id: &str,
         require_enabled: bool,
-        f: impl FnOnce(&WasmPlugin, &[ConfigValue]) -> Result<T, PluginError> + Send + 'static,
+        f: impl FnOnce(
+            &WasmPlugin,
+            &[ConfigValue],
+            Arc<dyn mandara_plugin::StateStore>,
+        ) -> Result<T, PluginError>
+        + Send
+        + 'static,
     ) -> Result<T, ApiError> {
         let row = self
             .row(id)
@@ -476,12 +453,20 @@ impl PluginService {
                 "plugin instance `{id}` is disabled"
             )));
         }
-        let wasm = self.wasm_info(&row.wasm_file).ok_or_else(|| {
-            ApiError::bad_request(format!("wasm file `{}` is not loaded", row.wasm_file))
+        let plugin = self.wasm(&row.wasm_file).ok_or_else(|| {
+            ApiError::bad_request(format!("wasm file '{}' is not loaded", row.wasm_file))
         })?;
-        let values = values_from_config(&wasm.schema, &row.config);
-        let plugin = wasm.wasm.clone();
-        run_wasm(plugin, values, f).await
+        run_wasm(
+            plugin,
+            Vec::new(),
+            super::plugin_state::DbPluginState::new(self.db.clone(), row.id),
+            move |wasm, _, state| {
+                let schema = wasm.config_schema(state.clone())?;
+                let values = values_from_config(&schema, &row.config);
+                f(wasm, &values, state)
+            },
+        )
+        .await
     }
 
     /// Declared catalogs of every enabled `declare`-capable instance
@@ -492,17 +477,21 @@ impl PluginService {
             if !row.enabled {
                 continue;
             }
-            let Some(wasm) = self.wasm_info(&row.wasm_file) else {
+            let Some(_) = self.wasm(&row.wasm_file) else {
                 continue;
             };
+            let wasm = self.wasm_info(&row).await?;
             if !wasm.capabilities.iter().any(|c| c == "declare") {
                 continue;
             }
             self.requires_cap(&wasm, "declare")?;
             let values = values_from_config(&wasm.schema, &row.config);
-            let declared = run_wasm(wasm.wasm.clone(), values, |wasm, values| {
-                wasm.declare(values)
-            })
+            let declared = run_wasm(
+                wasm.wasm.clone(),
+                values,
+                super::plugin_state::DbPluginState::new(self.db.clone(), row.id.clone()),
+                |wasm, values, state| wasm.declare(state, values),
+            )
             .await?
             .unwrap_or_default();
             out.push(DeclaredCatalog {
@@ -529,17 +518,21 @@ impl PluginService {
             if row.id != id || !row.enabled {
                 continue;
             }
-            let Some(wasm) = self.wasm_info(&row.wasm_file) else {
+            let Some(_) = self.wasm(&row.wasm_file) else {
                 return Ok(None);
             };
+            let wasm = self.wasm_info(&row).await?;
             if !wasm.capabilities.iter().any(|c| c == "declare") {
                 return Ok(None);
             }
             self.requires_cap(&wasm, "declare")?;
             let values = values_from_config(&wasm.schema, &row.config);
-            let declared = run_wasm(wasm.wasm.clone(), values, |wasm, values| {
-                wasm.declare(values)
-            })
+            let declared = run_wasm(
+                wasm.wasm.clone(),
+                values,
+                super::plugin_state::DbPluginState::new(self.db.clone(), row.id.clone()),
+                |wasm, values, state| wasm.declare(state, values),
+            )
             .await?
             .unwrap_or_default();
             return Ok(Some(DeclaredCatalog {
@@ -568,8 +561,8 @@ impl PluginService {
         limit: u32,
     ) -> Result<SearchResult, ApiError> {
         let query = query.to_string();
-        self.call(id, true, move |wasm, values| {
-            wasm.search_books(values, &query, offset, limit)
+        self.call(id, true, move |wasm, values, state| {
+            wasm.search_books(state, values, &query, offset, limit)
         })
         .await
     }
@@ -577,8 +570,8 @@ impl PluginService {
     /// Single book by id (requires `lookup`).
     pub async fn get_book(&self, id: &str, book_id: &str) -> Result<Option<BookEntry>, ApiError> {
         let book_id = book_id.to_string();
-        self.call(id, true, move |wasm, values| {
-            wasm.get_book(values, &book_id)
+        self.call(id, true, move |wasm, values, state| {
+            wasm.get_book(state, values, &book_id)
         })
         .await
     }
@@ -590,8 +583,8 @@ impl PluginService {
         series_id: &str,
     ) -> Result<Option<mandara_plugin::SeriesResult>, ApiError> {
         let series_id = series_id.to_string();
-        self.call(id, true, move |wasm, values| {
-            wasm.get_series(values, &series_id)
+        self.call(id, true, move |wasm, values, state| {
+            wasm.get_series(state, values, &series_id)
         })
         .await
     }
@@ -604,8 +597,8 @@ impl PluginService {
         index: u32,
     ) -> Result<Option<SourceChapter>, ApiError> {
         let book_id = book_id.to_string();
-        self.call(id, false, move |wasm, values| {
-            wasm.get_chapter(values, &book_id, index)
+        self.call(id, false, move |wasm, values, state| {
+            wasm.get_chapter(state, values, &book_id, index)
         })
         .await
     }
@@ -618,8 +611,8 @@ impl PluginService {
         require_enabled: bool,
     ) -> Result<Option<SourceDeclaredContent>, ApiError> {
         let content_id = content_id.to_string();
-        self.call(id, require_enabled, move |wasm, values| {
-            wasm.get_content(values, &content_id)
+        self.call(id, require_enabled, move |wasm, values, state| {
+            wasm.get_content(state, values, &content_id)
         })
         .await
     }
@@ -631,8 +624,8 @@ impl PluginService {
         book_id: &str,
     ) -> Result<Option<SourceBookFile>, ApiError> {
         let book_id = book_id.to_string();
-        self.call(id, false, move |wasm, values| {
-            wasm.get_book_file(values, &book_id)
+        self.call(id, false, move |wasm, values, state| {
+            wasm.get_book_file(state, values, &book_id)
         })
         .await
     }
@@ -648,18 +641,24 @@ impl PluginService {
             if !row.enabled {
                 continue;
             }
-            let Some(wasm) = self.wasm_info(&row.wasm_file) else {
+            let Some(_) = self.wasm(&row.wasm_file) else {
                 continue;
             };
+            let wasm = self.wasm_info(&row).await?;
             if !wasm.capabilities.iter().any(|c| c == "identify") {
                 continue;
             }
             let values = values_from_config(&wasm.schema, &row.config);
             let filename = filename.to_string();
             let file_hash = file_hash.to_string();
-            if let Some(book) = run_wasm(wasm.wasm.clone(), values, move |wasm, values| {
-                wasm.identify_upload(values, &filename, &file_hash)
-            })
+            if let Some(book) = run_wasm(
+                wasm.wasm.clone(),
+                values,
+                super::plugin_state::DbPluginState::new(self.db.clone(), row.id.clone()),
+                move |wasm, values, state| {
+                    wasm.identify_upload(state, values, &filename, &file_hash)
+                },
+            )
             .await?
             {
                 return Ok(Some((row.id, book)));
@@ -682,7 +681,14 @@ impl From<ConfigErrors> for ApiError {
 async fn run_wasm<T: Send + 'static>(
     wasm: Arc<WasmPlugin>,
     values: Vec<ConfigValue>,
-    f: impl FnOnce(&WasmPlugin, &[ConfigValue]) -> Result<T, PluginError> + Send + 'static,
+    state: Arc<dyn mandara_plugin::StateStore>,
+    f: impl FnOnce(
+        &WasmPlugin,
+        &[ConfigValue],
+        Arc<dyn mandara_plugin::StateStore>,
+    ) -> Result<T, PluginError>
+    + Send
+    + 'static,
 ) -> Result<T, ApiError> {
-    Ok(tokio::task::spawn_blocking(move || f(&wasm, &values)).await??)
+    Ok(tokio::task::spawn_blocking(move || f(&wasm, &values, state)).await??)
 }

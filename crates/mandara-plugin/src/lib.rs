@@ -9,6 +9,7 @@
 pub mod error;
 pub mod host;
 pub mod http_fetch;
+pub mod state;
 
 pub use error::ImageStoreError;
 pub use host::{
@@ -19,3 +20,4 @@ pub use host::{
     SourceInfo, WasmPlugin, load_dir, validate_config, values_from_config,
 };
 pub use http_fetch::{FetchError, FetchPolicy, FetchRequest, FetchResponse, MAX_REDIRECTS};
+pub use state::{StateStore, StateStoreError};

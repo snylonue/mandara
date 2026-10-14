@@ -5,10 +5,11 @@
 //! one wasm file can back several instances, each with its own validated
 //! configuration, id, and enable flag.
 //!
-//! Calls into a plugin are synchronous and stateless: a fresh
+//! Calls into a plugin are synchronous with fresh guest memory: a new
 //! [`wasmtime::Store`] is created per call, the instance's configuration
 //! is injected through the `config::configure` import. Fuel bounds guest
 //! computation without imposing a wall-clock deadline on network waits.
+//! The instance-scoped `state` import provides explicit durable storage.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -21,10 +22,11 @@ use mandara_core::source::{SourceBook, SourceBookFile, SourceChapter, SourceSeri
 use wasmtime::error::Context as _;
 
 use crate::http_fetch::{self, FetchPolicy};
+use crate::state::{StateStore, StateStoreError};
 
 // Generates the bindings for the `mandara:plugin/mandara-plugin` world
 // from `wit/mandara.wit`:
-//   - `store::Host` + `config::Host` + `http::Host` traits for the
+//   - `store::Host` + `state::Host` + `config::Host` + `http::Host` traits for the
 //     imported interfaces
 //   - `MandaraPlugin` world handle with `add_to_linker` / `instantiate`
 //     and `call_name`, `call_config_schema`, `call_capabilities`,
@@ -81,7 +83,7 @@ pub trait ImageStore: Send + Sync {
 
 /// Host-side state handed to plugin imports for the duration of one call.
 struct HostState {
-    /// Instance id, used as the log tag.
+    /// Wasm file name, used as the log tag.
     name: String,
     /// Validated configuration values, in `config-schema` field order.
     config: Vec<ConfigValue>,
@@ -92,6 +94,35 @@ struct HostState {
     /// Total bytes stored this call (per-call cap accounting; a fresh
     /// state per call resets it).
     image_bytes_stored: u64,
+    state: Arc<dyn StateStore>,
+}
+
+impl HostState {
+    fn state_error(&self, error: StateStoreError) -> String {
+        match error {
+            StateStoreError::QuotaExceeded => "plugin state quota exceeded".into(),
+            StateStoreError::Backend(error) => {
+                warn!(plugin = %self.name, error = %error, "plugin state storage failed");
+                "plugin state storage unavailable".into()
+            }
+        }
+    }
+}
+
+impl mandara::plugin::state::Host for HostState {
+    fn get(&mut self, key: String) -> std::result::Result<Option<Vec<u8>>, String> {
+        self.state.get(&key).map_err(|e| self.state_error(e))
+    }
+
+    fn set(&mut self, key: String, value: Vec<u8>) -> std::result::Result<(), String> {
+        self.state
+            .set(&key, &value)
+            .map_err(|e| self.state_error(e))
+    }
+
+    fn delete(&mut self, key: String) -> std::result::Result<bool, String> {
+        self.state.delete(&key).map_err(|e| self.state_error(e))
+    }
 }
 
 impl mandara::plugin::store::Host for HostState {
@@ -240,9 +271,11 @@ impl WasmPlugin {
     }
 
     /// Instantiate the component in a fresh store and run `f` against the
-    /// typed bindings. `config` is injected via the `configure` import.
+    /// typed bindings. Configuration and the instance state store are
+    /// injected into this call, never attached to the compiled component.
     fn call<T>(
         &self,
+        state: Arc<dyn StateStore>,
         config: &[ConfigValue],
         f: impl FnOnce(&mut Store<HostState>, &MandaraPlugin) -> wasmtime::Result<T>,
     ) -> Result<T> {
@@ -254,6 +287,7 @@ impl WasmPlugin {
                 policy: self.policy.clone(),
                 images: self.images.clone(),
                 image_bytes_stored: 0,
+                state,
             },
         );
         // Meter guest work, not the elapsed time of host imports.
@@ -263,34 +297,36 @@ impl WasmPlugin {
         Ok(f(&mut store, &bindings).with_context(|| format!("call into `{}`", self.file))?)
     }
 
-    /// Human-readable plugin name (same for all instances).
-    pub fn name(&self) -> Result<String> {
-        self.call(&[], |store, b| b.call_name(store))
+    /// Human-readable plugin name, read with the instance state store.
+    pub fn name(&self, state: Arc<dyn StateStore>) -> Result<String> {
+        self.call(state, &[], |store, b| b.call_name(store))
     }
 
-    /// Interaction hints for the frontend (one call at load time, like
-    /// `capabilities`).
-    pub fn source_info(&self) -> Result<SourceInfo> {
-        self.call(&[], |store, b| b.call_source_info(store))
+    /// Interaction hints for a registered instance.
+    pub fn source_info(&self, state: Arc<dyn StateStore>) -> Result<SourceInfo> {
+        self.call(state, &[], |store, b| b.call_source_info(store))
     }
 
-    /// Configuration schema (checked with the empty config; used against
-    /// every instance of this wasm file).
-    pub fn config_schema(&self) -> Result<Vec<ConfigField>> {
-        self.call(&[], |store, b| b.call_config_schema(store))
+    /// Configuration schema, read with an instance state store.
+    pub fn config_schema(&self, state: Arc<dyn StateStore>) -> Result<Vec<ConfigField>> {
+        self.call(state, &[], |store, b| b.call_config_schema(store))
     }
 
-    /// Declared capabilities, one call at load time. The host keys all
+    /// Declared capabilities of a registered instance. The host keys all
     /// policy (sync, browsing, reads) off this list.
-    pub fn capabilities(&self) -> Result<Vec<String>> {
-        self.call(&[], |store, b| b.call_capabilities(store))
+    pub fn capabilities(&self, state: Arc<dyn StateStore>) -> Result<Vec<String>> {
+        self.call(state, &[], |store, b| b.call_capabilities(store))
     }
 
     /// Full static catalog (`declare` capability). Enforced: never more
     /// than [`MAX_DECLARE_BOOKS`] books / [`MAX_DECLARE_CHAPTERS`]
     /// chapters (warns beyond 90% of the cap).
-    pub fn declare(&self, config: &[ConfigValue]) -> Result<Option<Vec<DeclaredBook>>> {
-        let declared = self.call(config, |store, b| b.call_declare(store))?;
+    pub fn declare(
+        &self,
+        state: Arc<dyn StateStore>,
+        config: &[ConfigValue],
+    ) -> Result<Option<Vec<DeclaredBook>>> {
+        let declared = self.call(state, config, |store, b| b.call_declare(store))?;
         if let Some(books) = &declared {
             let chapters = books
                 .iter()
@@ -323,6 +359,7 @@ impl WasmPlugin {
     /// `limit` and `offset` to [`MAX_SEARCH_LIMIT`] / [`MAX_SEARCH_OFFSET`].
     pub fn search_books(
         &self,
+        state: Arc<dyn StateStore>,
         config: &[ConfigValue],
         query: &str,
         offset: u32,
@@ -330,25 +367,33 @@ impl WasmPlugin {
     ) -> Result<SearchResult> {
         let offset = offset.min(MAX_SEARCH_OFFSET);
         let limit = limit.min(MAX_SEARCH_LIMIT);
-        self.call(config, |store, b| {
+        self.call(state, config, |store, b| {
             b.call_search_books(store, query, offset, limit)
         })
     }
 
     /// Single book by id (`lookup` capability).
-    pub fn get_book(&self, config: &[ConfigValue], book_id: &str) -> Result<Option<BookEntry>> {
-        self.call(config, |store, b| b.call_get_book(store, book_id))
+    pub fn get_book(
+        &self,
+        state: Arc<dyn StateStore>,
+        config: &[ConfigValue],
+        book_id: &str,
+    ) -> Result<Option<BookEntry>> {
+        self.call(state, config, |store, b| b.call_get_book(store, book_id))
     }
 
     /// Fetch one chapter (`content` capability). Content is capped at
     /// [`MAX_CHAPTER_CONTENT_BYTES`] per call.
     pub fn get_chapter(
         &self,
+        state: Arc<dyn StateStore>,
         config: &[ConfigValue],
         book_id: &str,
         index: u32,
     ) -> Result<Option<SourceChapter>> {
-        let chapter = self.call(config, |store, b| b.call_get_chapter(store, book_id, index))?;
+        let chapter = self.call(state, config, |store, b| {
+            b.call_get_chapter(store, book_id, index)
+        })?;
         match chapter {
             Some(c) => {
                 if c.content.len() > MAX_CHAPTER_CONTENT_BYTES {
@@ -371,10 +416,11 @@ impl WasmPlugin {
     /// Content identity, loading and chapter declarations from one plugin call.
     pub fn get_content(
         &self,
+        state: Arc<dyn StateStore>,
         config: &[ConfigValue],
         content_id: &str,
     ) -> Result<Option<mandara_core::source::SourceDeclaredContent>> {
-        let content = self.call(config, |store, bindings| {
+        let content = self.call(state, config, |store, bindings| {
             bindings.call_get_content(store, content_id)
         })?;
         if let Some(content) = &content
@@ -392,11 +438,12 @@ impl WasmPlugin {
     /// Upload identification (`identify` capability).
     pub fn identify_upload(
         &self,
+        state: Arc<dyn StateStore>,
         config: &[ConfigValue],
         filename: &str,
         file_hash: &str,
     ) -> Result<Option<SourceBook>> {
-        let book = self.call(config, |store, b| {
+        let book = self.call(state, config, |store, b| {
             b.call_identify_upload(store, filename, file_hash)
         })?;
         Ok(book.map(SourceBook::try_from).transpose()?)
@@ -405,10 +452,11 @@ impl WasmPlugin {
     /// Resolve a series into individually identified, validated member books.
     pub fn get_series(
         &self,
+        state: Arc<dyn StateStore>,
         config: &[ConfigValue],
         series_id: &str,
     ) -> Result<Option<SeriesResult>> {
-        let result = self.call(config, |store, bindings| {
+        let result = self.call(state, config, |store, bindings| {
             bindings.call_get_series(store, series_id)
         })?;
         if let Some(series) = &result {
@@ -436,10 +484,13 @@ impl WasmPlugin {
     /// Bytes are capped at [`MAX_BOOK_FILE_BYTES`].
     pub fn get_book_file(
         &self,
+        state: Arc<dyn StateStore>,
         config: &[ConfigValue],
         book_id: &str,
     ) -> Result<Option<SourceBookFile>> {
-        let file = self.call(config, |store, b| b.call_get_book_file(store, book_id))?;
+        let file = self.call(state, config, |store, b| {
+            b.call_get_book_file(store, book_id)
+        })?;
         match file {
             Some(f) => {
                 if f.bytes.len() > MAX_BOOK_FILE_BYTES {
@@ -715,36 +766,44 @@ fn kind_name(kind: &ConfigKind) -> &'static str {
     }
 }
 
-/// Convert a validated config object into the WIT `config-value` list in
-/// schema order, ready to be injected via `configure`. Missing optional
-/// fields yield a sensible neutral value (`""` / `0` / `false` / `[]`).
+/// Convert stored configuration into the WIT `config-value` list in schema
+/// order. Unsaved fields use schema defaults; fields without a default use
+/// a neutral value (`""` / `0` / `false` / `[]`) until configuration is saved.
 pub fn values_from_config(fields: &[ConfigField], config: &serde_json::Value) -> Vec<ConfigValue> {
     fields
         .iter()
-        .map(|field| match (&field.kind, config.get(&field.key)) {
-            (ConfigKind::Text, Some(serde_json::Value::String(s))) => ConfigValue::Text(s.clone()),
-            (ConfigKind::Number, Some(serde_json::Value::Number(n))) => {
-                ConfigValue::Number(n.as_f64().unwrap_or(0.0))
+        .map(|field| {
+            let fallback = field_default(field);
+            let value = config
+                .get(&field.key)
+                .filter(|v| !v.is_null())
+                .unwrap_or(&fallback);
+            match (&field.kind, Some(value)) {
+                (ConfigKind::Text, Some(serde_json::Value::String(s))) => {
+                    ConfigValue::Text(s.clone())
+                }
+                (ConfigKind::Number, Some(serde_json::Value::Number(n))) => {
+                    ConfigValue::Number(n.as_f64().unwrap_or(0.0))
+                }
+                (ConfigKind::Boolean, Some(serde_json::Value::Bool(b))) => ConfigValue::Boolean(*b),
+                (ConfigKind::EnumOptions(_), Some(serde_json::Value::Number(n))) => {
+                    ConfigValue::EnumIndex(n.as_u64().unwrap_or(0) as u32)
+                }
+                (ConfigKind::ListOfString, Some(serde_json::Value::Array(items))) => {
+                    ConfigValue::StringList(
+                        items
+                            .iter()
+                            .filter_map(|i| i.as_str().map(String::from))
+                            .collect(),
+                    )
+                }
+                // Required fields can remain unset before configuration is saved.
+                (ConfigKind::Text, _) => ConfigValue::Text(String::new()),
+                (ConfigKind::Number, _) => ConfigValue::Number(0.0),
+                (ConfigKind::Boolean, _) => ConfigValue::Boolean(false),
+                (ConfigKind::EnumOptions(_), _) => ConfigValue::EnumIndex(0),
+                (ConfigKind::ListOfString, _) => ConfigValue::StringList(Vec::new()),
             }
-            (ConfigKind::Boolean, Some(serde_json::Value::Bool(b))) => ConfigValue::Boolean(*b),
-            (ConfigKind::EnumOptions(_), Some(serde_json::Value::Number(n))) => {
-                ConfigValue::EnumIndex(n.as_u64().unwrap_or(0) as u32)
-            }
-            (ConfigKind::ListOfString, Some(serde_json::Value::Array(items))) => {
-                ConfigValue::StringList(
-                    items
-                        .iter()
-                        .filter_map(|i| i.as_str().map(String::from))
-                        .collect(),
-                )
-            }
-            // Defaults were applied during validation; anything else gets
-            // a neutral value (the guest sees the field as unset).
-            (ConfigKind::Text, _) => ConfigValue::Text(String::new()),
-            (ConfigKind::Number, _) => ConfigValue::Number(0.0),
-            (ConfigKind::Boolean, _) => ConfigValue::Boolean(false),
-            (ConfigKind::EnumOptions(_), _) => ConfigValue::EnumIndex(0),
-            (ConfigKind::ListOfString, _) => ConfigValue::StringList(Vec::new()),
         })
         .collect()
 }

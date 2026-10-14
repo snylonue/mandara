@@ -2822,12 +2822,9 @@ mod tests {
             .unwrap(),
         );
         let plugins = Arc::new(PluginService::new(db.clone(), vec![wasm]));
+        plugins.register("fixture", "fixture.wasm").await.unwrap();
         plugins
-            .register(
-                "fixture",
-                "fixture.wasm",
-                serde_json::json!({"site-name": "示例"}),
-            )
+            .set_config("fixture", serde_json::json!({"site-name": "示例"}))
             .await
             .unwrap();
         let library = Library::new(db, plugins, dir.join("files"));
@@ -3297,11 +3294,12 @@ mod tests {
             .unwrap();
         library
             .plugins
-            .register(
-                "second",
-                "fixture.wasm",
-                serde_json::json!({"site-name":"示例", "mode":1}),
-            )
+            .register("second", "fixture.wasm")
+            .await
+            .unwrap();
+        library
+            .plugins
+            .set_config("second", serde_json::json!({"site-name":"示例", "mode":1}))
             .await
             .unwrap();
         let second = library

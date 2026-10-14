@@ -15,6 +15,171 @@ use mandara_plugin::host::{
 
 const FIXTURE: &[u8] = include_bytes!("fixtures/hello.wasm");
 
+#[derive(Default)]
+struct TestState(std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>);
+
+impl mandara_plugin::StateStore for TestState {
+    fn get(&self, key: &str) -> Result<Option<Vec<u8>>, mandara_plugin::StateStoreError> {
+        Ok(self.0.lock().unwrap().get(key).cloned())
+    }
+    fn set(&self, key: &str, value: &[u8]) -> Result<(), mandara_plugin::StateStoreError> {
+        self.0.lock().unwrap().insert(key.into(), value.to_vec());
+        Ok(())
+    }
+    fn delete(&self, key: &str) -> Result<bool, mandara_plugin::StateStoreError> {
+        Ok(self.0.lock().unwrap().remove(key).is_some())
+    }
+}
+
+fn state_probe(
+    plugin: &WasmPlugin,
+    store: Arc<dyn mandara_plugin::StateStore>,
+    key: &str,
+    index: u32,
+    value: &str,
+) -> String {
+    plugin
+        .get_chapter(
+            store,
+            &[ConfigValue::Text(value.into())],
+            &format!("state:{key}"),
+            index,
+        )
+        .unwrap()
+        .unwrap()
+        .content
+}
+
+#[test]
+fn state_imports_survive_fresh_guest_calls_and_are_scoped() {
+    let compiled = load();
+    let state = Arc::new(TestState::default());
+    let first = state.clone();
+    let second = Arc::new(TestState::default());
+    assert_eq!(
+        state_probe(&compiled, first.clone(), "目录", 0, ""),
+        "Ok(None)"
+    );
+    assert_eq!(
+        state_probe(&compiled, first.clone(), "目录", 1, "a"),
+        "Ok(())"
+    );
+    assert_eq!(
+        state_probe(&compiled, first.clone(), "目录", 0, ""),
+        "Ok(Some([97]))"
+    );
+    assert_eq!(
+        state_probe(&compiled, second.clone(), "目录", 0, ""),
+        "Ok(None)"
+    );
+    // A new compiled component sees the same store supplied to each call.
+    let compiled = load();
+    let first = state;
+    assert_eq!(
+        state_probe(&compiled, first.clone(), "目录", 0, ""),
+        "Ok(Some([97]))"
+    );
+    assert_eq!(
+        state_probe(&compiled, first.clone(), "目录", 1, "b"),
+        "Ok(())"
+    );
+    assert_eq!(
+        state_probe(&compiled, first.clone(), "目录", 0, ""),
+        "Ok(Some([98]))"
+    );
+    assert_eq!(
+        state_probe(&compiled, first.clone(), "目录", 4, ""),
+        "Ok(())"
+    );
+    assert_eq!(
+        state_probe(&compiled, first.clone(), "目录", 0, ""),
+        "Ok(Some([]))"
+    );
+    assert_eq!(
+        state_probe(&compiled, first.clone(), "目录", 2, ""),
+        "Ok(true)"
+    );
+    assert_eq!(
+        state_probe(&compiled, first.clone(), "目录", 2, ""),
+        "Ok(false)"
+    );
+    assert_eq!(
+        state_probe(&compiled, first.clone(), "目录", 0, ""),
+        "Ok(None)"
+    );
+}
+
+#[test]
+fn state_imports_delegate_key_and_value_policy() {
+    let compiled = load();
+    let state = Arc::new(TestState::default());
+    let plugin = state.clone();
+    for key in [String::new(), "字".repeat(1024)] {
+        assert_eq!(
+            state_probe(&compiled, plugin.clone(), &key, 0, ""),
+            "Ok(None)"
+        );
+        assert_eq!(
+            state_probe(&compiled, plugin.clone(), &key, 1, "a"),
+            "Ok(())"
+        );
+        assert_eq!(
+            state_probe(&compiled, plugin.clone(), &key, 0, ""),
+            "Ok(Some([97]))"
+        );
+        assert_eq!(
+            state_probe(&compiled, plugin.clone(), &key, 2, ""),
+            "Ok(true)"
+        );
+    }
+    // The host forwards values without imposing the SQLite backend's cap.
+    assert_eq!(
+        state_probe(&compiled, plugin.clone(), "key", 3, ""),
+        "Ok(())"
+    );
+    assert_eq!(state.0.lock().unwrap()["key"].len(), 256 * 1024 + 1);
+}
+
+struct FailingState(bool);
+impl FailingState {
+    fn error(&self) -> mandara_plugin::StateStoreError {
+        if self.0 {
+            mandara_plugin::StateStoreError::QuotaExceeded
+        } else {
+            anyhow::anyhow!("private backend failure details").into()
+        }
+    }
+}
+impl mandara_plugin::StateStore for FailingState {
+    fn get(&self, _: &str) -> Result<Option<Vec<u8>>, mandara_plugin::StateStoreError> {
+        Err(self.error())
+    }
+    fn set(&self, _: &str, _: &[u8]) -> Result<(), mandara_plugin::StateStoreError> {
+        Err(self.error())
+    }
+    fn delete(&self, _: &str) -> Result<bool, mandara_plugin::StateStoreError> {
+        Err(self.error())
+    }
+}
+
+#[test]
+fn state_backend_errors_are_redacted_and_quota_is_reported() {
+    let compiled = load();
+    for (quota, message) in [(false, "storage unavailable"), (true, "quota exceeded")] {
+        let plugin = Arc::new(FailingState(quota));
+        for operation in [0, 1, 2] {
+            let result = state_probe(&compiled, plugin.clone(), "key", operation, "value");
+            assert!(result.starts_with("Err("));
+            assert!(result.contains(message));
+            assert!(!result.contains("private backend"));
+        }
+    }
+}
+
+fn state() -> Arc<dyn mandara_plugin::StateStore> {
+    Arc::new(TestState::default())
+}
+
 /// No-op image store for tests: records calls, returns a fake id.
 #[derive(Default)]
 struct TestImages {
@@ -48,20 +213,20 @@ fn load() -> Arc<WasmPlugin> {
 fn fixture_is_valid() {
     let plugin = load();
     assert_eq!(plugin.file(), "hello.wasm");
-    assert_eq!(plugin.name().unwrap(), "hello");
+    assert_eq!(plugin.name(state()).unwrap(), "hello");
 }
 
 #[test]
 fn capabilities_stub_declares_supported_patterns() {
     let plugin = load();
-    let caps = plugin.capabilities().unwrap();
+    let caps = plugin.capabilities(state()).unwrap();
     assert_eq!(caps, vec!["declare", "identify", "content"]);
 }
 
 #[test]
 fn config_schema_roundtrip() {
     let plugin = load();
-    let fields = plugin.config_schema().unwrap();
+    let fields = plugin.config_schema(state()).unwrap();
     let keys: Vec<&str> = fields.iter().map(|f| f.key.as_str()).collect();
     assert_eq!(keys, vec!["site-name", "mode", "verbose", "spin", "tags"]);
     let site = &fields[0];
@@ -76,7 +241,7 @@ fn config_schema_roundtrip() {
 #[test]
 fn config_validation_accepts_defaults_and_rejects_bad_values() {
     let plugin = load();
-    let fields = plugin.config_schema().unwrap();
+    let fields = plugin.config_schema(state()).unwrap();
 
     // Empty config -> healthy defaults (a default satisfies `required`).
     let normalized = validate_config(&fields, &serde_json::json!({})).unwrap();
@@ -94,6 +259,10 @@ fn config_validation_accepts_defaults_and_rejects_bad_values() {
     }];
     let err = validate_config(&synthetic, &serde_json::json!({})).unwrap_err();
     assert_eq!(err.0[0].field, "token");
+    let unsaved = values_from_config(&synthetic, &serde_json::json!({}));
+    assert!(matches!(&unsaved[0], ConfigValue::Text(value) if value.is_empty()));
+    let defaults = values_from_config(&fields, &serde_json::json!({}));
+    assert!(matches!(&defaults[0], ConfigValue::Text(value) if value == "Mandara 示例库"));
 
     // Unknown key + wrong types + out-of-range enum index.
     let err = validate_config(
@@ -153,7 +322,7 @@ fn config_validation_accepts_defaults_and_rejects_bad_values() {
 #[test]
 fn config_is_injected_into_calls() {
     let plugin = load();
-    let fields = plugin.config_schema().unwrap();
+    let fields = plugin.config_schema(state()).unwrap();
     let config = validate_config(
         &fields,
         &serde_json::json!({ "site-name": "测试站点", "tags": ["tag1", "tag2"] }),
@@ -162,7 +331,10 @@ fn config_is_injected_into_calls() {
     let values = values_from_config(&fields, &config);
 
     // The declared catalog is shaped by the injected configuration.
-    let declared = plugin.declare(&values).unwrap().expect("some books");
+    let declared = plugin
+        .declare(state(), &values)
+        .unwrap()
+        .expect("some books");
     assert_eq!(declared.len(), 2);
     let first = &declared[0];
     assert_eq!(first.book.id, "hello-1");
@@ -173,7 +345,10 @@ fn config_is_injected_into_calls() {
         content.mode,
         mandara_plugin::ContentMode::Chapters
     ));
-    let loaded = plugin.get_content(&values, &content.id).unwrap().unwrap();
+    let loaded = plugin
+        .get_content(state(), &values, &content.id)
+        .unwrap()
+        .unwrap();
     assert_eq!(loaded.id, content.id);
     assert_eq!(loaded.mode, mandara_core::model::ContentMode::Chapters);
     assert_eq!(loaded.chapters.len(), 2);
@@ -185,7 +360,7 @@ fn config_is_injected_into_calls() {
     );
     assert!(
         plugin
-            .get_content(&values, &first.book.id)
+            .get_content(state(), &values, &first.book.id)
             .unwrap()
             .is_none()
     );
@@ -209,7 +384,7 @@ fn config_is_injected_into_calls() {
 
     // Chapters serve the injected site name and mode variant.
     let ch = plugin
-        .get_chapter(&values, "hello-content-1", 0)
+        .get_chapter(state(), &values, "hello-content-1", 0)
         .unwrap()
         .expect("chapter");
     assert!(ch.content.contains("wasm 插件"));
@@ -218,16 +393,21 @@ fn config_is_injected_into_calls() {
         &validate_config(&fields, &serde_json::json!({ "site-name": "x", "mode": 1 })).unwrap(),
     );
     let ch = plugin
-        .get_chapter(&alt, "hello-content-1", 0)
+        .get_chapter(state(), &alt, "hello-content-1", 0)
         .unwrap()
         .expect("chapter");
     assert!(ch.title.contains("变体"));
 
     // Unknown book -> None.
-    assert!(plugin.get_book(&values, "hello-1").unwrap().is_none());
+    assert!(
+        plugin
+            .get_book(state(), &values, "hello-1")
+            .unwrap()
+            .is_none()
+    );
     // Stubbed search returns an empty result.
     let result = plugin
-        .search_books(&values, "", 0, MAX_SEARCH_LIMIT)
+        .search_books(state(), &values, "", 0, MAX_SEARCH_LIMIT)
         .unwrap();
     assert_eq!(result.items.len(), 0);
 }
@@ -235,38 +415,47 @@ fn config_is_injected_into_calls() {
 #[test]
 fn declared_bodies_preserve_absence_and_empty_content() {
     let plugin = load();
-    let declared = plugin.declare(&[]).unwrap().unwrap();
+    let declared = plugin.declare(state(), &[]).unwrap().unwrap();
     let content = declared[1].content.as_ref().unwrap();
     let chapters = &content.chapters;
     assert_eq!(chapters.len(), 3);
     assert!(chapters[0].content.is_some());
     assert_eq!(chapters[1].content, None);
     assert_eq!(chapters[2].content.as_deref(), Some(""));
-    let declared_content = plugin.get_content(&[], &content.id).unwrap().unwrap();
+    let declared_content = plugin
+        .get_content(state(), &[], &content.id)
+        .unwrap()
+        .unwrap();
     assert_eq!(
         declared_content.mode,
         mandara_core::model::ContentMode::Chapters
     );
     assert_eq!(declared_content.chapters[1].content, None);
     assert_eq!(declared_content.chapters[2].content.as_deref(), Some(""));
-    let empty = plugin.get_chapter(&[], &content.id, 2).unwrap().unwrap();
+    let empty = plugin
+        .get_chapter(state(), &[], &content.id, 2)
+        .unwrap()
+        .unwrap();
     assert_eq!(empty.content, "");
-    let lazy = plugin.get_chapter(&[], &content.id, 1).unwrap().unwrap();
+    let lazy = plugin
+        .get_chapter(state(), &[], &content.id, 1)
+        .unwrap()
+        .unwrap();
     assert!(lazy.content.contains("正文"));
 }
 
 #[test]
 fn upload_identification() {
     let plugin = load();
-    let fields = plugin.config_schema().unwrap();
+    let fields = plugin.config_schema(state()).unwrap();
     let config = validate_config(&fields, &serde_json::json!({ "site-name": "示例库" })).unwrap();
     let values = values_from_config(&fields, &config);
     let hit = plugin
-        .identify_upload(&values, "hello-novel.txt", "abc")
+        .identify_upload(state(), &values, "hello-novel.txt", "abc")
         .unwrap();
     assert_eq!(hit.unwrap().id, "hello-1");
     let miss = plugin
-        .identify_upload(&values, "其他书名.epub", "abc")
+        .identify_upload(state(), &values, "其他书名.epub", "abc")
         .unwrap();
     assert!(miss.is_none());
 }
@@ -286,7 +475,7 @@ fn runaway_plugin_is_trapped_by_fuel() {
         )
         .expect("fixture loads"),
     );
-    let fields = plugin.config_schema().unwrap();
+    let fields = plugin.config_schema(state()).unwrap();
     // `spin: true` makes the guest loop forever inside get_chapter.
     let config = validate_config(
         &fields,
@@ -295,7 +484,7 @@ fn runaway_plugin_is_trapped_by_fuel() {
     .unwrap();
     let values = values_from_config(&fields, &config);
     let err = plugin
-        .get_chapter(&values, "hello-content-1", 0)
+        .get_chapter(state(), &values, "hello-content-1", 0)
         .expect_err("spin must trap");
     match err {
         Error::Runtime(source) => {

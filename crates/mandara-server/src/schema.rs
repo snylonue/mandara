@@ -79,6 +79,14 @@ diesel::table! {
 }
 
 diesel::table! {
+    plugin_state (instance_id, key) {
+        instance_id -> Text,
+        key -> Text,
+        value -> Binary,
+    }
+}
+
+diesel::table! {
     series (id) {
         id -> Text,
         title -> Text,
@@ -135,6 +143,7 @@ diesel::joinable!(book_files -> users (owner_id));
 diesel::joinable!(books -> series (series_id));
 diesel::joinable!(books -> users (created_by));
 diesel::joinable!(chapters -> book_files (file_id));
+diesel::joinable!(plugin_state -> plugin_instances (instance_id));
 diesel::joinable!(series -> users (created_by));
 diesel::joinable!(sessions -> book_files (file_id));
 diesel::joinable!(sessions -> users (user_id));
@@ -148,6 +157,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     chapters,
     images,
     plugin_instances,
+    plugin_state,
     series,
     sessions,
     shares,

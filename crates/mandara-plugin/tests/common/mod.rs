@@ -121,3 +121,24 @@ fn status_text(status: u16) -> &'static str {
         _ => "Status",
     }
 }
+
+#[derive(Default)]
+struct MemoryState(std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>);
+
+impl mandara_plugin::StateStore for MemoryState {
+    fn get(&self, key: &str) -> Result<Option<Vec<u8>>, mandara_plugin::StateStoreError> {
+        Ok(self.0.lock().unwrap().get(key).cloned())
+    }
+    fn set(&self, key: &str, value: &[u8]) -> Result<(), mandara_plugin::StateStoreError> {
+        self.0.lock().unwrap().insert(key.into(), value.to_vec());
+        Ok(())
+    }
+    fn delete(&self, key: &str) -> Result<bool, mandara_plugin::StateStoreError> {
+        Ok(self.0.lock().unwrap().remove(key).is_some())
+    }
+}
+
+#[allow(dead_code)]
+pub fn state() -> std::sync::Arc<dyn mandara_plugin::StateStore> {
+    std::sync::Arc::new(MemoryState::default())
+}

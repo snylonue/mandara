@@ -67,8 +67,6 @@ pub struct RegisterInstance {
     /// defaults to a generated uuid). Must be unique; selected by users.
     pub id: Option<String>,
     pub wasm_file: String,
-    #[serde(default = "default_config")]
-    pub config: serde_json::Value,
 }
 
 fn default_config() -> serde_json::Value {
@@ -91,11 +89,7 @@ pub async fn register_instance(
             "instance id must be at most 64 chars",
         ));
     }
-    let info = st
-        .library
-        .plugins()
-        .register(&id, &req.wasm_file, req.config)
-        .await?;
+    let info = st.library.plugins().register(&id, &req.wasm_file).await?;
     // A fresh declare-capable instance is synced right away.
     if info.enabled && info.capabilities.iter().any(|c| c == "declare") {
         let _ = st.library.sync_instance(&info.id).await?;

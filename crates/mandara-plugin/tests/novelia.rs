@@ -123,11 +123,11 @@ fn compiled_guest_adapts_web_chapters_and_wenku_downloads() {
     )
     .unwrap();
     assert_eq!(
-        plugin.capabilities().unwrap(),
+        plugin.capabilities(common::state()).unwrap(),
         ["search", "lookup", "content", "book-file"]
     );
-    assert_eq!(plugin.source_info().unwrap().kind, "search");
-    let schema = plugin.config_schema().unwrap();
+    assert_eq!(plugin.source_info(common::state()).unwrap().kind, "search");
+    let schema = plugin.config_schema(common::state()).unwrap();
     assert!(
         !schema
             .iter()
@@ -135,19 +135,21 @@ fn compiled_guest_adapts_web_chapters_and_wenku_downloads() {
     );
     let normalized = validate_config(&schema, &json!({"base-url": server.url(""), "auth-url": server.url(""), "providers": ["syosetu"], "username": " test-account ", "password": " test-password "})).unwrap();
     let config = values_from_config(&schema, &normalized);
-    let result = plugin.search_books(&config, "测试", 0, 10).unwrap();
+    let result = plugin
+        .search_books(common::state(), &config, "测试", 0, 10)
+        .unwrap();
     assert_eq!(result.total, 1);
     assert!(matches!(&result.items[0], CatalogEntry::Single(b) if b.id == "web:syosetu:n1"));
     assert_eq!(
         plugin
-            .get_book(&config, "web:syosetu:n1")
+            .get_book(common::state(), &config, "web:syosetu:n1")
             .unwrap()
             .unwrap()
             .authors,
         ["作者"]
     );
     let content = plugin
-        .get_content(&config, "web:syosetu:n1")
+        .get_content(common::state(), &config, "web:syosetu:n1")
         .unwrap()
         .unwrap();
     assert_eq!(content.chapters.len(), 2);
@@ -159,7 +161,7 @@ fn compiled_guest_adapts_web_chapters_and_wenku_downloads() {
         .filter(|(t, _)| t == "/api/v1/auth/login")
         .count();
     let chapter = plugin
-        .get_chapter(&config, "web:syosetu:n1", 0)
+        .get_chapter(common::state(), &config, "web:syosetu:n1", 0)
         .unwrap()
         .unwrap();
     let after = requests
@@ -179,7 +181,7 @@ fn compiled_guest_adapts_web_chapters_and_wenku_downloads() {
     assert_eq!(images.0.lock().unwrap().len(), 1);
     assert_eq!(
         plugin
-            .get_chapter(&config, "web:syosetu:n1", 1)
+            .get_chapter(common::state(), &config, "web:syosetu:n1", 1)
             .unwrap()
             .unwrap()
             .content,
@@ -187,19 +189,19 @@ fn compiled_guest_adapts_web_chapters_and_wenku_downloads() {
     );
     assert!(
         plugin
-            .get_chapter(&config, "web:syosetu:n1", 9)
+            .get_chapter(common::state(), &config, "web:syosetu:n1", 9)
             .unwrap()
             .is_none()
     );
     assert!(
         plugin
-            .get_book(&config, "web:syosetu:missing")
+            .get_book(common::state(), &config, "web:syosetu:missing")
             .unwrap()
             .is_none()
     );
     assert!(
         plugin
-            .get_book(&config, "web:syosetu:bad-json")
+            .get_book(common::state(), &config, "web:syosetu:bad-json")
             .unwrap()
             .is_none()
     );
@@ -208,31 +210,42 @@ fn compiled_guest_adapts_web_chapters_and_wenku_downloads() {
     let before = requests.lock().unwrap().len();
     assert!(
         plugin
-            .get_series(&config, "wenku:series")
+            .get_series(common::state(), &config, "wenku:series")
             .unwrap()
             .is_none()
     );
-    assert!(plugin.get_book(&config, first).unwrap().is_none());
     assert!(
         plugin
-            .get_book(&config, "wenku-asin:series:B000000001")
+            .get_book(common::state(), &config, first)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        plugin
+            .get_book(common::state(), &config, "wenku-asin:series:B000000001")
             .unwrap()
             .is_none()
     );
     assert_eq!(requests.lock().unwrap().len(), before); // No Wenku metadata lookups.
-    let content = plugin.get_content(&config, first).unwrap().unwrap();
+    let content = plugin
+        .get_content(common::state(), &config, first)
+        .unwrap()
+        .unwrap();
     assert_eq!(content.id, first);
     assert!(matches!(
         content.mode,
         mandara_core::model::ContentMode::File
     ));
-    let file = plugin.get_book_file(&config, first).unwrap().unwrap();
+    let file = plugin
+        .get_book_file(common::state(), &config, first)
+        .unwrap()
+        .unwrap();
     assert_eq!(file.filename, "第一卷.txt");
     assert!(file.mime.starts_with("text/plain"));
     assert_eq!(file.bytes, "第一章 开端\n正文".as_bytes());
     assert_eq!(
         plugin
-            .get_book_file(&config, "wenku-volume:series:第二卷.epub")
+            .get_book_file(common::state(), &config, "wenku-volume:series:第二卷.epub")
             .unwrap()
             .unwrap()
             .mime,
@@ -240,23 +253,28 @@ fn compiled_guest_adapts_web_chapters_and_wenku_downloads() {
     );
     assert!(
         plugin
-            .get_content(&config, "wenku-volume:series:未译.txt")
+            .get_content(common::state(), &config, "wenku-volume:series:未译.txt")
             .unwrap()
             .is_none()
     );
     assert!(
         plugin
-            .get_content(&config, "wenku-volume:series:missing.txt")
+            .get_content(common::state(), &config, "wenku-volume:series:missing.txt")
             .unwrap()
             .is_none()
     );
     let mut fixed = config.clone();
     fixed[2] = ConfigValue::EnumIndex(4);
-    assert!(plugin.get_content(&fixed, first).unwrap().is_none());
+    assert!(
+        plugin
+            .get_content(common::state(), &fixed, first)
+            .unwrap()
+            .is_none()
+    );
     fixed[2] = ConfigValue::EnumIndex(2);
     assert!(
         plugin
-            .get_chapter(&fixed, "web:syosetu:n1", 0)
+            .get_chapter(common::state(), &fixed, "web:syosetu:n1", 0)
             .unwrap()
             .is_none()
     );
@@ -265,7 +283,7 @@ fn compiled_guest_adapts_web_chapters_and_wenku_downloads() {
     empty_providers[1] = ConfigValue::StringList(vec![]);
     assert_eq!(
         plugin
-            .search_books(&empty_providers, "测试", 0, 10)
+            .search_books(common::state(), &empty_providers, "测试", 0, 10)
             .unwrap()
             .items
             .len(),
@@ -288,12 +306,17 @@ fn compiled_guest_adapts_web_chapters_and_wenku_downloads() {
         let before = requests.lock().unwrap().len();
         assert!(
             plugin
-                .search_books(&invalid, "测试", 95, 10)
+                .search_books(common::state(), &invalid, "测试", 95, 10)
                 .unwrap()
                 .items
                 .is_empty()
         );
-        assert!(plugin.get_book_file(&invalid, first).unwrap().is_none());
+        assert!(
+            plugin
+                .get_book_file(common::state(), &invalid, first)
+                .unwrap()
+                .is_none()
+        );
         let requests = requests.lock().unwrap();
         assert_eq!(requests.len() - before, 2);
         assert!(
@@ -306,7 +329,12 @@ fn compiled_guest_adapts_web_chapters_and_wenku_downloads() {
         let mut incomplete = config.clone();
         incomplete[field] = ConfigValue::Text(String::new());
         let before = requests.lock().unwrap().len();
-        assert!(plugin.get_content(&incomplete, first).unwrap().is_none());
+        assert!(
+            plugin
+                .get_content(common::state(), &incomplete, first)
+                .unwrap()
+                .is_none()
+        );
         let recorded = requests.lock().unwrap();
         assert_eq!(recorded.len(), before + 1);
         assert_eq!(recorded[before].0, "/api/v1/auth/login"); // Let upstream reject it.
@@ -329,7 +357,12 @@ fn compiled_guest_adapts_web_chapters_and_wenku_downloads() {
     anonymous[3] = ConfigValue::Text(String::new());
     anonymous[4] = ConfigValue::Text(String::new());
     let before = anonymous_requests.lock().unwrap().len();
-    assert!(plugin.get_content(&anonymous, first).unwrap().is_some());
+    assert!(
+        plugin
+            .get_content(common::state(), &anonymous, first)
+            .unwrap()
+            .is_some()
+    );
     let recorded = anonymous_requests.lock().unwrap();
     assert_eq!(recorded.len(), before + 1);
     assert_eq!(recorded[before].0, "/api/wenku/series");
@@ -357,7 +390,7 @@ fn live_guest_reads_chapters_and_volume_id_content() {
         Arc::new(NoImages),
     )
     .unwrap();
-    let schema = plugin.config_schema().unwrap();
+    let schema = plugin.config_schema(common::state()).unwrap();
     let username = std::env::var("NOVELIA_TEST_USERNAME").unwrap_or_default();
     let password = std::env::var("NOVELIA_TEST_PASSWORD").unwrap_or_default();
     let config = values_from_config(
@@ -371,14 +404,24 @@ fn live_guest_reads_chapters_and_volume_id_content() {
     let id = "wenku-volume:6806f70f2d549f092c9ae862:筺底のエルピス5　－迷い子たちの一歩－.epub";
     assert!(
         plugin
-            .get_series(&config, "wenku:6806f70f2d549f092c9ae862")
+            .get_series(common::state(), &config, "wenku:6806f70f2d549f092c9ae862")
             .unwrap()
             .is_none()
     );
-    assert!(plugin.get_book(&config, id).unwrap().is_none());
-    assert!(plugin.get_content(&config, id).unwrap().is_some());
+    assert!(
+        plugin
+            .get_book(common::state(), &config, id)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        plugin
+            .get_content(common::state(), &config, id)
+            .unwrap()
+            .is_some()
+    );
     let file = plugin
-        .get_book_file(&config, id)
+        .get_book_file(common::state(), &config, id)
         .unwrap()
         .expect("volumeId resolves to a real EPUB download");
     assert_eq!(file.mime, "application/epub+zip");
@@ -386,17 +429,22 @@ fn live_guest_reads_chapters_and_volume_id_content() {
     if !username.is_empty() || !password.is_empty() {
         assert!(
             !plugin
-                .search_books(&config, "无职转生", 0, 2)
+                .search_books(common::state(), &config, "无职转生", 0, 2)
                 .unwrap()
                 .items
                 .is_empty()
         );
     }
     let web_id = "web:syosetu:n9669bk";
-    assert!(plugin.get_book(&config, web_id).unwrap().is_some());
+    assert!(
+        plugin
+            .get_book(common::state(), &config, web_id)
+            .unwrap()
+            .is_some()
+    );
     assert!(
         !plugin
-            .get_content(&config, web_id)
+            .get_content(common::state(), &config, web_id)
             .unwrap()
             .unwrap()
             .chapters
@@ -404,7 +452,7 @@ fn live_guest_reads_chapters_and_volume_id_content() {
     );
     assert!(
         !plugin
-            .get_chapter(&config, web_id, 0)
+            .get_chapter(common::state(), &config, web_id, 0)
             .unwrap()
             .unwrap()
             .content

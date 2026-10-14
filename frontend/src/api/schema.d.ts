@@ -157,9 +157,10 @@ export interface paths {
         put?: never;
         /**
          * Register a plugin instance (admin only). `wasm_file` must be a
-         *     basename returned by GET /api/plugins/wasm-files; `config` is
-         *     validated against the plugin's config schema (defaults fill the
-         *     rest). An explicit `id` becomes the source id used in
+         *     basename returned by GET /api/plugins/wasm-files. Registration creates
+         *     an instance with empty configuration; configuration is entered and
+         *     validated separately through PUT /api/plugins/{id}/config.
+         *     An explicit `id` becomes the source id used in
          *     `book_files.source`; metadata and content sources are selected by
          *     the user, not linked by plugin entries. A declare-capable
          *     instance is synced right away.
@@ -1519,8 +1520,6 @@ export interface operations {
                     /** @description Explicit instance id (default: generated uuid) */
                     id?: string;
                     wasm_file: string;
-                    /** @description Config values keyed by schema field keys */
-                    config?: Record<string, never>;
                 };
             };
         };

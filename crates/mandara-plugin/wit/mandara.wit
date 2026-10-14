@@ -1,4 +1,4 @@
-// Plugin protocol v13: content declarations include loading and chapter information.
+// Plugin protocol v13: content declarations and instance-scoped persistent state.
 // Plugins adapt upstream data and define opaque, stable IDs.
 // Metadata/content source selection belongs exclusively to the host.
 
@@ -154,6 +154,18 @@ interface store {
     store-image: func(bytes: list<u8>, mime: string) -> string;
 }
 
+/// Persistent state scoped by the host to the calling plugin instance.
+/// Values survive calls and restarts until overwritten or deleted; no TTL
+/// or versions. Operations are individually atomic, not read/modify/write.
+interface state {
+    /// Missing keys return none; an empty byte buffer is a stored value.
+    get: func(key: string) -> result<option<list<u8>>, string>;
+    /// Replace the entire value. Concurrent writes are last-writer-wins.
+    set: func(key: string, value: list<u8>) -> result<_, string>;
+    /// Return true only when a stored key was removed.
+    delete: func(key: string) -> result<bool, string>;
+}
+
 /// Configuration channel.
 ///
 /// The host renders an admin form from `config-schema`, validates submitted
@@ -267,10 +279,12 @@ interface http {
 /// content) for books. The server registers *instances* of a plugin (one
 /// wasm file can back several instances with different configurations),
 /// validates configuration against `config-schema`, and materializes
-/// books/chapters into the central library.
+/// books/chapters into the central library. Guest memory is per-call;
+/// the state import provides durable, instance-scoped storage.
 world mandara-plugin {
     import types;
     import store;
+    import state;
     import config;
     import http;
 
@@ -280,7 +294,7 @@ world mandara-plugin {
     use types.{book-entry, content-mode, chapter, declared-chapter, declared-content, declared-book, search-result, book-file, source-info, series-entry, series-result, catalog-entry};
     use config.{config-field, config-value};
 
-    /// Human-readable name of this plugin (same for all instances).
+    /// Human-readable plugin name, read in the registered instance context.
     export name: func() -> string;
 
     /// How users acquire books from this plugin (interaction kind +

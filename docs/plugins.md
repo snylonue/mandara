@@ -2,8 +2,9 @@
 
 Mandara's wasm plugin system lets users provide custom book and metadata
 sources. Plugins run as **WebAssembly components** inside the host sandbox
-(wasmtime): the only way they touch the outside world is the host's
-`http.fetch` import — plain network access with timeout/size caps.
+(wasmtime): network access is available only through the host's
+`http.fetch` import, with timeout/size caps. Host imports also provide
+instance-scoped persistent state and content-addressed image storage.
 No WASI, no filesystem, no ambient network.
 
 See `docs/plugin-v2-design.md` (design, implemented) and
@@ -15,7 +16,7 @@ the full design. This guide is for plugin authors.
 - **Wasm file** (`data/plugins/*.wasm`) — the compiled plugin code. The
   server compiles every file at startup and exposes it for registration.
 - **Instance** — one registered configuration of a wasm file, with its own
-  id (the source id in `book_files.source`), validated config, and enable
+  id (the source id in `book_files.source`), stored config, and enable
   flag. One wasm file can back several instances (e.g. one "web source"
   plugin pointed at two sites). Instances are registered via the admin UI
   or `POST /api/plugins/instances`; instance ids default to a uuid, or an
@@ -23,13 +24,81 @@ the full design. This guide is for plugin authors.
   plugins).
 - **Capabilities** — `capabilities()` declares which catalog patterns the
   plugin implements (see below). The host keys all policy off this list.
-- **Statelessness** — a fresh store per call; config is injected at the
-  start of every call via `config::configure()`. Never keep state in the
-  guest (no caching either — the central DB is the cache).
+- **Guest memory** — a fresh store per call; config is injected at the
+  start of every call via `config::configure()`. Globals do not survive
+  calls. Use the instance-scoped `state` import for durable plugin data;
+  materialized books and chapter bodies remain the host library cache.
+
+## Persistent plugin state
+
+The state import extends protocol v0.13.0 without changing existing exports:
+
+```wit
+interface state {
+    get: func(key: string) -> result<option<list<u8>>, string>;
+    set: func(key: string, value: list<u8>) -> result<_, string>;
+    delete: func(key: string) -> result<bool, string>;
+}
+```
+
+The host chooses the namespace from the registered instance ID, not the
+Wasm filename or configuration. Instances sharing a Wasm file cannot read
+one another's data. SQLite keeps values across calls, server restarts,
+configuration changes, disabling/re-enabling an instance, and replacement
+of its Wasm file. Deleting the instance deletes all its state; writes from
+still-running calls cannot recreate state for a deleted instance.
+
+- Missing keys return `Ok(None)`; an empty byte buffer is `Ok(Some(vec![]))`.
+- `set` replaces the whole value; `delete` returns whether the key existed.
+- Each operation is atomic. A successful write persists even if the rest
+  of that plugin call later fails. Concurrent writes are last-writer-wins;
+  `get` followed by `set` is **not** an atomic read/modify/write operation.
+- No TTL, revisions, CAS, or automatic invalidation. Plugins choose their
+  own keys and serialization and explicitly overwrite/delete stale data.
+- Keys are arbitrary strings, including empty strings. The server's SQLite
+  `StateStore` limits values to 256 KiB, and each instance to 4096 keys and
+  16 MiB of key + value bytes. Storage implementations enforce their own
+  quotas; the Wasm host does not impose a value size limit.
+  A failed or over-quota write preserves the previous value.
+- Validation, quota, and storage errors are `Err(string)`, not guest traps.
+  Every export, including `name`, `config-schema`, `capabilities`, and
+  `source-info`, runs with the registered instance's state store. Loading a
+  Wasm file only compiles it and does not execute guest functions.
+
+Rust guest example (choose serialization appropriate for the data):
+
+```rust
+use mandara::plugin::state;
+
+fn cached_index(key: &str, fetch: impl FnOnce() -> Result<Vec<u8>, String>)
+    -> Result<Vec<u8>, String>
+{
+    if let Some(bytes) = state::get(key)? {
+        return Ok(bytes);
+    }
+    let bytes = fetch()?;
+    state::set(key, &bytes)?;
+    Ok(bytes)
+}
+
+// Explicit invalidation:
+// state::delete("chapter-index:123")?;
+```
+
+Existing v0.13.0 components remain compatible without a rebuild. Guests
+that use the new state import must be rebuilt with `./scripts/build-plugins.sh`;
+rebuilding does not deploy them to `data/plugins/` automatically.
 
 ## Lifecycle
 
-- Startup: wasm files compiled; instances loaded from `plugin_instances`.
+- Startup: wasm files are compiled without executing plugin code. Existing
+  instances are restored from `plugin_instances`; plugin information is read
+  only in an instance context, with its own state store.
+- Registration only selects a Wasm file and creates an instance (with an
+  optional explicit ID). Configuration starts as `{}`. The UI then reads
+  the instance's configuration schema; values are validated when saved.
+  Unsaved fields use schema defaults during calls, without rejecting
+  missing required fields at registration.
 - `declare`-capable instances are **fully synced** at startup and on
   `POST /api/plugins/sync` (metadata + title rows; eager bodies for
   every supplied `content`, including empty strings).

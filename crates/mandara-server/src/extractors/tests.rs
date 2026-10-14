@@ -63,10 +63,7 @@ impl Fixture {
         };
         let plugins = Arc::new(PluginService::new(diesel_db.clone(), wasm));
         if load_plugin {
-            plugins
-                .register("fixture", "fixture.wasm", json!({}))
-                .await
-                .unwrap();
+            plugins.register("fixture", "fixture.wasm").await.unwrap();
         }
         let library = Library::new(diesel_db.clone(), plugins, dir.join("files"));
         let cfg = Config {

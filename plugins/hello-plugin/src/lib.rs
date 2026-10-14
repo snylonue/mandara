@@ -16,7 +16,8 @@
 //! This demo plugin is *data-driven* (design R1): its catalog is static
 //! data returned by `declare`, its behavior is configured through
 //! `config-schema` values injected by the host on every call (R3), and it
-//! stays stateless (R2) — there is no mutable state anywhere.
+//! keeps no cross-call guest memory (R2). An undeclared state API probe
+//! demonstrates explicit persistence through the host for integration tests.
 
 wit_bindgen::generate!({
     world: "mandara-plugin",
@@ -75,7 +76,13 @@ struct HelloPlugin;
 
 impl Guest for HelloPlugin {
     fn name() -> String {
-        "hello".to_string()
+        // Metadata probes demonstrate that these calls also have instance state.
+        mandara::plugin::state::set("demo:metadata-called", &[])
+            .expect("metadata state is available");
+        mandara::plugin::state::get("demo:name")
+            .expect("metadata state is available")
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .unwrap_or_else(|| "hello".into())
     }
 
     fn source_info() -> SourceInfo {
@@ -92,7 +99,7 @@ impl Guest for HelloPlugin {
     /// Schema of per-instance configuration. The host renders this schema
     /// as an admin form and injects the values at the start of every call.
     fn config_schema() -> Vec<ConfigField> {
-        vec![
+        let mut fields = vec![
             ConfigField {
                 key: "site-name".into(),
                 label: "站点名称".into(),
@@ -136,7 +143,14 @@ impl Guest for HelloPlugin {
                 required: false,
                 hint: Some("逗号分隔，会附在书目描述中".into()),
             },
-        ]
+        ];
+        if mandara::plugin::state::get("demo:no-default")
+            .expect("metadata state is available")
+            .is_some()
+        {
+            fields[0].default = None;
+        }
+        fields
     }
 
     fn capabilities() -> Vec<String> {
@@ -254,6 +268,31 @@ impl Guest for HelloPlugin {
     }
 
     fn get_chapter(book_id: String, index: u32) -> Option<Chapter> {
+        // An undeclared probe used by host tests and state API examples.
+        if let Some(key) = book_id.strip_prefix("state:") {
+            let content = match index {
+                0 => format!("{:?}", mandara::plugin::state::get(key)),
+                1 => format!(
+                    "{:?}",
+                    mandara::plugin::state::set(
+                        key,
+                        config_string("site-name", "Mandara 示例库").as_bytes(),
+                    )
+                ),
+                2 => format!("{:?}", mandara::plugin::state::delete(key)),
+                3 => format!(
+                    "{:?}",
+                    mandara::plugin::state::set(key, &vec![0; 256 * 1024 + 1])
+                ),
+                4 => format!("{:?}", mandara::plugin::state::set(key, &[])),
+                _ => return None,
+            };
+            return Some(Chapter {
+                title: "状态接口示例".into(),
+                content,
+                format: "text".into(),
+            });
+        }
         if config_bool("spin", false) {
             // Deliberate infinite loop: the host's epoch deadline must
             // trap this call ("Plugin timeout").
