@@ -301,7 +301,6 @@ pub async fn share_book(
         .get_book(&file.book_id)
         .await?
         .ok_or_else(|| ApiError::not_found("book"))?;
-    st.library.ensure_titles(&file).await?;
     let chapters = st.library.chapter_titles(&file.id).await?;
     let toc = st.library.file_toc(&file.id).await?;
     Ok(Json(ShareBookResponse {

@@ -12,7 +12,7 @@ import type { Chapter, ChapterMeta, Position, TocNode } from "../types";
 interface ReaderProps {
   title: string;
   chapters: ChapterMeta[];
-  /** Fetch a chapter by index (can be async, e.g. plugins materialize lazily). */
+  /** Read a stored chapter by index; the request does not fetch from its source. */
   loadChapter: (idx: number) => Promise<Chapter>;
   /** Initial position to restore. */
   initialPosition?: Position;

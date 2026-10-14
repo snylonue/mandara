@@ -249,7 +249,7 @@ impl Library {
         &self.plugins
     }
 
-    /// Use the same content loader for acquisition and foreground reads.
+    /// Download missing bodies during acquisition or explicit refresh only.
     fn queue_download(&self, file: &FileMeta) {
         let library = self.clone();
         let file = file.clone();
@@ -268,7 +268,7 @@ impl Library {
                 .acquire()
                 .await
                 .expect("download limiter stays open");
-            if let Err(error) = self.get_chapter(file, idx).await {
+            if let Err(error) = self.download_chapter(file, idx).await {
                 warn!(file = %file.id, idx, %error, "chapter download failed");
             }
         }
@@ -1642,7 +1642,7 @@ impl Library {
             if !file.content_mode.has_chapters() {
                 continue;
             }
-            file.chapter_count = self.ensure_titles_inner(&file).await?;
+            file.chapter_count = self.refresh_titles(&file).await?;
             self.queue_download(&file);
             info!(book = %book_id, source = %file.source, "file chapter titles refreshed from content source");
         }
@@ -2130,7 +2130,7 @@ impl Library {
             .execute(&mut self.diesel_db.get().await?)
             .await?;
         let mut updated = file.clone();
-        updated.chapter_count = self.ensure_titles_inner(file).await?;
+        updated.chapter_count = self.refresh_titles(file).await?;
         self.queue_download(&updated);
         info!(file = %id, source = %file.source, "file chapters queued for re-materialization");
         Ok(updated)
@@ -2215,9 +2215,15 @@ impl Library {
             .collect())
     }
 
-    /// Read a cached chapter, fetching a pending body on demand if the
-    /// background download has not reached it yet.
+    /// Read only persisted content; never contact the source or wait for a download.
     pub async fn get_chapter(&self, file: &FileMeta, idx: u32) -> Result<Chapter, ApiError> {
+        self.cached_chapter(&file.id, idx)
+            .await?
+            .ok_or_else(|| ApiError::not_found("stored chapter"))
+    }
+
+    /// Populate content for acquisition and explicit refresh jobs.
+    async fn download_chapter(&self, file: &FileMeta, idx: u32) -> Result<Chapter, ApiError> {
         if let Some(chapter) = self.cached_chapter(&file.id, idx).await? {
             return Ok(chapter);
         }
@@ -2375,7 +2381,7 @@ impl Library {
         }
         let (source_id, external_id) = (file.source.as_str(), file.external_id.as_str());
 
-        // Chapter mode (background or foreground pulls from the content source).
+        // Chapter mode (acquisition or explicit refresh pulls from the content source).
         // Plugin indices are book-local. Plugin text is
         // normalized to canonical HTML at the ingest boundary (including
         // the illustration conventions; see mandara_formats::htmlize).
@@ -2454,32 +2460,8 @@ impl Library {
         Ok(())
     }
 
-    /// Ensure the chapter title rows of a plugin file exist (so that
-    /// `chapter_titles` works for books never read yet). Titles come from
-    /// the file's *content* instance.
-    pub async fn ensure_titles(&self, file: &FileMeta) -> Result<(), ApiError> {
-        // Reading a complete stored TOC must not depend on provider availability.
-        // Count only the expected range: an extra stale row cannot hide a gap.
-        if file.chapter_count > 0 {
-            let count: i64 = schema::chapters::table
-                .filter(
-                    schema::chapters::file_id
-                        .eq(&file.id)
-                        .and(schema::chapters::idx.ge(0))
-                        .and(schema::chapters::idx.lt(i64::from(file.chapter_count))),
-                )
-                .count()
-                .get_result(&mut self.diesel_db.get().await?)
-                .await?;
-            if count == i64::from(file.chapter_count) {
-                return Ok(());
-            }
-        }
-        // Explicit re-materialization calls the inner loader to refresh titles.
-        self.ensure_titles_inner(file).await.map(|_| ())
-    }
-
-    async fn ensure_titles_inner(&self, file: &FileMeta) -> Result<u32, ApiError> {
+    /// Refresh stored titles from the content source after an explicit user action.
+    async fn refresh_titles(&self, file: &FileMeta) -> Result<u32, ApiError> {
         let (source_id, external_id) = (file.source.as_str(), file.external_id.as_str());
         if !file.content_mode.has_chapters() {
             return Ok(file.chapter_count);
@@ -2910,92 +2892,6 @@ mod tests {
             .unwrap()
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn stored_titles_allow_reading_without_the_provider() {
-        let (library, mut file, dir) = download_fixture().await;
-        let titles = library.chapter_titles(&file.id).await.unwrap();
-        assert!(!titles.is_empty());
-        let chapter = library.get_chapter(&file, 0).await.unwrap();
-        // A complete directory remains usable with only one cached body.
-        diesel::update(
-            schema::chapters::table.filter(
-                schema::chapters::file_id
-                    .eq(&file.id)
-                    .and(schema::chapters::idx.ne(0)),
-            ),
-        )
-        .set(schema::chapters::content.eq(None::<String>))
-        .execute(&mut library.diesel_db.get().await.unwrap())
-        .await
-        .unwrap();
-        file.source = "unavailable".into();
-        library.ensure_titles(&file).await.unwrap();
-        assert_eq!(
-            serde_json::to_value(library.chapter_titles(&file.id).await.unwrap()).unwrap(),
-            serde_json::to_value(titles).unwrap(),
-        );
-        assert_eq!(
-            serde_json::to_value(library.get_chapter(&file, 0).await.unwrap()).unwrap(),
-            serde_json::to_value(chapter).unwrap(),
-        );
-        library.delete_file(&file.id).await.unwrap();
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn incomplete_stored_titles_are_fetched_without_overwriting_bodies() {
-        let (library, file, dir) = download_fixture().await;
-        assert!(file.chapter_count > 1);
-        let chapter = library.get_chapter(&file, 0).await.unwrap();
-        diesel::delete(schema::chapters::table.find((&file.id, 1_i64)))
-            .execute(&mut library.diesel_db.get().await.unwrap())
-            .await
-            .unwrap();
-        // Keep the total row count unchanged, but leave a gap in the real TOC.
-        library
-            .upsert_placeholder_titles(
-                &file.id,
-                &vec!["stale".into(); file.chapter_count as usize + 1],
-            )
-            .await
-            .unwrap();
-        diesel::delete(schema::chapters::table.find((&file.id, 1_i64)))
-            .execute(&mut library.diesel_db.get().await.unwrap())
-            .await
-            .unwrap();
-        let mut unavailable = file.clone();
-        unavailable.source = "unavailable".into();
-        assert!(library.ensure_titles(&unavailable).await.is_err());
-        library.ensure_titles(&file).await.unwrap();
-        assert_eq!(
-            library.chapter_titles(&file.id).await.unwrap().len(),
-            file.chapter_count as usize
-        );
-        assert_eq!(
-            serde_json::to_value(library.get_chapter(&file, 0).await.unwrap()).unwrap(),
-            serde_json::to_value(chapter).unwrap(),
-        );
-        library.delete_file(&file.id).await.unwrap();
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn missing_stored_titles_are_fetched_on_first_read() {
-        let (library, file, dir) = download_fixture().await;
-        diesel::delete(schema::chapters::table.filter(schema::chapters::file_id.eq(&file.id)))
-            .execute(&mut library.diesel_db.get().await.unwrap())
-            .await
-            .unwrap();
-        library.ensure_titles(&file).await.unwrap();
-        assert_eq!(
-            library.chapter_titles(&file.id).await.unwrap().len(),
-            file.chapter_count as usize
-        );
-        assert_eq!(cached_count(&library, &file).await, 0);
-        library.delete_file(&file.id).await.unwrap();
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
     #[tokio::test]
     async fn content_attachment_does_not_require_book_metadata_from_its_provider() {
         let (library, fixture, dir) = download_fixture().await;
@@ -3037,6 +2933,8 @@ mod tests {
         assert_eq!(book.title, original.title);
         assert_eq!(content.external_id, "hello-content-2");
         assert_eq!(content.content_mode, ContentMode::Chapters);
+        // Acquisition persists the directory before returning, independently of body downloads.
+        assert_eq!(library.chapter_titles(&content.id).await.unwrap().len(), 3);
         await_download(&library, &content.id).await;
         assert_eq!(library.get_chapter(&content, 2).await.unwrap().content, "");
         library.delete_file(&content.id).await.unwrap();
@@ -3046,20 +2944,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reads_use_the_supplied_content_form_without_reloading_metadata() {
+    async fn downloads_use_the_supplied_content_form_without_reloading_metadata() {
         let (library, mut file, dir) = download_fixture().await;
         assert_eq!(file.content_mode, ContentMode::Chapters);
         file.content_mode = ContentMode::File;
         // The fixture offers chapters but no book file: no host fallback or requery.
         assert!(matches!(
-            library.get_chapter(&file, 0).await,
+            library.download_chapter(&file, 0).await,
             Err(ApiError::NotFound(_))
         ));
         file.content_mode = ContentMode::Chapters;
         file.chapter_count = 0;
         assert!(
             library
-                .get_chapter(&file, 1)
+                .download_chapter(&file, 1)
                 .await
                 .unwrap()
                 .content
@@ -3070,7 +2968,7 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn uploaded_files_use_the_same_materialization_path() {
         let (library, fixture, dir) = download_fixture().await;
         diesel::insert_into(schema::users::table)
@@ -3098,11 +2996,20 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(file.content_mode, ContentMode::File);
+        assert_eq!(library.chapter_titles(&file.id).await.unwrap().len(), 2);
+        assert_eq!(library.get_chapter(&file, 0).await.unwrap().content, "");
         diesel::update(schema::chapters::table.filter(schema::chapters::file_id.eq(&file.id)))
             .set(schema::chapters::content.eq(None::<String>))
             .execute(&mut library.diesel_db.get().await.unwrap())
             .await
             .unwrap();
+        assert!(matches!(
+            library.get_chapter(&file, 0).await,
+            Err(ApiError::NotFound(_))
+        ));
+        // Even retained local originals are reparsed only by an explicit refresh.
+        library.rematerialize_file(&file).await.unwrap();
+        await_download(&library, &file.id).await;
         assert_eq!(library.get_chapter(&file, 0).await.unwrap().content, "");
         assert!(
             library
@@ -3298,7 +3205,7 @@ mod tests {
             .execute(&mut library.diesel_db.get().await.unwrap())
             .await
             .unwrap();
-        library.ensure_titles(&file).await.unwrap();
+        library.refresh_titles(&file).await.unwrap();
         assert!(library.cached_chapter(&file.id, 2).await.unwrap().is_none());
         assert_eq!(
             library
@@ -3339,10 +3246,14 @@ mod tests {
         assert!(start);
         let (waiting, start) = library.downloads.join(key.clone());
         assert!(!start);
+        assert!(matches!(
+            library.get_chapter(&file, 0).await,
+            Err(ApiError::NotFound(_))
+        ));
         let mut reader = {
             let library = library.clone();
             let file = file.clone();
-            tokio::spawn(async move { library.get_chapter(&file, 0).await })
+            tokio::spawn(async move { library.download_chapter(&file, 0).await })
         };
         assert!(
             tokio::time::timeout(std::time::Duration::from_millis(100), &mut reader)
@@ -3351,7 +3262,7 @@ mod tests {
         );
         tokio::time::timeout(std::time::Duration::from_secs(2), async {
             // A different missing chapter must not wait for chapter zero.
-            assert_eq!(library.get_chapter(&file, 1).await.unwrap().idx, 1);
+            assert_eq!(library.download_chapter(&file, 1).await.unwrap().idx, 1);
             diesel::update(schema::chapters::table.find((&file.id, 0_i64)))
                 .set(schema::chapters::content.eq("<p>已缓存</p>"))
                 .execute(&mut library.diesel_db.get().await.unwrap())

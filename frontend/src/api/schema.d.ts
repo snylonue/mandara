@@ -571,9 +571,9 @@ export interface paths {
         };
         /**
          * File detail with chapter titles and its book metadata
-         * @description Complete stored chapter titles are returned without contacting the content
-         *     source. Missing or incomplete titles are materialized on demand. Refreshing
-         *     a complete directory requires explicit re-materialization.
+         * @description Returns only persisted chapter titles and TOC, even when empty or incomplete.
+         *     Reading never contacts the content source or starts a download. Titles are
+         *     saved at acquisition; updating them requires an explicit user refresh.
          */
         get: operations["getFile"];
         put?: never;
@@ -595,9 +595,10 @@ export interface paths {
         };
         /**
          * Fetch one chapter's content
-         * @description Reads downloaded chapter content. If the background download has
-         *     not reached this chapter yet, fetches it on demand. Concurrent
-         *     background and foreground requests share the same cached result.
+         * @description Returns only persisted chapter content, without fetching from the source
+         *     or waiting for background downloads. Acquisition and explicit user refresh
+         *     download content separately. Returns 404 if a row or its body is not yet
+         *     stored, including pending or failed downloads. A stored empty body is valid.
          */
         get: operations["getChapter"];
         put?: never;
@@ -773,7 +774,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Anonymous read: book, file and chapter titles */
+        /**
+         * Anonymous read: book, file and chapter titles
+         * @description Returns only persisted chapter titles and TOC, even when empty or incomplete.
+         *     This anonymous read never contacts the content source or starts a download.
+         */
         get: operations["shareBook"];
         put?: never;
         post?: never;
@@ -790,7 +795,12 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Anonymous read: one chapter */
+        /**
+         * Anonymous read: one chapter
+         * @description Returns only persisted chapter content, without fetching from its source or
+         *     waiting for a download. Returns 404 if the row or its body is not stored.
+         *     A stored empty body is valid. Anonymous reads cannot trigger a refresh.
+         */
         get: operations["shareChapter"];
         put?: never;
         post?: never;
@@ -2322,7 +2332,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description File detail (plugin chapter titles materialized lazily) */
+            /** @description File detail with persisted chapter titles */
             200: {
                 headers: {
                     [name: string]: unknown;

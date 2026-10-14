@@ -454,6 +454,96 @@ async fn protected_routes_authenticate_before_parsing_request_data() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn chapter_detail_endpoints_return_only_stored_directories() {
+    let fixture = Fixture::with_plugin(true).await;
+    fixture.sql("INSERT INTO books (id, title) VALUES ('book', '示例');
+        INSERT INTO book_files (id, book_id, source, external_id, format, visibility, owner_id, content_mode, chapter_count)
+        VALUES ('stored', 'book', 'fixture', 'hello-content-1', 'plugin', 'public', 'user', 'chapters', 2);
+        INSERT INTO chapters (file_id, idx, title, content) VALUES ('stored', 0, '保存的目录标题', NULL);
+        INSERT INTO shares (token, kind, file_id, created_by) VALUES ('share', 'book', 'stored', 'user');").await;
+    let token = fixture.token("user", Role::User);
+    for expected in [
+        json!([{"idx":0,"title":"保存的目录标题","linear":true}]),
+        json!([]),
+    ] {
+        for (uri, auth) in [
+            ("/api/files/stored", Some(token.as_str())),
+            ("/api/shares/share/book", None),
+        ] {
+            let response = request(fixture.app(), "GET", uri, auth, "").await;
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = response_json(response).await;
+            assert_eq!(body["chapters"], expected);
+            assert_eq!(body["file"]["chapter_count"], 2);
+            assert_eq!(
+                body["toc"].as_array().unwrap().len(),
+                expected.as_array().unwrap().len()
+            );
+        }
+        fixture
+            .sql("DELETE FROM chapters WHERE file_id='stored';")
+            .await;
+    }
+    // An unavailable source must not block either read endpoint.
+    fixture
+        .sql("UPDATE book_files SET source='unavailable' WHERE id='stored';")
+        .await;
+    for (uri, auth) in [
+        ("/api/files/stored", Some(token.as_str())),
+        ("/api/shares/share/book", None),
+    ] {
+        let response = request(fixture.app(), "GET", uri, auth, "").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response_json(response).await["chapters"], json!([]));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn chapter_read_endpoints_do_not_download_missing_bodies() {
+    let fixture = Fixture::with_plugin(true).await;
+    fixture.sql("INSERT INTO books (id, title) VALUES ('book', '示例');
+        INSERT INTO book_files (id, book_id, source, external_id, format, visibility, owner_id, content_mode, chapter_count)
+        VALUES ('stored', 'book', 'fixture', 'hello-content-1', 'plugin', 'public', 'user', 'chapters', 3);
+        INSERT INTO chapters (file_id, idx, title, content) VALUES
+            ('stored', 0, '保存的正文标题', '<p>保存的正文</p>'),
+            ('stored', 1, '等待下载', NULL), ('stored', 2, '空章', '');
+        INSERT INTO shares (token, kind, file_id, created_by) VALUES ('share', 'book', 'stored', 'user');").await;
+    let token = fixture.token("user", Role::User);
+    for (prefix, auth) in [
+        ("/api/files/stored/chapters", Some(token.as_str())),
+        ("/api/shares/share/chapters", None),
+    ] {
+        for (idx, content) in [(0, "<p>保存的正文</p>"), (2, "")] {
+            let response =
+                request(fixture.app(), "GET", &format!("{prefix}/{idx}"), auth, "").await;
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(response_json(response).await["content"], content);
+        }
+        // The available plugin can supply chapter 1, but a GET must not ask it.
+        for idx in [1, 99] {
+            let response =
+                request(fixture.app(), "GET", &format!("{prefix}/{idx}"), auth, "").await;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            assert_eq!(
+                response_json(response).await,
+                json!({"error":"stored chapter"})
+            );
+        }
+    }
+    let file = fixture
+        .state
+        .library
+        .get_file("stored")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        fixture.state.library.get_chapter(&file, 1).await,
+        Err(crate::error::ApiError::NotFound(_))
+    ));
+}
+
 #[tokio::test]
 async fn guards_preserve_bodies_and_do_not_run_denied_handlers() {
     let fixture = Fixture::new().await;

@@ -29,7 +29,6 @@ pub async fn get_file(
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
     let file = load_visible_file(&st, &user, &id).await?;
-    st.library.ensure_titles(&file).await?;
     let chapters = st.library.chapter_titles(&file.id).await?;
     let book = st
         .library
