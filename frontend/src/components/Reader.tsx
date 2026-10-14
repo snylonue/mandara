@@ -47,6 +47,8 @@ export function Reader({
   );
   const [chapter, setChapter] = useState<Chapter | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [fraction, setFraction] = useState(
     initialPosition?.in_chapter && "fraction" in initialPosition.in_chapter
       ? initialPosition.in_chapter.fraction
@@ -78,6 +80,7 @@ export function Reader({
     let cancelled = false;
     renderTarget.current = { fragment: frag, fraction };
     setChapter(null);
+    setLoadError(null);
     function display(c: Chapter) {
       if (cancelled) return;
       setChapter(c);
@@ -93,11 +96,15 @@ export function Reader({
       void loadChapter(idx).then((c) => {
         loadedRef.current.set(idx, c);
         display(c);
+      }).catch((error: unknown) => {
+        if (cancelled) return;
+        setLoading(false);
+        setLoadError(error instanceof Error ? error.message : t("common.failed"));
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
     return () => { cancelled = true; };
-  }, [idx]);
+  }, [idx, loadAttempt]);
 
   function restoreScroll(frac: number) {
     if (!frac) {
@@ -269,6 +276,12 @@ export function Reader({
           }}
         >
           {loading && <p className="hint">{t("common.loading")}</p>}
+          {loadError !== null && <div>
+            <p className="error" role="alert">{loadError}</p>
+            <button className="btn" onClick={() => setLoadAttempt((attempt) => attempt + 1)}>
+              {t("reader.retryChapter")}
+            </button>
+          </div>}
           {chapter && (isDocument ? <EpubDocument
             ref={epubRef}
             content={chapter.content}

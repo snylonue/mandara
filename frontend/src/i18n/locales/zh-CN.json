@@ -207,6 +207,7 @@
     "seriesTitlePlaceholder": "系列名称"
   },
   "reader": {
+    "retryChapter": "重新加载章节",
     "prev": "上一章",
     "next": "下一章",
     "newSession": "新会话",
