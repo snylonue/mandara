@@ -209,11 +209,18 @@ only means content is unavailable. `declared-content` carries its own ID,
 loading form and optional chapter bodies. A catalog envelope explicitly
 associates metadata and content without requiring their IDs to match. The
 hello plugin demonstrates `hello-1` metadata with `hello-content-1` content.
-The host persists the form at acquisition and never switches to chapters on
-file failure. Rebuild all components with the current WIT.
+Chapter-mode plugins declare the complete chapter directory in `get-content`
+when content is created. The host saves those chapter declarations with the
+content identity and loading form before acquisition returns. Missing bodies
+are downloaded separately in the background; they do not make the directory
+incomplete. For file-mode content, the host parses and saves the directory and
+TOC during creation. Reading uses this saved directory without querying the
+plugin; only an explicit user refresh updates it. The host never switches to
+chapters on file failure. Rebuild all components with the current WIT.
 
 **Declared bodies (v0.10.0).** `declared-chapter.content` is explicitly optional:
-`none` requests lazy loading, while `some("")` supplies a valid empty chapter.
+`none` omits the body for background downloading during acquisition or explicit
+refresh, while `some("")` supplies a valid empty chapter.
 The host normalizes every supplied body and preserves its cache presence even
 when normalization produces an empty string. `chapter.content` returned by
 `get-chapter` remains a required string; a missing chapter is returned as `none`.

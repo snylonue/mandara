@@ -380,9 +380,11 @@ export interface paths {
          * Add a book to the library — the single acquisition flow
          *     (获取书籍 → 添加元数据). The content is either an uploaded
          *     `file`, a plugin book (`plugin_source` + `plugin_book_id`
-         *     without a `file`; the plugin supplies the book file via
-         *     `get-book-file` when available, otherwise chapters materialize
-         *     lazily), or none (`metadata_only`: a bare metadata entry — add
+         *     without a `file`; `get-content` declares the content identity,
+         *     loading form and chapter list. Chapter-mode declarations are saved
+         *     with the content at creation, and missing bodies download in the
+         *     background. File-mode content is parsed and saved at creation),
+         *     or none (`metadata_only`: a bare metadata entry — add
          *     the content later by attaching a file/plugin book to it). The
          *     metadata entry is created automatically (parsed from the file /
          *     the plugin's own entry), taken from a plugin catalog
@@ -571,9 +573,12 @@ export interface paths {
         };
         /**
          * File detail with chapter titles and its book metadata
-         * @description Returns only persisted chapter titles and TOC, even when empty or incomplete.
-         *     Reading never contacts the content source or starts a download. Titles are
-         *     saved at acquisition; updating them requires an explicit user refresh.
+         * @description Returns the chapter directory saved with the content at creation.
+         *     Chapter-mode plugins declare the complete chapter list when content is
+         *     created; the server saves that declaration with the content. For file-mode
+         *     content, chapter titles and TOC are parsed and saved during creation.
+         *     Reading never queries the plugin or starts downloads. Only an explicit
+         *     user refresh updates the directory.
          */
         get: operations["getFile"];
         put?: never;
@@ -776,8 +781,10 @@ export interface paths {
         };
         /**
          * Anonymous read: book, file and chapter titles
-         * @description Returns only persisted chapter titles and TOC, even when empty or incomplete.
-         *     This anonymous read never contacts the content source or starts a download.
+         * @description Returns the same creation-time chapter directory as the file detail endpoint.
+         *     The plugin declares the chapter list when content is created, and the server
+         *     saves it with the content; file-mode directories are parsed at creation.
+         *     This anonymous read never queries the plugin or starts downloads.
          */
         get: operations["shareBook"];
         put?: never;
