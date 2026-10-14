@@ -49,13 +49,9 @@ const DEFAULT_BASE_URL: &str = "https://api.bgm.tv";
 /// Config schema field order — the host injects values in this order.
 const FIELDS: [&str; 2] = ["base-url", "access-token"];
 
-fn values() -> Vec<ConfigValue> {
-    mandara::plugin::config::configure()
-}
-
-fn config_string(key: &str) -> Option<String> {
+fn config_string(config: &[ConfigValue], key: &str) -> Option<String> {
     let idx = FIELDS.iter().position(|k| *k == key).unwrap();
-    match values().get(idx) {
+    match config.get(idx) {
         Some(ConfigValue::Text(s)) if !s.is_empty() => Some(s.clone()),
         _ => None,
     }
@@ -71,6 +67,7 @@ fn log_error(context: &str, url: &str, err: &(impl std::fmt::Display + ?Sized)) 
 /// One `http.fetch`; application statuses come back as `(status, body)` —
 /// only transport-level problems are errors.
 fn http_request(
+    config: &[ConfigValue],
     method: &str,
     url: &str,
     body: Option<Vec<u8>>,
@@ -80,7 +77,7 @@ fn http_request(
         name: "User-Agent".into(),
         value: USER_AGENT.into(),
     }];
-    if let Some(token) = config_string("access-token") {
+    if let Some(token) = config_string(config, "access-token") {
         headers.push(mandara::plugin::http::Header {
             name: "Authorization".into(),
             value: format!("Bearer {token}"),
@@ -258,10 +255,10 @@ fn series_entry(s: &ApiSubject) -> SeriesEntry {
     }
 }
 
-fn fetch_subject(id: u64) -> Option<ApiSubject> {
-    let base = config_string("base-url").unwrap_or_else(|| DEFAULT_BASE_URL.into());
+fn fetch_subject(config: &[ConfigValue], id: u64) -> Option<ApiSubject> {
+    let base = config_string(config, "base-url").unwrap_or_else(|| DEFAULT_BASE_URL.into());
     let url = format!("{base}/v0/subjects/{id}");
-    match http_request("GET", &url, None, false) {
+    match http_request(config, "GET", &url, None, false) {
         Ok((200, body)) => serde_json::from_slice(&body).ok(),
         Ok((status, _)) => {
             if status != 404 {
@@ -276,10 +273,10 @@ fn fetch_subject(id: u64) -> Option<ApiSubject> {
     }
 }
 
-fn fetch_members(id: u64) -> Option<Vec<ApiRelatedSubject>> {
-    let base = config_string("base-url").unwrap_or_else(|| DEFAULT_BASE_URL.into());
+fn fetch_members(config: &[ConfigValue], id: u64) -> Option<Vec<ApiRelatedSubject>> {
+    let base = config_string(config, "base-url").unwrap_or_else(|| DEFAULT_BASE_URL.into());
     let url = format!("{base}/v0/subjects/{id}/subjects");
-    match http_request("GET", &url, None, false) {
+    match http_request(config, "GET", &url, None, false) {
         Ok((200, body)) => serde_json::from_slice(&body)
             .ok()
             .map(|links| linked_books(links, id)),
@@ -549,7 +546,7 @@ impl Guest for BangumiPlugin {
             ConfigField {
                 key: "base-url".into(),
                 label: "API 地址".into(),
-                kind: mandara::plugin::config::ConfigKind::Text,
+                kind: mandara::plugin::types::ConfigKind::Text,
                 default: Some(DEFAULT_BASE_URL.into()),
                 required: true,
                 hint: Some("Bangumi 官方 API 根地址，一般无需修改".into()),
@@ -557,7 +554,7 @@ impl Guest for BangumiPlugin {
             ConfigField {
                 key: "access-token".into(),
                 label: "Access Token".into(),
-                kind: mandara::plugin::config::ConfigKind::Text,
+                kind: mandara::plugin::types::ConfigKind::Text,
                 default: None,
                 required: false,
                 hint: Some(
@@ -574,15 +571,20 @@ impl Guest for BangumiPlugin {
         vec!["search".into(), "lookup".into()]
     }
 
-    fn declare() -> Option<Vec<DeclaredBook>> {
+    fn declare(_config: Vec<ConfigValue>) -> Option<Vec<DeclaredBook>> {
         None // huge source: never enumerated eagerly
     }
 
-    fn search_books(query: String, offset: u32, limit: u32) -> SearchResult {
+    fn search_books(
+        config: Vec<ConfigValue>,
+        query: String,
+        offset: u32,
+        limit: u32,
+    ) -> SearchResult {
         if query.trim().is_empty() {
             return empty_search(); // the search endpoint requires a keyword
         }
-        let base = config_string("base-url").unwrap_or_else(|| DEFAULT_BASE_URL.into());
+        let base = config_string(&config, "base-url").unwrap_or_else(|| DEFAULT_BASE_URL.into());
         let url = format!("{base}/v0/search/subjects?limit={limit}&offset={offset}");
         let body = serde_json::json!({
             "keyword": query,
@@ -590,7 +592,7 @@ impl Guest for BangumiPlugin {
             "filter": { "type": [1] }, // 书籍 subjects only
         });
         let payload = serde_json::to_vec(&body).ok();
-        match http_request("POST", &url, payload, true) {
+        match http_request(&config, "POST", &url, payload, true) {
             Ok((200, resp_body)) => match serde_json::from_slice::<ApiSearchResult>(&resp_body) {
                 Ok(result) => SearchResult {
                     total: result.total,
@@ -626,18 +628,18 @@ impl Guest for BangumiPlugin {
         }
     }
 
-    fn get_book(book_id: String) -> Option<BookEntry> {
+    fn get_book(config: Vec<ConfigValue>, book_id: String) -> Option<BookEntry> {
         if let Some(ids) = book_id.strip_prefix("bgm:volume:") {
             let (parent, member) = ids.split_once(':')?;
             let parent: u64 = parent.parse().ok()?;
             let member: u64 = member.parse().ok()?;
-            let series = fetch_subject(parent)?;
+            let series = fetch_subject(&config, parent)?;
             if !series.is_series() {
                 return None;
             }
-            let members = fetch_members(parent)?;
+            let members = fetch_members(&config, parent)?;
             let pos = members.iter().position(|s| s.id == member)?;
-            let subject = fetch_subject(member)?;
+            let subject = fetch_subject(&config, member)?;
             if subject.is_series() {
                 return None;
             }
@@ -647,23 +649,23 @@ impl Guest for BangumiPlugin {
             book.volume_no = pos as u32 + 1;
             Some(book)
         } else {
-            let subject = fetch_subject(book_id.parse().ok()?)?;
+            let subject = fetch_subject(&config, book_id.parse().ok()?)?;
             (!subject.is_series()).then(|| BookEntry::from(&subject))
         }
     }
 
-    fn get_series(series_id: String) -> Option<SeriesResult> {
+    fn get_series(config: Vec<ConfigValue>, series_id: String) -> Option<SeriesResult> {
         let id: u64 = series_id
             .strip_prefix("bgm:series:")
             .unwrap_or(&series_id)
             .parse()
             .ok()?;
-        let subject = fetch_subject(id)?;
+        let subject = fetch_subject(&config, id)?;
         if !subject.is_series() {
             return None;
         }
         let series = series_entry(&subject);
-        let books = fetch_members(id)?
+        let books = fetch_members(&config, id)?
             .into_iter()
             .enumerate()
             .map(|(i, member)| BookEntry {
@@ -686,19 +688,23 @@ impl Guest for BangumiPlugin {
         Some(SeriesResult { series, books })
     }
 
-    fn get_content(_content_id: String) -> Option<DeclaredContent> {
+    fn get_content(_config: Vec<ConfigValue>, _content_id: String) -> Option<DeclaredContent> {
         None
     }
 
-    fn get_chapter(_book_id: String, _index: u32) -> Option<Chapter> {
+    fn get_chapter(_config: Vec<ConfigValue>, _book_id: String, _index: u32) -> Option<Chapter> {
         None // no `content` capability; host never calls this
     }
 
-    fn identify_upload(_filename: String, _file_hash: String) -> Option<BookEntry> {
+    fn identify_upload(
+        _config: Vec<ConfigValue>,
+        _filename: String,
+        _file_hash: String,
+    ) -> Option<BookEntry> {
         None // no `identify` capability; host never calls this
     }
 
-    fn get_book_file(_book_id: String) -> Option<BookFile> {
+    fn get_book_file(_config: Vec<ConfigValue>, _book_id: String) -> Option<BookFile> {
         None // no `book-file` capability; host never calls this
     }
 }

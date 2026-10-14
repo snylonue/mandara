@@ -6,6 +6,40 @@ package mandara:plugin@0.13.0;
 
 /// Shared types between mandara and plugins.
 interface types {
+    /// One field of the configuration schema.
+    record config-field {
+        /// Stable key; the value is stored in JSON under this key.
+        key: string,
+        /// zh-CN display label rendered by the admin form.
+        label: string,
+        kind: config-kind,
+        /// Serialized default value (JSON), e.g. `"10"` or `"false"`.
+        default: option<string>,
+        required: bool,
+        hint: option<string>,
+    }
+
+    /// Field kinds. `enum` options are rendered as a select and the
+    /// config value is the option index; `list-of-string` is a
+    /// newline/comma separated text area in the UI.
+    /// (`string` is a WIT keyword, hence the `text` case name.)
+    variant config-kind {
+        text,
+        number,
+        boolean,
+        enum-options(list<string>),
+        list-of-string,
+    }
+
+    /// A validated configuration value, in `config-schema` field order.
+    variant config-value {
+        text(string),
+        number(f64),
+        boolean(bool),
+        enum-index(u32),
+        string-list(list<string>),
+    }
+
     /// Series metadata, distinct from an individual volume.
     record series-entry {
         id: string,
@@ -166,53 +200,6 @@ interface state {
     delete: func(key: string) -> result<bool, string>;
 }
 
-/// Configuration channel.
-///
-/// The host renders an admin form from `config-schema`, validates submitted
-/// values, stores the validated JSON, and injects the values at the start
-/// of every call. Plugins pull them with `configure`; stores are per-call,
-/// so nothing persists in the guest.
-interface config {
-    /// One field of the configuration schema.
-    record config-field {
-        /// Stable key; the value is stored in JSON under this key.
-        key: string,
-        /// zh-CN display label rendered by the admin form.
-        label: string,
-        kind: config-kind,
-        /// Serialized default value (JSON), e.g. `"10"` or `"false"`.
-        default: option<string>,
-        required: bool,
-        hint: option<string>,
-    }
-
-    /// Field kinds. `enum` options are rendered as a select and the
-    /// config value is the option index; `list-of-string` is a
-    /// newline/comma separated text area in the UI.
-    /// (`string` is a WIT keyword, hence the `text` case name.)
-    variant config-kind {
-        text,
-        number,
-        boolean,
-        enum-options(list<string>),
-        list-of-string,
-    }
-
-    /// A validated configuration value, in `config-schema` field order.
-    variant config-value {
-        text(string),
-        number(f64),
-        boolean(bool),
-        enum-index(u32),
-        string-list(list<string>),
-    }
-
-    /// Fetch the configuration injected by the host for this call.
-    /// Returns the values in the same order as `config-schema` fields.
-    /// Plugins call this at the start of every export implementation.
-    configure: func() -> list<config-value>;
-}
-
 /// Outbound HTTP (see docs/plugin-http-api-design.md §3.1).
 ///
 /// This is the only network access a plugin gets. The host caps timeout,
@@ -285,14 +272,12 @@ world mandara-plugin {
     import types;
     import store;
     import state;
-    import config;
     import http;
 
     // Types used by this world's exports come from the imported `types`
     // interface; WIT requires an explicit `use` to bring them into the
     // world scope.
-    use types.{book-entry, content-mode, chapter, declared-chapter, declared-content, declared-book, search-result, book-file, source-info, series-entry, series-result, catalog-entry};
-    use config.{config-field, config-value};
+    use types.{config-field, config-value, book-entry, content-mode, chapter, declared-chapter, declared-content, declared-book, search-result, book-file, source-info, series-entry, series-result, catalog-entry};
 
     /// Human-readable plugin name, read in the registered instance context.
     export name: func() -> string;
@@ -324,29 +309,32 @@ world mandara-plugin {
     /// `book-file`.
     export capabilities: func() -> list<string>;
 
+    /// Business exports receive validated configuration explicitly, in schema order.
+    /// Metadata and schema exports do not receive configuration.
+    ///
     /// Full static catalog, when it is small enough to enumerate eagerly
     /// (host cap: a few thousand books). `none` when the source is large
     /// or has no books; use `search-books`/`get-book` instead.
-    export declare: func() -> option<list<declared-book>>;
+    export declare: func(config: list<config-value>) -> option<list<declared-book>>;
 
     /// Paginated catalog search (large sources). `query` may be empty to
     /// page through everything; the host clamps `limit`/`offset`.
-    export search-books: func(query: string, offset: u32, limit: u32) -> search-result;
+    export search-books: func(config: list<config-value>, query: string, offset: u32, limit: u32) -> search-result;
 
     /// Single book by id (materialize-on-demand, refresh). `none` = not
     /// found.
-    export get-book: func(book-id: string) -> option<book-entry>;
+    export get-book: func(config: list<config-value>, book-id: string) -> option<book-entry>;
 
     /// Declare content identity, loading form and chapters together.
     /// none = content unavailable; this says nothing about metadata.
     /// The host persists the form at acquisition; plugins own fallback.
-    export get-content: func(content-id: string) -> option<declared-content>;
+    export get-content: func(config: list<config-value>, content-id: string) -> option<declared-content>;
 
     /// Series lookup; IDs may be different from upstream website IDs.
-    export get-series: func(series-id: string) -> option<series-result>;
+    export get-series: func(config: list<config-value>, series-id: string) -> option<series-result>;
 
     /// Fetch one chapter of `content-id` by index. `none` means not found.
-    export get-chapter: func(content-id: string, index: u32) -> option<chapter>;
+    export get-chapter: func(config: list<config-value>, content-id: string, index: u32) -> option<chapter>;
 
     /// Try to identify the book behind an uploaded file.
     ///
@@ -355,10 +343,10 @@ world mandara-plugin {
     /// with an `id` already offered by this source) or `none` when this
     /// plugin does not recognize the file. The server asks every enabled
     /// instance in creation order; the first match supplies the metadata.
-    export identify-upload: func(filename: string, file-hash: string) -> option<book-entry>;
+    export identify-upload: func(config: list<config-value>, filename: string, file-hash: string) -> option<book-entry>;
 
     /// Fetch a whole book file (epub/txt download, `book-file` capability).
     /// `none` = unavailable; the host reports missing content, never
     /// changes content mode. Any upstream fallback belongs in this export.
-    export get-book-file: func(content-id: string) -> option<book-file>;
+    export get-book-file: func(config: list<config-value>, content-id: string) -> option<book-file>;
 }

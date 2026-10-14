@@ -5,18 +5,18 @@ Status: **implemented** (owner decision, 2026-08-25:
 plain network access with timeout/size caps only). The rest of this
  document (book-file acquisition, config-driven base URLs) stands.
 Extends the v2 plugin interface (`crates/mandara-plugin/wit/mandara.wit`,
-`mandara:plugin@0.2.0`). Does **not** replace the config channel, the
+`mandara:plugin@0.2.0`). Does **not** replace the
 capabilities model, or the lazy catalog policy of `docs/plugin-v2-design.md`.
 
 ## 1. Motivation
 
-Today a plugin is a pure computation: its only host imports are
-`store::log` and `config::configure`, and it has no access to the network
-or the filesystem. That is great for sandboxing, but it means the demo
-plugins must hardcode their "sources" — a real wiki/reading-site plugin
-cannot exist. This design adds the minimal API surface that lets a plugin
-**fetch metadata and book content from an external source** conveniently,
-while keeping every request under host control.
+Before HTTP support, plugins could only log and pull configuration, with no
+network or filesystem access. That kept sandboxing simple, but forced demo
+plugins to hardcode their sources. This design adds the minimal API surface
+for **fetching metadata and book content from an external source**, while
+keeping every request under host control. In the current WIT, configuration
+travels as explicit business export parameters rather than a host import
+(see `docs/plugins.md`).
 
 Two acquisition patterns are supported:
 

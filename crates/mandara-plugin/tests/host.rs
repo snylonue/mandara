@@ -293,6 +293,56 @@ fn fixture_is_valid() {
 }
 
 #[test]
+fn business_exports_receive_explicit_configuration_parameters() {
+    let (runtime, instance) = load();
+    let configured = instance.with_config(serde_json::json!({
+        "site-name": "参数配置",
+        "mode": 1,
+        "verbose": true,
+        "spin": false,
+        "tags": ["显式", "隔离"],
+    }));
+    let books = runtime.declare(&configured).unwrap().unwrap();
+    assert!(books[0].book.title.contains("参数配置"));
+    assert!(
+        books[0]
+            .book
+            .description
+            .as_ref()
+            .unwrap()
+            .contains("显式、隔离")
+    );
+    let identified = runtime
+        .identify_upload(&configured, "hello.txt", "hash")
+        .unwrap()
+        .unwrap();
+    assert!(identified.title.contains("参数配置"));
+    let chapter = runtime
+        .get_chapter(&configured, "hello-content-1", 0)
+        .unwrap()
+        .unwrap();
+    assert!(chapter.title.ends_with("（变体）"));
+    let default_chapter = runtime
+        .get_chapter(&instance, "hello-content-1", 0)
+        .unwrap()
+        .unwrap();
+    assert!(!default_chapter.title.ends_with("（变体）"));
+}
+
+#[test]
+fn metadata_exports_do_not_require_configuration() {
+    let (runtime, instance) = load();
+    let unconfigured = instance.with_config(serde_json::Value::Null);
+    assert_eq!(runtime.name(&unconfigured).unwrap(), "hello");
+    assert_eq!(runtime.source_info(&unconfigured).unwrap().kind, "browse");
+    assert_eq!(
+        runtime.capabilities(&unconfigured).unwrap(),
+        ["declare", "identify", "content"]
+    );
+    assert_eq!(runtime.config_schema(&unconfigured).unwrap().len(), 5);
+}
+
+#[test]
 fn capabilities_stub_declares_supported_patterns() {
     let (runtime, plugin) = load();
     let caps = runtime.capabilities(&plugin).unwrap();

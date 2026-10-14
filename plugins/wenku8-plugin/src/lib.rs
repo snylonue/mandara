@@ -60,14 +60,9 @@ const FIELDS: [&str; 4] = [
     "user-agent",
 ];
 
-/// fn values() reads the injected config once per call.
-fn values() -> Vec<ConfigValue> {
-    mandara::plugin::config::configure()
-}
-
-fn config_string(key: &str, default: &str) -> String {
+fn config_string(config: &[ConfigValue], key: &str, default: &str) -> String {
     let idx = FIELDS.iter().position(|k| *k == key).unwrap();
-    match values().get(idx) {
+    match config.get(idx) {
         Some(ConfigValue::Text(s)) if !s.is_empty() => s.clone(),
         _ => default.to_string(),
     }
@@ -81,12 +76,12 @@ enum Placement {
     Skip,  // do not include 插图 chapters at all
 }
 
-fn placement() -> Placement {
+fn placement(config: &[ConfigValue]) -> Placement {
     let idx = FIELDS
         .iter()
         .position(|k| *k == "illustration-placement")
         .unwrap();
-    match values().get(idx) {
+    match config.get(idx) {
         Some(ConfigValue::EnumIndex(1)) => Placement::Front,
         Some(ConfigValue::EnumIndex(2)) => Placement::Skip,
         _ => Placement::End,
@@ -107,8 +102,12 @@ fn log_error(context: &str, url: &str, err: &(impl std::fmt::Display + ?Sized)) 
 /// Transient transport errors and 403/429/5xx responses are retried up to
 /// three attempts. Each fetch has its own timeout; there is no aggregate
 /// export deadline. See docs/plugin-http-api-design.md §4.3.
-fn http_get(url: &str, referer: &str) -> Result<(u16, Vec<u8>), mandara::plugin::http::FetchError> {
-    let user_agent = config_string("user-agent", DEFAULT_UA);
+fn http_get(
+    config: &[ConfigValue],
+    url: &str,
+    referer: &str,
+) -> Result<(u16, Vec<u8>), mandara::plugin::http::FetchError> {
+    let user_agent = config_string(config, "user-agent", DEFAULT_UA);
     let mut attempt = 0;
     loop {
         attempt += 1;
@@ -153,8 +152,8 @@ fn decode_page(bytes: &[u8]) -> String {
 }
 
 /// Fetch `url`, decode GBK; `Ok(html)` only on HTTP 200.
-fn fetch_page(context: &str, url: &str, referer: &str) -> Option<String> {
-    match http_get(url, referer) {
+fn fetch_page(config: &[ConfigValue], context: &str, url: &str, referer: &str) -> Option<String> {
+    match http_get(config, url, referer) {
         Ok((200, body)) => Some(decode_page(&body)),
         Ok((status, _)) => {
             if status != 404 {
@@ -532,8 +531,8 @@ fn chapter_url(base: &str, book: &str, cid: u32) -> String {
 
 /// Referer to send with wenku8 requests: the configured override, or a
 /// same-host page (wenku8 checks it on reader.php).
-fn referer_for(base: &str, book: &str) -> String {
-    let cfg = config_string("referer", "");
+fn referer_for(config: &[ConfigValue], base: &str, book: &str) -> String {
+    let cfg = config_string(config, "referer", "");
     if cfg.is_empty() {
         format!("{base}/book/{book}.htm")
     } else {
@@ -551,11 +550,16 @@ struct TocInfo {
 
 /// Fetch + parse the TOC of `book`, returning both the raw volumes and
 /// the flat reading order under the configured 插图 policy.
-fn fetch_toc(book: &str) -> Option<TocInfo> {
-    let base = config_string("base-url", DEFAULT_BASE_URL);
-    let html = fetch_page("toc", &toc_url(&base, book), &referer_for(&base, book))?;
+fn fetch_toc(config: &[ConfigValue], book: &str) -> Option<TocInfo> {
+    let base = config_string(config, "base-url", DEFAULT_BASE_URL);
+    let html = fetch_page(
+        config,
+        "toc",
+        &toc_url(&base, book),
+        &referer_for(config, &base, book),
+    )?;
     let volumes = parse_toc(&html)?;
-    let order = build_order(&volumes, placement());
+    let order = build_order(&volumes, placement(config));
     Some(TocInfo { volumes, order })
 }
 
@@ -624,8 +628,8 @@ fn sniff_mime(b: &[u8]) -> Option<&'static str> {
 /// content-addressed image store; returns the canonical local reference
 /// (`/api/images/{id}`). `None` on any failure — callers fall back to the
 /// remote URL so a broken CDN only degrades rendering.
-fn store_image_ref(url: &str) -> Option<String> {
-    let (_, body) = http_get(url, "").ok()?;
+fn store_image_ref(config: &[ConfigValue], url: &str) -> Option<String> {
+    let (_, body) = http_get(config, url, "").ok()?;
     if body.is_empty() {
         return None;
     }
@@ -637,9 +641,9 @@ fn store_image_ref(url: &str) -> Option<String> {
 /// Localize a plate-URL list into stored-image references. Failures keep
 /// the remote URL (graceful degradation; the next re-materialization
 /// retries).
-fn stored_urls(urls: &[String]) -> Vec<String> {
+fn stored_urls(config: &[ConfigValue], urls: &[String]) -> Vec<String> {
     urls.iter()
-        .map(|u| store_image_ref(u).unwrap_or_else(|| u.clone()))
+        .map(|u| store_image_ref(config, u).unwrap_or_else(|| u.clone()))
         .collect()
 }
 
@@ -664,6 +668,7 @@ fn format_image_list(urls: &[String]) -> String {
 /// 插图 chapter, in TOC order). Empty when the volume has none or its
 /// plate page cannot be fetched.
 fn volume_illustration_urls(
+    config: &[ConfigValue],
     base: &str,
     book: &str,
     volumes: &[Volume],
@@ -676,7 +681,12 @@ fn volume_illustration_urls(
         return Vec::new();
     };
     let toc = toc_url(base, book);
-    let Some(html) = fetch_page("illustration", &chapter_url(base, book, ill.cid), &toc) else {
+    let Some(html) = fetch_page(
+        config,
+        "illustration",
+        &chapter_url(base, book, ill.cid),
+        &toc,
+    ) else {
         return Vec::new();
     };
     let Some(inner) = content_div(&html) else {
@@ -971,7 +981,7 @@ impl Guest for Wenku8Plugin {
             ConfigField {
                 key: "base-url".into(),
                 label: "站点地址".into(),
-                kind: mandara::plugin::config::ConfigKind::Text,
+                kind: mandara::plugin::types::ConfigKind::Text,
                 default: Some(DEFAULT_BASE_URL.into()),
                 required: true,
                 hint: Some("轻小说文库根地址；镜像可改（如 https://www.wenku8.cc）".into()),
@@ -979,7 +989,7 @@ impl Guest for Wenku8Plugin {
             ConfigField {
                 key: "referer".into(),
                 label: "Referer 覆盖".into(),
-                kind: mandara::plugin::config::ConfigKind::Text,
+                kind: mandara::plugin::types::ConfigKind::Text,
                 default: None,
                 required: false,
                 hint: Some("留空 = 自动用同站点书页当 Referer（wenku8 校验，缺失会 403）".into()),
@@ -987,7 +997,7 @@ impl Guest for Wenku8Plugin {
             ConfigField {
                 key: "illustration-placement".into(),
                 label: "插画章节位置".into(),
-                kind: mandara::plugin::config::ConfigKind::EnumOptions(vec![
+                kind: mandara::plugin::types::ConfigKind::EnumOptions(vec![
                     "保留在卷尾（原文位置，与 wenku8 目录一致）".into(),
                     "移至卷首（如实体书彩插）".into(),
                     "跳过不收".into(),
@@ -1001,7 +1011,7 @@ impl Guest for Wenku8Plugin {
             ConfigField {
                 key: "user-agent".into(),
                 label: "User-Agent（UA）".into(),
-                kind: mandara::plugin::config::ConfigKind::Text,
+                kind: mandara::plugin::types::ConfigKind::Text,
                 default: Some(DEFAULT_UA.into()),
                 required: false,
                 hint: Some("所有站点请求（包括图片）使用的 UA；留空使用默认浏览器 UA".into()),
@@ -1015,11 +1025,16 @@ impl Guest for Wenku8Plugin {
         vec!["lookup".into(), "content".into()]
     }
 
-    fn declare() -> Option<Vec<DeclaredBook>> {
+    fn declare(_config: Vec<ConfigValue>) -> Option<Vec<DeclaredBook>> {
         None
     }
 
-    fn search_books(_query: String, _offset: u32, _limit: u32) -> SearchResult {
+    fn search_books(
+        _config: Vec<ConfigValue>,
+        _query: String,
+        _offset: u32,
+        _limit: u32,
+    ) -> SearchResult {
         mandara::plugin::store::log(
             "wenku8 search is login-walled; materialize books by id instead (source browser manual-id entry)",
         );
@@ -1029,14 +1044,15 @@ impl Guest for Wenku8Plugin {
         }
     }
 
-    fn get_series(series_id: String) -> Option<SeriesResult> {
+    fn get_series(config: Vec<ConfigValue>, series_id: String) -> Option<SeriesResult> {
         let book = normalize_book_id(
             series_id
                 .strip_prefix("wenku8:series:")
                 .unwrap_or(&series_id),
         )?;
-        let base = config_string("base-url", DEFAULT_BASE_URL);
+        let base = config_string(&config, "base-url", DEFAULT_BASE_URL);
         let html = fetch_page(
+            &config,
             "get-series",
             &format!("{base}/book/{book}.htm"),
             &format!("{base}/"),
@@ -1050,7 +1066,7 @@ impl Guest for Wenku8Plugin {
             cover_url: entry.cover_url,
             extra: None,
         };
-        let toc = fetch_toc(&book)?;
+        let toc = fetch_toc(&config, &book)?;
         let books = toc
             .volumes
             .iter()
@@ -1075,17 +1091,17 @@ impl Guest for Wenku8Plugin {
         Some(SeriesResult { series, books })
     }
 
-    fn get_book(book_id: String) -> Option<BookEntry> {
+    fn get_book(config: Vec<ConfigValue>, book_id: String) -> Option<BookEntry> {
         let (book, _) = parse_volume_id(&book_id)?;
-        Self::get_series(book)?
+        Self::get_series(config, book)?
             .books
             .into_iter()
             .find(|b| b.id == book_id)
     }
 
-    fn get_content(content_id: String) -> Option<DeclaredContent> {
+    fn get_content(config: Vec<ConfigValue>, content_id: String) -> Option<DeclaredContent> {
         let (book, anchor) = parse_volume_id(&content_id)?;
-        let info = fetch_toc(&book)?;
+        let info = fetch_toc(&config, &book)?;
         let volume = info
             .volumes
             .iter()
@@ -1107,10 +1123,10 @@ impl Guest for Wenku8Plugin {
         })
     }
 
-    fn get_chapter(book_id: String, index: u32) -> Option<Chapter> {
+    fn get_chapter(config: Vec<ConfigValue>, book_id: String, index: u32) -> Option<Chapter> {
         let (book, anchor) = parse_volume_id(&book_id)?;
-        let base = config_string("base-url", DEFAULT_BASE_URL);
-        let info = fetch_toc(&book)?;
+        let base = config_string(&config, "base-url", DEFAULT_BASE_URL);
+        let info = fetch_toc(&config, &book)?;
         let volume = info
             .volumes
             .iter()
@@ -1121,14 +1137,14 @@ impl Guest for Wenku8Plugin {
             .filter(|c| c.volume == volume)
             .nth(index as usize)?;
         let url = chapter_url(&base, &book, entry.cid);
-        let html = fetch_page("get-chapter", &url, &toc_url(&base, &book))?;
+        let html = fetch_page(&config, "get-chapter", &url, &toc_url(&base, &book))?;
         let inner = strip_contentdp(&content_div(&html)?);
         let is_ill = entry.illustration || inner.contains("class=\"divimage\"");
         let content = if is_ill {
             // 插图 chapter: the plate URLs become `<figure><img>`s directly
             // (stored in the host's image store; failures keep the remote
             // URL). The host sanitizes `format: "html"` bodies before storage.
-            format_image_list(&stored_urls(&collect_image_urls(&inner)))
+            format_image_list(&stored_urls(&config, &collect_image_urls(&inner)))
         } else {
             // Prose: plain text → final HTML (blank-line paragraphs,
             // newlines as `<br/>`, plate marks → `<figure>`). Matches the
@@ -1137,12 +1153,10 @@ impl Guest for Wenku8Plugin {
             let text = tidy(&html_to_text(&inner));
             prose_to_html(
                 &text,
-                &stored_urls(&volume_illustration_urls(
-                    &base,
-                    &book,
-                    &info.volumes,
-                    entry.volume,
-                )),
+                &stored_urls(
+                    &config,
+                    &volume_illustration_urls(&config, &base, &book, &info.volumes, entry.volume),
+                ),
             )
         };
         // Content must be non-empty to be a real chapter (the host skips
@@ -1157,11 +1171,15 @@ impl Guest for Wenku8Plugin {
         })
     }
 
-    fn identify_upload(_filename: String, _file_hash: String) -> Option<BookEntry> {
+    fn identify_upload(
+        _config: Vec<ConfigValue>,
+        _filename: String,
+        _file_hash: String,
+    ) -> Option<BookEntry> {
         None
     }
 
-    fn get_book_file(_book_id: String) -> Option<BookFile> {
+    fn get_book_file(_config: Vec<ConfigValue>, _book_id: String) -> Option<BookFile> {
         None // wenku8 txt/epub downloads require login; chapter mode only
     }
 }

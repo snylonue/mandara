@@ -26,45 +26,40 @@ wit_bindgen::generate!({
 
 // `BookEntry`, `Chapter`, `DeclaredBook`, `SearchResult`, `ConfigField`,
 // `ConfigValue` and the `Guest` trait are generated in this scope by
-// generate!() (the world `use`s the types and config interfaces).
+// generate!() (the world `use`s the types interface).
 
 /// Configuration schema field order — the host injects values in this
 /// order, so the guest maps indices back to keys.
 const FIELDS: [&str; 5] = ["site-name", "mode", "verbose", "spin", "tags"];
 
-/// Pull the host-injected configuration for this call.
-fn values() -> Vec<ConfigValue> {
-    mandara::plugin::config::configure()
-}
-
-fn field_value(key: &str) -> Option<ConfigValue> {
+fn field_value(config: &[ConfigValue], key: &str) -> Option<ConfigValue> {
     let idx = FIELDS.iter().position(|k| *k == key)?;
-    values().get(idx).cloned()
+    config.get(idx).cloned()
 }
 
-fn config_string(key: &str, default: &str) -> String {
-    match field_value(key) {
+fn config_string(config: &[ConfigValue], key: &str, default: &str) -> String {
+    match field_value(config, key) {
         Some(ConfigValue::Text(s)) if !s.is_empty() => s,
         _ => default.to_string(),
     }
 }
 
-fn config_bool(key: &str, default: bool) -> bool {
-    match field_value(key) {
+fn config_bool(config: &[ConfigValue], key: &str, default: bool) -> bool {
+    match field_value(config, key) {
         Some(ConfigValue::Boolean(b)) => b,
         _ => default,
     }
 }
 
-fn config_enum_index(key: &str) -> u32 {
-    match field_value(key) {
+fn config_enum_index(config: &[ConfigValue], key: &str) -> u32 {
+    match field_value(config, key) {
         Some(ConfigValue::EnumIndex(i)) => i,
         _ => 0,
     }
 }
 
-fn config_tags() -> Vec<String> {
-    match field_value("tags") {
+fn config_tags(config: &[ConfigValue]) -> Vec<String> {
+    match field_value(config, "tags") {
         Some(ConfigValue::StringList(tags)) => tags,
         _ => Vec::new(),
     }
@@ -103,7 +98,7 @@ impl Guest for HelloPlugin {
             ConfigField {
                 key: "site-name".into(),
                 label: "站点名称".into(),
-                kind: mandara::plugin::config::ConfigKind::Text,
+                kind: mandara::plugin::types::ConfigKind::Text,
                 default: Some("Mandara 示例库".into()),
                 required: true,
                 hint: Some("出现在推荐书目和识别提示里".into()),
@@ -111,7 +106,7 @@ impl Guest for HelloPlugin {
             ConfigField {
                 key: "mode".into(),
                 label: "内容版本".into(),
-                kind: mandara::plugin::config::ConfigKind::EnumOptions(vec![
+                kind: mandara::plugin::types::ConfigKind::EnumOptions(vec![
                     "default".into(),
                     "alt".into(),
                 ]),
@@ -122,7 +117,7 @@ impl Guest for HelloPlugin {
             ConfigField {
                 key: "verbose".into(),
                 label: "详细日志".into(),
-                kind: mandara::plugin::config::ConfigKind::Boolean,
+                kind: mandara::plugin::types::ConfigKind::Boolean,
                 default: Some("false".into()),
                 required: false,
                 hint: Some("每次取章时写一条宿主日志".into()),
@@ -130,7 +125,7 @@ impl Guest for HelloPlugin {
             ConfigField {
                 key: "spin".into(),
                 label: "死循环测试(不要开启)".into(),
-                kind: mandara::plugin::config::ConfigKind::Boolean,
+                kind: mandara::plugin::types::ConfigKind::Boolean,
                 default: Some("false".into()),
                 required: false,
                 hint: Some("开启后取章会陷入死循环，用于演示宿主超时保护".into()),
@@ -138,7 +133,7 @@ impl Guest for HelloPlugin {
             ConfigField {
                 key: "tags".into(),
                 label: "额外标签".into(),
-                kind: mandara::plugin::config::ConfigKind::ListOfString,
+                kind: mandara::plugin::types::ConfigKind::ListOfString,
                 default: Some("[]".into()),
                 required: false,
                 hint: Some("逗号分隔，会附在书目描述中".into()),
@@ -160,9 +155,9 @@ impl Guest for HelloPlugin {
     }
 
     /// Static catalog with supplied bodies, a lazy body and a valid empty body.
-    fn declare() -> Option<Vec<DeclaredBook>> {
-        let site = config_string("site-name", "Mandara 示例库");
-        let tags = config_tags();
+    fn declare(config: Vec<ConfigValue>) -> Option<Vec<DeclaredBook>> {
+        let site = config_string(&config, "site-name", "Mandara 示例库");
+        let tags = config_tags(&config);
         let tail = if tags.is_empty() {
             String::new()
         } else {
@@ -201,7 +196,7 @@ impl Guest for HelloPlugin {
                     DeclaredChapter {
                         title: "第一章 你好，书架".into(),
                         content: Some(format!(
-                            "你成功加载了一个 wasm 插件！\n\n当前站点名称由配置注入：{site}。{tail}\n\n这本书由 Rust 编写、以 WebAssembly 组件的形式运行在服务器上。\n\n插件在沙箱中运行，只能调用宿主提供的 log 与 configure 接口。"
+                            "你成功加载了一个 wasm 插件！\n\n当前站点名称由配置注入：{site}。{tail}\n\n这本书由 Rust 编写、以 WebAssembly 组件的形式运行在服务器上。\n\n插件在沙箱中运行，配置通过方法参数传入，宿主提供 log 等接口。"
                         )),
                         format: "text".into(),
                     },
@@ -231,7 +226,12 @@ impl Guest for HelloPlugin {
         ])
     }
 
-    fn search_books(query: String, _offset: u32, _limit: u32) -> SearchResult {
+    fn search_books(
+        _config: Vec<ConfigValue>,
+        query: String,
+        _offset: u32,
+        _limit: u32,
+    ) -> SearchResult {
         // No `search` capability: the host never calls this. Stub.
         let _ = query;
         SearchResult {
@@ -240,12 +240,12 @@ impl Guest for HelloPlugin {
         }
     }
 
-    fn get_book(_book_id: String) -> Option<BookEntry> {
+    fn get_book(_config: Vec<ConfigValue>, _book_id: String) -> Option<BookEntry> {
         // No `lookup` capability: the host never calls this. Stub.
         None
     }
 
-    fn get_content(content_id: String) -> Option<DeclaredContent> {
+    fn get_content(_config: Vec<ConfigValue>, content_id: String) -> Option<DeclaredContent> {
         let titles = match content_id.as_str() {
             "hello-content-1" => vec!["第一章 你好，书架", "第二章 世界很大"],
             "hello-content-2" => vec!["幕后", "延迟加载", "空章节"],
@@ -267,7 +267,7 @@ impl Guest for HelloPlugin {
         })
     }
 
-    fn get_chapter(book_id: String, index: u32) -> Option<Chapter> {
+    fn get_chapter(config: Vec<ConfigValue>, book_id: String, index: u32) -> Option<Chapter> {
         // An undeclared probe used by host tests and state API examples.
         if let Some(key) = book_id.strip_prefix("state:") {
             let content = match index {
@@ -276,7 +276,7 @@ impl Guest for HelloPlugin {
                     "{:?}",
                     mandara::plugin::state::set(
                         key,
-                        config_string("site-name", "Mandara 示例库").as_bytes(),
+                        config_string(&config, "site-name", "Mandara 示例库").as_bytes(),
                     )
                 ),
                 2 => format!("{:?}", mandara::plugin::state::delete(key)),
@@ -293,7 +293,7 @@ impl Guest for HelloPlugin {
                 format: "text".into(),
             });
         }
-        if config_bool("spin", false) {
+        if config_bool(&config, "spin", false) {
             // Deliberate infinite loop: the host's epoch deadline must
             // trap this call ("Plugin timeout").
             let mut x: u64 = 0;
@@ -304,10 +304,10 @@ impl Guest for HelloPlugin {
                 }
             }
         }
-        if config_bool("verbose", false) {
+        if config_bool(&config, "verbose", false) {
             mandara::plugin::store::log(&format!("get_chapter({book_id}, {index})"));
         }
-        let mode = config_enum_index("mode");
+        let mode = config_enum_index(&config, "mode");
         let alt = mode == 1;
         match (book_id.as_str(), index, alt) {
             ("hello-content-1", 0, false) => Some(Chapter {
@@ -352,10 +352,14 @@ impl Guest for HelloPlugin {
     /// Example book identification: any uploaded file whose name contains
     /// "hello" is recognized as this plugin's sample book, so the server
     /// can take the metadata from here instead of parsing the file.
-    fn identify_upload(filename: String, _file_hash: String) -> Option<BookEntry> {
+    fn identify_upload(
+        config: Vec<ConfigValue>,
+        filename: String,
+        _file_hash: String,
+    ) -> Option<BookEntry> {
         let lower = filename.to_lowercase();
         if lower.contains("hello") || lower.contains("示例") {
-            let site = config_string("site-name", "Mandara 示例库");
+            let site = config_string(&config, "site-name", "Mandara 示例库");
             Some(BookEntry {
                 id: "hello-1".into(),
                 title: format!("Hello Mandara（{site}）"),
@@ -371,11 +375,11 @@ impl Guest for HelloPlugin {
         }
     }
 
-    fn get_series(_series_id: String) -> Option<SeriesResult> {
+    fn get_series(_config: Vec<ConfigValue>, _series_id: String) -> Option<SeriesResult> {
         None
     }
 
-    fn get_book_file(_book_id: String) -> Option<BookFile> {
+    fn get_book_file(_config: Vec<ConfigValue>, _book_id: String) -> Option<BookFile> {
         // No `book-file` capability: the host never calls this. Stub.
         None
     }

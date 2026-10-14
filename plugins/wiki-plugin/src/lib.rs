@@ -30,21 +30,17 @@ const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8765/wiki";
 /// Config schema field order — the host injects values in this order.
 const FIELDS: [&str; 4] = ["base-url", "api-key", "site-name", "page-size"];
 
-fn values() -> Vec<ConfigValue> {
-    mandara::plugin::config::configure()
-}
-
-fn config_string(key: &str, default: &str) -> String {
+fn config_string(config: &[ConfigValue], key: &str, default: &str) -> String {
     let idx = FIELDS.iter().position(|k| *k == key).unwrap();
-    match values().get(idx) {
+    match config.get(idx) {
         Some(ConfigValue::Text(s)) if !s.is_empty() => s.clone(),
         _ => default.to_string(),
     }
 }
 
-fn config_number(key: &str, default: u32) -> u32 {
+fn config_number(config: &[ConfigValue], key: &str, default: u32) -> u32 {
     let idx = FIELDS.iter().position(|k| *k == key).unwrap();
-    match values().get(idx) {
+    match config.get(idx) {
         Some(ConfigValue::Number(n)) => n.max(1.0) as u32,
         _ => default,
     }
@@ -71,9 +67,12 @@ fn urlencode(s: &str) -> String {
 
 /// One remote `http.fetch` (timeout 5 s); application statuses come back
 /// as `(status, body)` — only transport-level problems are errors.
-fn http_get(url: &str) -> Result<(u16, Vec<u8>), mandara::plugin::http::FetchError> {
+fn http_get(
+    config: &[ConfigValue],
+    url: &str,
+) -> Result<(u16, Vec<u8>), mandara::plugin::http::FetchError> {
     let mut headers = Vec::new();
-    let api_key = config_string("api-key", "");
+    let api_key = config_string(config, "api-key", "");
     if !api_key.is_empty() {
         headers.push(mandara::plugin::http::Header {
             name: "X-Api-Key".into(),
@@ -188,7 +187,7 @@ impl Guest for WikiPlugin {
             ConfigField {
                 key: "base-url".into(),
                 label: "站点地址".into(),
-                kind: mandara::plugin::config::ConfigKind::Text,
+                kind: mandara::plugin::types::ConfigKind::Text,
                 default: Some(DEFAULT_BASE_URL.into()),
                 required: true,
                 hint: Some("远程 API 的根地址（含命名空间），如 http://127.0.0.1:8765/wiki".into()),
@@ -196,7 +195,7 @@ impl Guest for WikiPlugin {
             ConfigField {
                 key: "api-key".into(),
                 label: "API 密钥".into(),
-                kind: mandara::plugin::config::ConfigKind::Text,
+                kind: mandara::plugin::types::ConfigKind::Text,
                 default: None,
                 required: false,
                 hint: Some("非空时作为 X-Api-Key 请求头发送；仅在管理员配置页可见".into()),
@@ -204,7 +203,7 @@ impl Guest for WikiPlugin {
             ConfigField {
                 key: "site-name".into(),
                 label: "站点名称".into(),
-                kind: mandara::plugin::config::ConfigKind::Text,
+                kind: mandara::plugin::types::ConfigKind::Text,
                 default: Some("维基书源".into()),
                 required: true,
                 hint: Some("显示在词条描述里".into()),
@@ -212,7 +211,7 @@ impl Guest for WikiPlugin {
             ConfigField {
                 key: "page-size".into(),
                 label: "词条数量".into(),
-                kind: mandara::plugin::config::ConfigKind::Number,
+                kind: mandara::plugin::types::ConfigKind::Number,
                 default: Some("8".into()),
                 required: false,
                 hint: Some("向上游请求的词条数上限（page_size 参数）".into()),
@@ -226,18 +225,23 @@ impl Guest for WikiPlugin {
         vec!["search".into(), "lookup".into()]
     }
 
-    fn declare() -> Option<Vec<DeclaredBook>> {
+    fn declare(_config: Vec<ConfigValue>) -> Option<Vec<DeclaredBook>> {
         None // large source: never enumerated eagerly
     }
 
-    fn search_books(query: String, offset: u32, limit: u32) -> SearchResult {
-        let base = config_string("base-url", DEFAULT_BASE_URL);
-        let page_size = config_number("page-size", 8);
+    fn search_books(
+        config: Vec<ConfigValue>,
+        query: String,
+        offset: u32,
+        limit: u32,
+    ) -> SearchResult {
+        let base = config_string(&config, "base-url", DEFAULT_BASE_URL);
+        let page_size = config_number(&config, "page-size", 8);
         let url = format!(
             "{base}/api/search?q={}&page_size={page_size}&offset={offset}&limit={limit}",
             urlencode(&query)
         );
-        match http_get(&url) {
+        match http_get(&config, &url) {
             Ok((200, body)) => match serde_json::from_slice::<JsonSearch>(&body) {
                 Ok(result) => SearchResult {
                     total: result.total,
@@ -263,10 +267,10 @@ impl Guest for WikiPlugin {
         }
     }
 
-    fn get_book(book_id: String) -> Option<BookEntry> {
-        let base = config_string("base-url", DEFAULT_BASE_URL);
+    fn get_book(config: Vec<ConfigValue>, book_id: String) -> Option<BookEntry> {
+        let base = config_string(&config, "base-url", DEFAULT_BASE_URL);
         let url = format!("{base}/api/books/{book_id}");
-        match http_get(&url) {
+        match http_get(&config, &url) {
             Ok((200, body)) => match serde_json::from_slice::<JsonEntry>(&body) {
                 Ok(entry) => Some(entry.into()),
                 Err(e) => {
@@ -288,22 +292,26 @@ impl Guest for WikiPlugin {
         }
     }
 
-    fn get_content(_content_id: String) -> Option<DeclaredContent> {
+    fn get_content(_config: Vec<ConfigValue>, _content_id: String) -> Option<DeclaredContent> {
         None
     }
 
-    fn get_chapter(_book_id: String, _index: u32) -> Option<Chapter> {
+    fn get_chapter(_config: Vec<ConfigValue>, _book_id: String, _index: u32) -> Option<Chapter> {
         None // no `content` capability; host never calls this
     }
 
-    fn identify_upload(_filename: String, _file_hash: String) -> Option<BookEntry> {
+    fn identify_upload(
+        _config: Vec<ConfigValue>,
+        _filename: String,
+        _file_hash: String,
+    ) -> Option<BookEntry> {
         None // no `identify` capability; host never calls this
     }
 
-    fn get_series(series_id: String) -> Option<SeriesResult> {
-        let base = config_string("base-url", DEFAULT_BASE_URL);
+    fn get_series(config: Vec<ConfigValue>, series_id: String) -> Option<SeriesResult> {
+        let base = config_string(&config, "base-url", DEFAULT_BASE_URL);
         let url = format!("{base}/api/series/{}", urlencode(&series_id));
-        match http_get(&url) {
+        match http_get(&config, &url) {
             Ok((200, body)) => serde_json::from_slice::<JsonSeriesResult>(&body)
                 .ok()
                 .map(|s| SeriesResult {
@@ -314,7 +322,7 @@ impl Guest for WikiPlugin {
         }
     }
 
-    fn get_book_file(_book_id: String) -> Option<BookFile> {
+    fn get_book_file(_config: Vec<ConfigValue>, _book_id: String) -> Option<BookFile> {
         None // no `book-file` capability; host never calls this
     }
 }

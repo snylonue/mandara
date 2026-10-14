@@ -7,7 +7,7 @@
 //!
 //! Calls into a plugin are synchronous with fresh guest memory: a new
 //! [`wasmtime::Store`] is created per call, the instance's configuration
-//! is injected through the `config::configure` import. Fuel bounds guest
+//! is passed explicitly to business exports. Fuel bounds guest
 //! computation without imposing a wall-clock deadline on network waits.
 //! The instance-scoped `state` import provides explicit durable storage.
 
@@ -26,7 +26,7 @@ use crate::state::{StateStore, StateStoreError};
 
 // Generates the bindings for the `mandara:plugin/mandara-plugin` world
 // from `wit/mandara.wit`:
-//   - `store::Host` + `state::Host` + `config::Host` + `http::Host` traits for the
+//   - `store::Host` + `state::Host` + `http::Host` traits for the
 //     imported interfaces
 //   - `MandaraPlugin` world handle with `add_to_linker` / `instantiate`
 //     and `call_name`, `call_config_schema`, `call_capabilities`,
@@ -42,10 +42,10 @@ wasmtime::component::bindgen!({
 // The bindgen macro brings the world-scoped types (`ConfigField`,
 // `ConfigValue`, `BookEntry`, `DeclaredBook`, `SearchResult`) into this
 // module's scope directly, and generates the interface modules
-// (`mandara::plugin::{store, config, types}`) with the `Host` traits.
-// `ConfigKind` is only referenced *inside* the config interface, so it
+// (`mandara::plugin::{store, state, http, types}`) with the `Host` traits.
+// `ConfigKind` is only referenced *inside* the types interface, so it
 // stays under the interface module.
-pub use mandara::plugin::config::ConfigKind;
+pub use mandara::plugin::types::ConfigKind;
 
 /// Host caps (design R4 guards).
 pub const MAX_SEARCH_LIMIT: u32 = 50;
@@ -94,19 +94,16 @@ struct HostState {
     file: Arc<str>,
     state: Arc<dyn StateStore>,
     services: HostServices,
-    /// Derived positional configuration for this invocation only.
-    config: Vec<ConfigValue>,
     image_bytes_stored: u64,
 }
 
 impl HostState {
-    fn new(instance: &PluginInstance, services: HostServices, config: Vec<ConfigValue>) -> Self {
+    fn new(instance: &PluginInstance, services: HostServices) -> Self {
         Self {
             instance_id: instance.data.id.clone(),
             file: instance.data.plugin.file.clone(),
             state: instance.data.state.clone(),
             services,
-            config,
             image_bytes_stored: 0,
         }
     }
@@ -174,13 +171,6 @@ impl mandara::plugin::store::Host for HostState {
 // The world `use`s the types interface, which generates a types-only
 // import module; it has no functions.
 impl mandara::plugin::types::Host for HostState {}
-
-impl mandara::plugin::config::Host for HostState {
-    /// The guest pulls its configuration at the start of every call.
-    fn configure(&mut self) -> Vec<ConfigValue> {
-        self.config.clone()
-    }
-}
 
 impl mandara::plugin::http::Host for HostState {
     /// The only way a plugin touches the outside world. The full policy
@@ -389,12 +379,11 @@ impl PluginRuntime {
     fn invoke<T>(
         &self,
         instance: &PluginInstance,
-        config: Vec<ConfigValue>,
         f: impl FnOnce(&mut Store<HostState>, &MandaraPlugin) -> wasmtime::Result<T>,
     ) -> Result<T> {
         let mut store = Store::new(
             instance.data.plugin.component.engine(),
-            HostState::new(instance, self.services.clone(), config),
+            HostState::new(instance, self.services.clone()),
         );
         store.set_fuel(MAX_CALL_FUEL)?;
         let bindings =
@@ -403,39 +392,37 @@ impl PluginRuntime {
         Ok(f(&mut store, &bindings).with_context(|| format!("call into '{}'", instance.file()))?)
     }
 
-    /// Resolve positional configuration from this instance, never caller-supplied storage.
-    fn call<T>(
+    /// Pass this instance's positional configuration to the business export.
+    fn invoke_with_config<T>(
         &self,
         instance: &PluginInstance,
-        f: impl FnOnce(&mut Store<HostState>, &MandaraPlugin) -> wasmtime::Result<T>,
+        f: impl FnOnce(&mut Store<HostState>, &MandaraPlugin, &[ConfigValue]) -> wasmtime::Result<T>,
     ) -> Result<T> {
         let schema = self.config_schema(instance)?;
-        self.invoke(
-            instance,
-            values_from_config(&schema, &instance.data.config),
-            f,
-        )
+        let config = values_from_config(&schema, &instance.data.config);
+        self.invoke(instance, |store, bindings| f(store, bindings, &config))
     }
 
-    /// Metadata exports run before configuration is available, but always with instance storage.
+    /// Metadata exports require no configuration, but always have instance storage.
     pub fn name(&self, instance: &PluginInstance) -> Result<String> {
-        self.invoke(instance, Vec::new(), |store, b| b.call_name(store))
+        self.invoke(instance, |store, b| b.call_name(store))
     }
     pub fn source_info(&self, instance: &PluginInstance) -> Result<SourceInfo> {
-        self.invoke(instance, Vec::new(), |store, b| b.call_source_info(store))
+        self.invoke(instance, |store, b| b.call_source_info(store))
     }
     pub fn config_schema(&self, instance: &PluginInstance) -> Result<Vec<ConfigField>> {
-        self.invoke(instance, Vec::new(), |store, b| b.call_config_schema(store))
+        self.invoke(instance, |store, b| b.call_config_schema(store))
     }
     pub fn capabilities(&self, instance: &PluginInstance) -> Result<Vec<String>> {
-        self.invoke(instance, Vec::new(), |store, b| b.call_capabilities(store))
+        self.invoke(instance, |store, b| b.call_capabilities(store))
     }
 
     /// Full static catalog (`declare` capability). Enforced: never more
     /// than [`MAX_DECLARE_BOOKS`] books / [`MAX_DECLARE_CHAPTERS`]
     /// chapters (warns beyond 90% of the cap).
     pub fn declare(&self, instance: &PluginInstance) -> Result<Option<Vec<DeclaredBook>>> {
-        let declared = self.call(instance, |store, b| b.call_declare(store))?;
+        let declared = self
+            .invoke_with_config(instance, |store, b, config| b.call_declare(store, config))?;
         if let Some(books) = &declared {
             let chapters = books
                 .iter()
@@ -475,14 +462,16 @@ impl PluginRuntime {
     ) -> Result<SearchResult> {
         let offset = offset.min(MAX_SEARCH_OFFSET);
         let limit = limit.min(MAX_SEARCH_LIMIT);
-        self.call(instance, |store, b| {
-            b.call_search_books(store, query, offset, limit)
+        self.invoke_with_config(instance, |store, b, config| {
+            b.call_search_books(store, config, query, offset, limit)
         })
     }
 
     /// Single book by id (`lookup` capability).
     pub fn get_book(&self, instance: &PluginInstance, book_id: &str) -> Result<Option<BookEntry>> {
-        self.call(instance, |store, b| b.call_get_book(store, book_id))
+        self.invoke_with_config(instance, |store, b, config| {
+            b.call_get_book(store, config, book_id)
+        })
     }
 
     /// Fetch one chapter (`content` capability). Content is capped at
@@ -493,8 +482,8 @@ impl PluginRuntime {
         book_id: &str,
         index: u32,
     ) -> Result<Option<SourceChapter>> {
-        let chapter = self.call(instance, |store, b| {
-            b.call_get_chapter(store, book_id, index)
+        let chapter = self.invoke_with_config(instance, |store, b, config| {
+            b.call_get_chapter(store, config, book_id, index)
         })?;
         match chapter {
             Some(c) => {
@@ -521,8 +510,8 @@ impl PluginRuntime {
         instance: &PluginInstance,
         content_id: &str,
     ) -> Result<Option<mandara_core::source::SourceDeclaredContent>> {
-        let content = self.call(instance, |store, bindings| {
-            bindings.call_get_content(store, content_id)
+        let content = self.invoke_with_config(instance, |store, bindings, config| {
+            bindings.call_get_content(store, config, content_id)
         })?;
         if let Some(content) = &content
             && content.chapters.len() > MAX_DECLARE_CHAPTERS
@@ -543,8 +532,8 @@ impl PluginRuntime {
         filename: &str,
         file_hash: &str,
     ) -> Result<Option<SourceBook>> {
-        let book = self.call(instance, |store, b| {
-            b.call_identify_upload(store, filename, file_hash)
+        let book = self.invoke_with_config(instance, |store, b, config| {
+            b.call_identify_upload(store, config, filename, file_hash)
         })?;
         Ok(book.map(SourceBook::try_from).transpose()?)
     }
@@ -555,8 +544,8 @@ impl PluginRuntime {
         instance: &PluginInstance,
         series_id: &str,
     ) -> Result<Option<SeriesResult>> {
-        let result = self.call(instance, |store, bindings| {
-            bindings.call_get_series(store, series_id)
+        let result = self.invoke_with_config(instance, |store, bindings, config| {
+            bindings.call_get_series(store, config, series_id)
         })?;
         if let Some(series) = &result {
             SourceSeries::try_from(series.series.clone())?;
@@ -586,7 +575,9 @@ impl PluginRuntime {
         instance: &PluginInstance,
         book_id: &str,
     ) -> Result<Option<SourceBookFile>> {
-        let file = self.call(instance, |store, b| b.call_get_book_file(store, book_id))?;
+        let file = self.invoke_with_config(instance, |store, b, config| {
+            b.call_get_book_file(store, config, book_id)
+        })?;
         match file {
             Some(f) => {
                 if f.bytes.len() > MAX_BOOK_FILE_BYTES {

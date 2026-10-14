@@ -47,10 +47,6 @@ fn endpoint(base: &str, segments: &[&str]) -> Option<Url> {
 }
 
 impl Settings {
-    fn load() -> Self {
-        Self::from_values(&mandara::plugin::config::configure())
-    }
-
     fn from_values(values: &[ConfigValue]) -> Self {
         let text = |i, default: &str| match values.get(i) {
             Some(ConfigValue::Text(s)) => s.clone(),
@@ -534,7 +530,7 @@ impl Guest for NoveliaPlugin {
         }
     }
     fn config_schema() -> Vec<ConfigField> {
-        use mandara::plugin::config::ConfigKind;
+        use mandara::plugin::types::ConfigKind;
         vec![
             ConfigField {
                 key: "base-url".into(),
@@ -596,11 +592,16 @@ impl Guest for NoveliaPlugin {
             },
         ]
     }
-    fn declare() -> Option<Vec<DeclaredBook>> {
+    fn declare(_config: Vec<ConfigValue>) -> Option<Vec<DeclaredBook>> {
         None
     }
-    fn search_books(query: String, offset: u32, limit: u32) -> SearchResult {
-        let settings = Settings::load();
+    fn search_books(
+        config: Vec<ConfigValue>,
+        query: String,
+        offset: u32,
+        limit: u32,
+    ) -> SearchResult {
+        let settings = Settings::from_values(&config);
         let empty = || SearchResult {
             total: 0,
             items: vec![],
@@ -642,17 +643,21 @@ impl Guest for NoveliaPlugin {
             })
             .unwrap_or_else(empty)
     }
-    fn get_series(_series_id: String) -> Option<SeriesResult> {
+    fn get_series(_config: Vec<ConfigValue>, _series_id: String) -> Option<SeriesResult> {
         None
     }
-    fn get_book(book_id: String) -> Option<BookEntry> {
+    fn get_book(config: Vec<ConfigValue>, book_id: String) -> Option<BookEntry> {
         let Id::Web(p, n) = Id::parse(&book_id)? else {
             return None;
         };
-        Some(Settings::load().web(&p, &n)?.book(web_id(&p, &n)))
+        Some(
+            Settings::from_values(&config)
+                .web(&p, &n)?
+                .book(web_id(&p, &n)),
+        )
     }
-    fn get_content(content_id: String) -> Option<DeclaredContent> {
-        let settings = Settings::load();
+    fn get_content(config: Vec<ConfigValue>, content_id: String) -> Option<DeclaredContent> {
+        let settings = Settings::from_values(&config);
         match Id::parse(&content_id)? {
             Id::Web(p, n) => {
                 let novel = settings.web(&p, &n)?;
@@ -681,11 +686,11 @@ impl Guest for NoveliaPlugin {
             }
         }
     }
-    fn get_chapter(content_id: String, index: u32) -> Option<Chapter> {
+    fn get_chapter(config: Vec<ConfigValue>, content_id: String, index: u32) -> Option<Chapter> {
         let Id::Web(p, n) = Id::parse(&content_id)? else {
             return None;
         };
-        let settings = Settings::load();
+        let settings = Settings::from_values(&config);
         let novel = settings.web(&p, &n)?;
         let chapter_id = novel
             .chapters()
@@ -706,11 +711,11 @@ impl Guest for NoveliaPlugin {
             format: "html".into(),
         })
     }
-    fn get_book_file(content_id: String) -> Option<BookFile> {
+    fn get_book_file(config: Vec<ConfigValue>, content_id: String) -> Option<BookFile> {
         let Id::Volume(n, v) = Id::parse(&content_id)? else {
             return None;
         };
-        let settings = Settings::load();
+        let settings = Settings::from_values(&config);
         let novel = settings.wenku(&n)?;
         let volume = novel.upload(&v)?;
         let bytes = settings.fetch(&file_url(&settings, &n, volume)?, true)?;
@@ -740,7 +745,11 @@ impl Guest for NoveliaPlugin {
             bytes,
         })
     }
-    fn identify_upload(_filename: String, _file_hash: String) -> Option<BookEntry> {
+    fn identify_upload(
+        _config: Vec<ConfigValue>,
+        _filename: String,
+        _file_hash: String,
+    ) -> Option<BookEntry> {
         None
     }
 }

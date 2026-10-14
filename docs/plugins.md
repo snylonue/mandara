@@ -24,9 +24,9 @@ the full design. This guide is for plugin authors.
   plugins).
 - **Capabilities** — `capabilities()` declares which catalog patterns the
   plugin implements (see below). The host keys all policy off this list.
-- **Guest memory** — a fresh store per call; config is injected at the
-  start of every call via `config::configure()`. Globals do not survive
-  calls. Use the instance-scoped `state` import for durable plugin data;
+- **Guest memory** — a fresh store per call; business exports receive
+  configuration as an explicit parameter. Metadata exports receive none.
+  Globals do not survive calls. Use the instance-scoped `state` import for durable plugin data;
   materialized books and chapter bodies remain the host library cache.
 
 ## Host ownership
@@ -43,9 +43,10 @@ The Rust host separates four lifetimes:
   The server restores these objects at startup and creates them after
   inserting a new registration.
 - `HostState` holds only shared instance-ID/file strings, the instance-bound
-  state-store handle, a cheap clone of `HostServices`, derived positional
-  configuration, and per-call image accounting. It retains neither the
-  complete instance nor its compiled component or raw JSON configuration.
+  state-store handle, a cheap clone of `HostServices`, and per-call image
+  accounting. It retains neither the complete instance nor its compiled
+  component or configuration. The runtime derives positional configuration
+  locally and passes it directly to the business export.
   Identity handles share their strings without copying them per call, and the
   state handle is cloned from the bound instance, never constructed per call.
   Cloning services copies the HTTP policy and clones only the shared image-store
@@ -61,8 +62,7 @@ compiling runtime; calls do not repeat that engine-identity check.
 Configuration saves publish a new immutable snapshot while retaining the
 same state store. In-flight calls keep their original configuration snapshot;
 subsequent calls use the saved configuration. Unregistering removes the live
-instance and its database-owned state. Wasm exports and protocol v0.13.0 are
-unchanged by this ownership split.
+instance and its database-owned state.
 
 ## Persistent plugin state
 
@@ -211,16 +211,12 @@ interface types {
     record search-result { total: u64, items: list<catalog-entry> }
     record series-result { series: series-entry, books: list<book-entry> }
     record book-file { filename: string, mime: string, bytes: list<u8> }
-}
-
-interface store { log: func(message: string); }
-
-interface config {
     record config-field { key, label, kind, default, required, hint }
     variant config-kind { text, number, boolean, enum-options(list<string>), list-of-string }
     variant config-value { text(string), number(f64), boolean(bool), enum-index(u32), string-list(list<string>) }
-    configure: func() -> list<config-value>;   // host-provided
 }
+
+interface store { log: func(message: string); }
 
 interface http {
     record header { name: string, value: string }
@@ -269,14 +265,20 @@ World exports:
 | `name()` | always | Human-readable name |
 | `config-schema()` | always | Config fields the host renders as an admin form |
 | `capabilities()` | always | `["declare","search","lookup","identify","content","book-file"]` subset |
-| `declare()` | always | Small static catalog (`None` for large sources) |
-| `search-books(query, offset, limit)` | `search` | Paginated catalog browsing |
-| `get-book(book-id)` | `lookup` | Single book (materialize on demand, refresh) |
-| `get-content(content-id)` | content acquisition | Identity, loading form and chapter declarations together |
-| `get-series(series-id)` | `lookup` | Series metadata plus independently addressable member books |
-| `get-chapter(content-id, index)` | `content` | One chapter body |
-| `identify-upload(filename, file-hash)` | `identify` | Upload recognition |
-| `get-book-file(content-id)` | `book-file` | Whole book file (epub/txt download) |
+| `declare(config)` | always | Small static catalog (`None` for large sources) |
+| `search-books(config, query, offset, limit)` | `search` | Paginated catalog browsing |
+| `get-book(config, book-id)` | `lookup` | Single book (materialize on demand, refresh) |
+| `get-content(config, content-id)` | content acquisition | Identity, loading form and chapter declarations together |
+| `get-series(config, series-id)` | `lookup` | Series metadata plus independently addressable member books |
+| `get-chapter(config, content-id, index)` | `content` | One chapter body |
+| `identify-upload(config, filename, file-hash)` | `identify` | Upload recognition |
+| `get-book-file(config, content-id)` | `book-file` | Whole book file (epub/txt download) |
+
+**Explicit configuration.** Business exports take `config: list<config-value>`
+as their first parameter, in `config-schema` field order. `name`, `source-info`,
+`capabilities`, and `config-schema` remain parameterless. Configuration is not
+a host import. The package remains v0.13.0, but these signatures change the
+component ABI: rebuild every plugin before using it with the updated host.
 
 **One volume = one book (v0.9.0).** A plugin adapts its source into
 explicit series and individual books. `get-series` returns series metadata
@@ -463,21 +465,25 @@ match resp {
 `config-schema()` returns the fields; values live in JSON keyed by field
 key. The host validates (unknown keys rejected, `required` enforced,
 enum indices range-checked, optional fields without a default stay
-absent), stores the validated JSON, and **injects the values at the start
-of every call** — call `config::configure()` first in your exports and map
-the returned list back by schema order:
+absent), stores the validated JSON, and **passes the values explicitly to
+each business export**. Map the parameter list back by schema order; pass a
+slice to helpers that need configuration, instead of reading ambient host state:
 
 ```rust
 const FIELDS: [&str; 2] = ["site-name", "page-size"];
 
-fn site_name() -> String {
+fn site_name(config: &[ConfigValue]) -> String {
     let idx = FIELDS.iter().position(|k| *k == "site-name").unwrap();
-    match mandara::plugin::config::configure().get(idx) {
+    match config.get(idx) {
         Some(ConfigValue::Text(s)) if !s.is_empty() => s.clone(),
         _ => "默认站点".into(),
     }
 }
 ```
+
+Metadata and schema queries do not receive configuration. `HostState` stores
+no configuration, and there is no `config` import or `configure` function.
+Configuration snapshots and persistent state remain instance-owned.
 
 Defaults are serialized JSON (`"8"`, `"false"`, `"\"x\""`); a text field
 whose default is not valid JSON is treated as the literal string.

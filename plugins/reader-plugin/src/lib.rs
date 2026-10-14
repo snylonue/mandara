@@ -34,21 +34,17 @@ const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8765/reader";
 /// Config schema field order — the host injects values in this order.
 const FIELDS: [&str; 3] = ["base-url", "site-name", "max-chapters"];
 
-fn values() -> Vec<ConfigValue> {
-    mandara::plugin::config::configure()
-}
-
-fn config_string(key: &str, default: &str) -> String {
+fn config_string(config: &[ConfigValue], key: &str, default: &str) -> String {
     let idx = FIELDS.iter().position(|k| *k == key).unwrap();
-    match values().get(idx) {
+    match config.get(idx) {
         Some(ConfigValue::Text(s)) if !s.is_empty() => s.clone(),
         _ => default.to_string(),
     }
 }
 
-fn config_number(key: &str, default: u32) -> u32 {
+fn config_number(config: &[ConfigValue], key: &str, default: u32) -> u32 {
     let idx = FIELDS.iter().position(|k| *k == key).unwrap();
-    match values().get(idx) {
+    match config.get(idx) {
         Some(ConfigValue::Number(n)) => n.clamp(1.0, 20.0) as u32,
         _ => default,
     }
@@ -189,7 +185,7 @@ impl Guest for ReaderPlugin {
             ConfigField {
                 key: "base-url".into(),
                 label: "站点地址".into(),
-                kind: mandara::plugin::config::ConfigKind::Text,
+                kind: mandara::plugin::types::ConfigKind::Text,
                 default: Some(DEFAULT_BASE_URL.into()),
                 required: true,
                 hint: Some(
@@ -199,7 +195,7 @@ impl Guest for ReaderPlugin {
             ConfigField {
                 key: "site-name".into(),
                 label: "站点名称".into(),
-                kind: mandara::plugin::config::ConfigKind::Text,
+                kind: mandara::plugin::types::ConfigKind::Text,
                 default: Some("远程阅读源".into()),
                 required: true,
                 hint: Some("显示在词条描述里".into()),
@@ -207,7 +203,7 @@ impl Guest for ReaderPlugin {
             ConfigField {
                 key: "max-chapters".into(),
                 label: "每章上限".into(),
-                kind: mandara::plugin::config::ConfigKind::Number,
+                kind: mandara::plugin::types::ConfigKind::Number,
                 default: Some("3".into()),
                 required: false,
                 hint: Some("每本书最多提供的章节数（1~20，向上游 max 参数）".into()),
@@ -225,12 +221,17 @@ impl Guest for ReaderPlugin {
         ]
     }
 
-    fn declare() -> Option<Vec<DeclaredBook>> {
+    fn declare(_config: Vec<ConfigValue>) -> Option<Vec<DeclaredBook>> {
         None // large source: never enumerated eagerly
     }
 
-    fn search_books(query: String, offset: u32, limit: u32) -> SearchResult {
-        let base = config_string("base-url", DEFAULT_BASE_URL);
+    fn search_books(
+        config: Vec<ConfigValue>,
+        query: String,
+        offset: u32,
+        limit: u32,
+    ) -> SearchResult {
+        let base = config_string(&config, "base-url", DEFAULT_BASE_URL);
         let url = format!(
             "{base}/api/search?q={}&offset={offset}&limit={limit}",
             urlencode(&query)
@@ -261,8 +262,8 @@ impl Guest for ReaderPlugin {
         }
     }
 
-    fn get_book(book_id: String) -> Option<BookEntry> {
-        let base = config_string("base-url", DEFAULT_BASE_URL);
+    fn get_book(config: Vec<ConfigValue>, book_id: String) -> Option<BookEntry> {
+        let base = config_string(&config, "base-url", DEFAULT_BASE_URL);
         let url = format!("{base}/api/books/{book_id}");
         match http_get(&url) {
             Ok((200, body)) => match serde_json::from_slice::<JsonEntry>(&body) {
@@ -285,9 +286,9 @@ impl Guest for ReaderPlugin {
         }
     }
 
-    fn get_content(content_id: String) -> Option<DeclaredContent> {
-        let base = config_string("base-url", DEFAULT_BASE_URL);
-        let max = config_number("max-chapters", 3);
+    fn get_content(config: Vec<ConfigValue>, content_id: String) -> Option<DeclaredContent> {
+        let base = config_string(&config, "base-url", DEFAULT_BASE_URL);
+        let max = config_number(&config, "max-chapters", 3);
         let url = format!("{base}/api/books/{content_id}/content?max={max}");
         match http_get(&url) {
             Ok((200, body)) => {
@@ -334,8 +335,8 @@ impl Guest for ReaderPlugin {
         }
     }
 
-    fn get_chapter(book_id: String, index: u32) -> Option<Chapter> {
-        let base = config_string("base-url", DEFAULT_BASE_URL);
+    fn get_chapter(config: Vec<ConfigValue>, book_id: String, index: u32) -> Option<Chapter> {
+        let base = config_string(&config, "base-url", DEFAULT_BASE_URL);
         let url = format!("{base}/api/books/{book_id}/chapters/{index}");
         match http_get(&url) {
             Ok((200, body)) => match serde_json::from_slice::<JsonChapter>(&body) {
@@ -362,12 +363,16 @@ impl Guest for ReaderPlugin {
         }
     }
 
-    fn identify_upload(_filename: String, _file_hash: String) -> Option<BookEntry> {
+    fn identify_upload(
+        _config: Vec<ConfigValue>,
+        _filename: String,
+        _file_hash: String,
+    ) -> Option<BookEntry> {
         None // no `identify` capability; host never calls this
     }
 
-    fn get_series(series_id: String) -> Option<SeriesResult> {
-        let base = config_string("base-url", DEFAULT_BASE_URL);
+    fn get_series(config: Vec<ConfigValue>, series_id: String) -> Option<SeriesResult> {
+        let base = config_string(&config, "base-url", DEFAULT_BASE_URL);
         let url = format!("{base}/api/series/{}", urlencode(&series_id));
         match http_get(&url) {
             Ok((200, body)) => serde_json::from_slice::<JsonSeriesResult>(&body)
@@ -380,8 +385,8 @@ impl Guest for ReaderPlugin {
         }
     }
 
-    fn get_book_file(book_id: String) -> Option<BookFile> {
-        let base = config_string("base-url", DEFAULT_BASE_URL);
+    fn get_book_file(config: Vec<ConfigValue>, book_id: String) -> Option<BookFile> {
+        let base = config_string(&config, "base-url", DEFAULT_BASE_URL);
         let url = format!("{base}/api/books/{book_id}/download");
         match http_get(&url) {
             Ok((200, bytes)) => Some(BookFile {
