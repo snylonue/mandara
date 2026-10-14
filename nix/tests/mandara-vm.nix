@@ -123,7 +123,7 @@ pkgs.testers.runNixOSTest {
             f"curl -fsS -H 'Authorization: Bearer {token}' "
             "http://127.0.0.1:8080/api/plugins/wasm-files"
         ))
-        expected = ["bangumi.wasm", "hello.wasm", "reader.wasm", "wenku8.wasm", "wiki.wasm"]
+        expected = ["bangumi.wasm", "hello.wasm", "novelia.wasm", "reader.wasm", "wenku8.wasm", "wiki.wasm"]
         assert wasm_files == expected, wasm_files
 
     with subtest("txt upload is parsed and readable"):

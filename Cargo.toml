@@ -5,6 +5,7 @@ members = [
     "plugins/reader-plugin",
     "plugins/wenku8-plugin",
     "plugins/bangumi-plugin",
+    "plugins/novelia-plugin",
     "crates/mandara-core",
     "crates/mandara-formats",
     "crates/mandara-plugin",
@@ -32,6 +33,9 @@ opt-level = "s"
 opt-level = "s"
 
 [profile.release.package.bangumi-plugin]
+opt-level = "s"
+
+[profile.release.package.novelia-plugin]
 opt-level = "s"
 
 [workspace.dependencies]

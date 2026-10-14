@@ -387,6 +387,11 @@ sessions, shares and archived original bytes. Colliding legacy items are kept.
 
 ## Example plugins
 
+- `plugins/novelia-plugin/` — Novelia web novels (`search` + `lookup` +
+  chapter content) and Wenku series/volume downloads (`book-file`). Configurable
+  catalog, providers, translation choice and optional Bearer token. See
+  [Novelia setup and limitations](novelia-plugin.md).
+
 - `plugins/hello-plugin/` — small `declare` + `identify` + `content`
   plugin; config-driven (site name, content variant, verbose logging, a
   deliberate infinite-loop switch for testing fuel exhaustion).

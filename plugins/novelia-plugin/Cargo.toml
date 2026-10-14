@@ -1,0 +1,16 @@
+[package]
+name = "novelia-plugin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "mandara plugin: Novelia web novels and Wenku downloads"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.60"
+serde = { workspace = true }
+serde_json = { workspace = true }
+url = { workspace = true }
