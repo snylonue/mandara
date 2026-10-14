@@ -323,12 +323,24 @@
   transition: background-color 0.2s, color 0.2s;
 }
 
+/* Reader colors must not inherit the shelf theme: night reading is dark
+   even when the application chrome uses the light palette. */
+.reader-body[data-theme="dark"],
+.reader[data-theme="dark"] .reader-body {
+  --fg: #e6e9ef;
+  --reader-border: #2a2f3a;
+  --reader-muted: #9ba3b2;
+  background: #0f1115;
+  color-scheme: dark;
+}
+
 .reader-body[data-theme="sepia"],
 .reader[data-theme="sepia"] .reader-body {
   --fg: #43382a;
   --reader-border: #d8c9a8;
   --reader-muted: #8a7a5f;
   background: #f4ecd8;
+  color-scheme: light;
 }
 
 .reader-body[data-theme="light"],
@@ -337,6 +349,7 @@
   --reader-border: #dde1e8;
   --reader-muted: #6b7280;
   background: #fbfbfd;
+  color-scheme: light;
 }
 
 .reader-body.font-serif {

@@ -81,6 +81,8 @@ export function EpubDocument({ content, title, settings, onFraction, onReady, on
     const host = frame.current?.parentElement;
     if (!doc || !host) return;
     const inherited = getComputedStyle(host);
+    // Use the theme token, not an intermediate animated host color.
+    const foreground = inherited.getPropertyValue("--fg").trim() || inherited.color;
     let defaults = defaultsRef.current;
     if (!defaults || defaults.ownerDocument !== doc) {
       defaults = doc.createElement("style");
@@ -89,7 +91,7 @@ export function EpubDocument({ content, title, settings, onFraction, onReady, on
     }
     // Low-specificity defaults precede publication rules; no paragraph/div
     // justification or display:block overrides the publisher's own cascade.
-    defaults.textContent = ":where(html){font-size:" + settings.fontSize + "px;line-height:" + settings.lineHeight + ";font-family:" + inherited.fontFamily + ";color:" + inherited.color + ";background:transparent} :where(body){margin:0;padding:0.5em} :where(img,svg){max-width:100%;height:auto} :where(table){max-width:100%}";
+    defaults.textContent = ":where(html){font-size:" + settings.fontSize + "px;line-height:" + settings.lineHeight + ";font-family:" + inherited.fontFamily + ";color:" + foreground + ";color-scheme:" + inherited.colorScheme + ";background:transparent} :where(body){margin:0;padding:0.5em} :where(img,svg){max-width:100%;height:auto} :where(table){max-width:100%}";
     if (doc.documentElement.dataset.epubLayout !== "pre-paginated") {
       const imageOnly = doc.images.length === 1 && !doc.body.textContent?.trim() && !doc.querySelector("svg,table,video,audio,canvas");
       // Overlay scrollbars do not reserve a gutter. Keep text clear even when

@@ -66,6 +66,30 @@ it("places zero-specificity glyph defaults before publication styles without rew
   expect(doc.querySelector(".gaiji")!.getAttribute("style")).toBe("height:3em");
 });
 
+it("updates frame theme defaults without sampling animated colors or changing publisher effects", () => {
+  const publisher = ".narration{color:#FFFFFF;text-shadow:0 0 0.3em #FF2D95}";
+  const content = `<!doctype html><html><head><style>${publisher}</style></head>
+    <body><p>正文</p><p class="narration">发光文字</p></body></html>`;
+  const { doc, frame, rerender } = load(content);
+  const host = frame.parentElement!;
+  // A color transition may still paint the previous theme during this effect.
+  host.style.color = "rgb(27, 33, 48)";
+  for (const [theme, foreground, scheme] of [
+    ["dark", "#e6e9ef", "dark"], ["sepia", "#43382a", "light"],
+  ] as const) {
+    host.style.setProperty("--fg", foreground);
+    host.style.colorScheme = scheme;
+    rerender(<EpubDocument {...props} content={content} settings={{ ...settings, theme }} />);
+    const htmlRule = doc.head.querySelector("style")!.sheet!.cssRules[0] as CSSStyleRule;
+    const expected = doc.createElement("span");
+    expected.style.color = foreground;
+    expect(htmlRule.style.color).toBe(expected.style.color);
+    expect(htmlRule.style.getPropertyValue("color-scheme")).toBe(scheme);
+    expect(htmlRule.style.background).toBe("transparent");
+    expect(doc.head.querySelectorAll("style")[1].textContent).toBe(publisher);
+  }
+});
+
 it("does not add glyph sizing defaults to fixed-layout publications", () => {
   const { doc } = load(`<!doctype html><html data-epub-layout="pre-paginated"><head>
     <meta name="viewport" content="width=600,height=800"></head><body>
