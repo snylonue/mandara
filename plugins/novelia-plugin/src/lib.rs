@@ -37,13 +37,6 @@ struct Settings {
 
 fn endpoint(base: &str, segments: &[&str]) -> Option<Url> {
     let mut url = Url::parse(base).ok()?;
-    if !matches!(url.scheme(), "http" | "https")
-        || url.host_str().is_none()
-        || !url.username().is_empty()
-        || url.password().is_some()
-    {
-        return None;
-    }
     url.set_query(None);
     url.set_fragment(None);
     url.path_segments_mut()
@@ -60,7 +53,7 @@ impl Settings {
 
     fn from_values(values: &[ConfigValue]) -> Self {
         let text = |i, default: &str| match values.get(i) {
-            Some(ConfigValue::Text(s)) if !s.trim().is_empty() => s.trim().to_string(),
+            Some(ConfigValue::Text(s)) => s.clone(),
             _ => default.into(),
         };
         Self {
@@ -74,11 +67,7 @@ impl Settings {
                 _ => 0,
             },
             username: text(3, ""),
-            // Password whitespace is significant, unlike URL/account whitespace.
-            password: match values.get(4) {
-                Some(ConfigValue::Text(s)) => s.clone(),
-                _ => String::new(),
-            },
+            password: text(4, ""),
             auth_base: text(5, AUTH_BASE),
             token: RefCell::new(None),
         }
@@ -88,27 +77,9 @@ impl Settings {
         endpoint(&self.base, segments)
     }
 
-    fn login_url(&self) -> Option<Url> {
-        let url = endpoint(&self.auth_base, &["api", "v1", "auth", "login"])?;
-        // Only local mock services may receive passwords without TLS.
-        if url.scheme() != "https"
-            && !matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"))
-        {
-            return None;
-        }
-        Some(url)
-    }
-
     fn login(&self) -> Option<String> {
         use mandara::plugin::http::{Header, Request, fetch};
-        if self.username.is_empty() && self.password.is_empty() {
-            return Some(String::new());
-        }
-        if self.username.is_empty() || self.password.is_empty() {
-            log("Novelia requires both username and password");
-            return None;
-        }
-        let url = self.login_url()?;
+        let url = endpoint(&self.auth_base, &["api", "v1", "auth", "login"])?;
         // Do not retry password submissions, downgrade to guest, or log bodies.
         let response = match fetch(&Request {
             method: "POST".into(),
@@ -140,12 +111,7 @@ impl Settings {
             log(&format!("Novelia login HTTP {}", response.status));
             return None;
         }
-        let token = String::from_utf8(response.body).ok()?.trim().to_string();
-        if !valid_token(&token) {
-            log("Novelia login returned an invalid token");
-            return None;
-        }
-        Some(token)
+        String::from_utf8(response.body).ok()
     }
 
     fn access_token(&self) -> Option<String> {
@@ -173,14 +139,12 @@ impl Settings {
             name: "User-Agent".into(),
             value: "snylonue/mandara Novelia plugin".into(),
         }];
-        if authenticated {
+        if authenticated && (!self.username.is_empty() || !self.password.is_empty()) {
             let token = self.access_token()?;
-            if !token.is_empty() {
-                headers.push(Header {
-                    name: "Authorization".into(),
-                    value: format!("Bearer {token}"),
-                });
-            }
+            headers.push(Header {
+                name: "Authorization".into(),
+                value: format!("Bearer {token}"),
+            });
         }
         // Do not retry authorization failures or log response bodies/tokens.
         for attempt in 0..2 {
@@ -317,20 +281,8 @@ struct WenkuNovel {
 
 impl WenkuNovel {
     fn upload(&self, volume_id: &str) -> Option<&WenkuVolume> {
-        let mut matches = self.volume_jp.iter().filter(|v| v.volume_id == volume_id);
-        let upload = matches.next()?;
-        matches.next().is_none().then_some(upload)
+        self.volume_jp.iter().find(|v| v.volume_id == volume_id)
     }
-}
-
-fn valid_token(token: &str) -> bool {
-    let parts: Vec<_> = token.split('.').collect();
-    parts.len() == 3
-        && parts.iter().all(|p| {
-            !p.is_empty()
-                && p.bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
-        })
 }
 
 fn preferred(original: &str, translated: Option<&str>) -> String {
@@ -378,21 +330,13 @@ enum Id {
 
 impl Id {
     fn parse(raw: &str) -> Option<Self> {
-        let parts: Vec<_> = raw.split(':').collect();
-        let component = |s: &str| {
-            decode(s).filter(|s| {
-                !s.is_empty() && s != "." && s != ".." && !s.chars().any(char::is_control)
-            })
-        };
-        match parts.as_slice() {
-            ["web", p, n] => Some(Self::Web(component(p)?, component(n)?)),
-            ["wenku-volume", n, v] => {
-                let volume = component(v)?;
-                if volume.contains(['/', '\\']) {
-                    return None;
-                }
-                Some(Self::Volume(component(n)?, volume))
-            }
+        let mut parts = raw.splitn(3, ':');
+        let kind = parts.next()?;
+        let first = decode(parts.next()?)?;
+        let second = decode(parts.next()?)?;
+        match kind {
+            "web" => Some(Self::Web(first, second)),
+            "wenku-volume" => Some(Self::Volume(first, second)),
             _ => None,
         }
     }
@@ -648,7 +592,7 @@ impl Guest for NoveliaPlugin {
                 kind: ConfigKind::Text,
                 default: Some(json!(AUTH_BASE).to_string()),
                 required: true,
-                hint: Some("官方统一认证服务；仅填写可信 HTTPS 地址，不含 /api".into()),
+                hint: Some("官方统一认证服务；仅填写可信地址，不含 /api；建议使用 HTTPS".into()),
             },
         ]
     }
@@ -662,9 +606,6 @@ impl Guest for NoveliaPlugin {
             items: vec![],
         };
         if limit == 0 {
-            return empty();
-        }
-        if settings.providers.is_empty() {
             return empty();
         }
         let result = search_pages::<WebOutline>(offset, limit, |page| {

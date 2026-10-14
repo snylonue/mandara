@@ -25,6 +25,7 @@ impl ImageStore for Images {
 fn compiled_guest_adapts_web_chapters_and_wenku_downloads() {
     let requests = Arc::new(Mutex::new(Vec::new()));
     let recorded = requests.clone();
+    let anonymous_requests = requests.clone();
     let server = common::MockServer::start(move |target, method, headers, body| {
         recorded
             .lock()
@@ -38,22 +39,25 @@ fn compiled_guest_adapts_web_chapters_and_wenku_downloads() {
             if login["username"] == "bad" {
                 return (401, vec![], b"wrong password".to_vec());
             }
-            if login["username"] == "invalid-token" {
-                return (200, vec![], b"<html>error</html>".to_vec());
-            }
             if login["username"] == "server-error" {
                 return (503, vec![], b"unavailable".to_vec());
             }
-            assert_eq!(login["username"], "test-account");
+            if login["username"] == "" || login["password"] == "" {
+                return (400, vec![], b"missing credentials".to_vec());
+            }
+            assert_eq!(login["username"], " test-account ");
             assert_eq!(login["password"], " test-password ");
-            return (200, vec![], b"test.token.signature".to_vec());
+            return (200, vec![], b"test-token".to_vec());
         }
         assert_eq!(method, "GET");
         let (path, query) = target.split_once('?').unwrap_or((target, ""));
         let payload = match path {
             "/api/novel" => {
                 assert!(query.contains("pageSize=100"));
-                assert!(query.contains("provider=syosetu"));
+                assert!(
+                    query.contains("provider=syosetu")
+                        || query.split('&').any(|p| p == "provider=")
+                );
                 assert!(query.contains("query=%E6%B5%8B%E8%AF%95"));
                 json!({"pageNumber": 1, "items": [{"providerId": "syosetu", "novelId": "n1", "titleJp": "原书名", "titleZh": "译书名"}]})
             }
@@ -129,7 +133,7 @@ fn compiled_guest_adapts_web_chapters_and_wenku_downloads() {
             .iter()
             .any(|f| ["access-token", "catalog", "volume-files"].contains(&f.key.as_str()))
     );
-    let normalized = validate_config(&schema, &json!({"base-url": server.url(""), "auth-url": server.url(""), "providers": ["syosetu"], "username": "test-account", "password": " test-password "})).unwrap();
+    let normalized = validate_config(&schema, &json!({"base-url": server.url(""), "auth-url": server.url(""), "providers": ["syosetu"], "username": " test-account ", "password": " test-password "})).unwrap();
     let config = values_from_config(&schema, &normalized);
     let result = plugin.search_books(&config, "测试", 0, 10).unwrap();
     assert_eq!(result.total, 1);
@@ -257,7 +261,28 @@ fn compiled_guest_adapts_web_chapters_and_wenku_downloads() {
             .is_none()
     );
 
-    for account in ["bad", "invalid-token", "server-error"] {
+    let mut empty_providers = config.clone();
+    empty_providers[1] = ConfigValue::StringList(vec![]);
+    assert_eq!(
+        plugin
+            .search_books(&empty_providers, "测试", 0, 10)
+            .unwrap()
+            .items
+            .len(),
+        1
+    );
+    assert!(
+        anonymous_requests
+            .lock()
+            .unwrap()
+            .last()
+            .unwrap()
+            .0
+            .split('&')
+            .any(|p| p == "provider=")
+    );
+
+    for account in ["bad", "server-error"] {
         let mut invalid = config.clone();
         invalid[3] = ConfigValue::Text(account.into());
         let before = requests.lock().unwrap().len();
@@ -277,11 +302,15 @@ fn compiled_guest_adapts_web_chapters_and_wenku_downloads() {
                 .all(|(target, _)| target == "/api/v1/auth/login")
         );
     }
-    let mut incomplete = config.clone();
-    incomplete[4] = ConfigValue::Text(String::new());
-    let before = requests.lock().unwrap().len();
-    assert!(plugin.get_content(&incomplete, first).unwrap().is_none());
-    assert_eq!(requests.lock().unwrap().len(), before);
+    for field in [3, 4] {
+        let mut incomplete = config.clone();
+        incomplete[field] = ConfigValue::Text(String::new());
+        let before = requests.lock().unwrap().len();
+        assert!(plugin.get_content(&incomplete, first).unwrap().is_none());
+        let recorded = requests.lock().unwrap();
+        assert_eq!(recorded.len(), before + 1);
+        assert_eq!(recorded[before].0, "/api/v1/auth/login"); // Let upstream reject it.
+    }
 
     let requests = requests.lock().unwrap();
     for (target, headers) in requests.iter() {
@@ -292,9 +321,19 @@ fn compiled_guest_adapts_web_chapters_and_wenku_downloads() {
         if target == "/image.png" || target == "/api/v1/auth/login" {
             assert_eq!(auth, None);
         } else if target.starts_with("/api/") {
-            assert_eq!(auth, Some("Bearer test.token.signature"));
+            assert_eq!(auth, Some("Bearer test-token"));
         }
     }
+    drop(requests);
+    let mut anonymous = config.clone();
+    anonymous[3] = ConfigValue::Text(String::new());
+    anonymous[4] = ConfigValue::Text(String::new());
+    let before = anonymous_requests.lock().unwrap().len();
+    assert!(plugin.get_content(&anonymous, first).unwrap().is_some());
+    let recorded = anonymous_requests.lock().unwrap();
+    assert_eq!(recorded.len(), before + 1);
+    assert_eq!(recorded[before].0, "/api/wenku/series");
+    assert!(!recorded[before].1.iter().any(|(k, _)| k == "authorization"));
 }
 
 #[test]

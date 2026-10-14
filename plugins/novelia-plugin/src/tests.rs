@@ -26,18 +26,11 @@ fn opaque_ids_roundtrip_and_reject_malformed_components() {
         Some(Id::Web("syosetu".into(), "n1234ab".into()))
     );
     for bad in [
-        "web:a:",
         "web:a:%",
         "web:a:%GG",
         "web:a:%FF",
-        "web:a:%00",
-        "web:a:..",
         "wenku:",
-        "wenku-volume:a:b:c",
-        "wenku-volume:a:",
         "wenku:a",
-        "wenku-volume:a:..",
-        "wenku-volume:a:%2F",
         "wenku-asin:a:old.epub",
         "wenku-asin:a:b000000001",
         "wenku-asin:a:",
@@ -71,11 +64,6 @@ fn url_segments_and_repeated_translation_queries_are_encoded() {
     );
     assert!(file_url(&settings(3), "123", &volume).is_none());
     assert!(file_url(&settings(4), "123", &volume).is_none());
-    for base in ["file:///tmp", "https://user:secret@example.com"] {
-        let mut s = settings(0);
-        s.base = base.into();
-        assert!(s.url(&["api", "novel"]).is_none());
-    }
 }
 
 #[test]
@@ -222,13 +210,6 @@ fn wenku_uses_exact_upstream_volume_ids_without_metadata_or_asins() {
     assert!(novel.upload("重新上传.txt").is_some());
     // Width/whitespace normalization must not alias distinct upstream filenames.
     assert!(novel.upload("第 一 卷.txt").is_none());
-    novel.volume_jp.push(WenkuVolume {
-        volume_id: "重新上传.txt".into(),
-        gpt: 0,
-        sakura: 1,
-        youdao: 0,
-    });
-    assert!(novel.upload("重新上传.txt").is_none());
 }
 
 #[test]
@@ -248,7 +229,7 @@ fn live_wenku_snapshot_addresses_each_upload_by_volume_id() {
 }
 
 #[test]
-fn configuration_preserves_password_whitespace_and_defaults_to_anonymous() {
+fn configuration_preserves_supplied_text_and_defaults_only_when_missing() {
     let defaults = Settings::from_values(&[]);
     assert!(defaults.username.is_empty());
     assert!(defaults.password.is_empty());
@@ -260,42 +241,44 @@ fn configuration_preserves_password_whitespace_and_defaults_to_anonymous() {
         ConfigValue::Text("  测试账号  ".into()),
         ConfigValue::Text(" password with spaces ".into()),
     ]);
-    assert_eq!(configured.username, "测试账号");
+    assert_eq!(configured.username, "  测试账号  ");
     assert_eq!(configured.password, " password with spaces ");
     assert_eq!(configured.translation, 2);
 }
 
 #[test]
-fn login_url_requires_tls_except_for_loopback_mock_servers() {
-    let mut s = settings(0);
-    for base in [
-        "http://example.com",
-        "https://user:secret@example.com",
-        "file:///tmp",
-    ] {
-        s.auth_base = base.into();
-        assert!(s.login_url().is_none());
-    }
-    s.auth_base = "http://127.0.0.1:8080".into();
-    assert_eq!(s.login_url().unwrap().path(), "/api/v1/auth/login");
-    s.auth_base = AUTH_BASE.into();
+fn empty_configured_urls_are_not_replaced_with_defaults() {
+    let s = Settings::from_values(&[
+        ConfigValue::Text(String::new()),
+        ConfigValue::StringList(vec![]),
+        ConfigValue::EnumIndex(0),
+        ConfigValue::Text(String::new()),
+        ConfigValue::Text(String::new()),
+        ConfigValue::Text(String::new()),
+    ]);
+    assert!(s.base.is_empty());
+    assert!(s.auth_base.is_empty());
+}
+
+#[test]
+fn endpoints_use_configured_addresses_without_plugin_policy_checks() {
+    let url = endpoint(
+        "http://user:secret@example.com",
+        &["api", "v1", "auth", "login"],
+    )
+    .unwrap();
     assert_eq!(
-        s.login_url().unwrap().as_str(),
-        "https://auth.novelia.cc/api/v1/auth/login"
+        url.as_str(),
+        "http://user:secret@example.com/api/v1/auth/login"
     );
 }
 
 #[test]
-fn login_token_validation_rejects_html_errors_and_header_injection() {
-    assert!(valid_token("header.payload.signature"));
-    for invalid in [
-        "",
-        "<html>error</html>",
-        "wrong password",
-        "a..c",
-        "a.b.c.d",
-        "a.b.c\r\nx:secret",
-    ] {
-        assert!(!valid_token(invalid));
+fn upstream_identifier_values_are_decoded_without_content_validation() {
+    for value in ["", ".", "..", "/", "a\\b", "a:b", "\u{0}"] {
+        assert_eq!(
+            Id::parse(&volume_id("series", value)),
+            Some(Id::Volume("series".into(), value.into()))
+        );
     }
 }

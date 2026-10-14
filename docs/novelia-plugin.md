@@ -16,22 +16,22 @@ Restart the server, then register the component in the admin UI. Nix package dis
 | Configuration | Meaning |
 | --- | --- |
 | `base-url` | Site root, default `https://n.novelia.cc`; omit `/api`. |
-| `providers` | Web-search sources, all enabled by default: syosetu, kakuyomu, hameln, pixiv, alphapolis, novelup. An empty list searches nothing. |
+| `providers` | Web-search sources, all enabled by default: syosetu, kakuyomu, hameln, pixiv, alphapolis, novelup. Submitted as configured, including an empty list (`provider=`); upstream determines its meaning. |
 | `translation` | `0`: GPT → Sakura → Youdao → Japanese; `1`: GPT only; `2`: Sakura only; `3`: Youdao only; `4`: Japanese only (web novels). |
-| `username` | Account email or username, default empty. |
+| `username` | Account email or username, default empty. Submitted exactly as configured. |
 | `password` | Account password, default empty. Leading/trailing whitespace is preserved. |
-| `auth-url` | Authentication service root, default `https://auth.novelia.cc`; omit `/api`. HTTPS is required except for loopback mock servers. |
+| `auth-url` | Authentication service root, default `https://auth.novelia.cc`; omit `/api`. The plugin adds no scheme/host restrictions beyond URL parsing; host fetch policy still applies. |
 
-Both account fields empty means anonymous access. Web search needs login on the live deployment, while public Wenku downloads and web details/chapters can be read anonymously. Supplying only one account field, a failed login or an invalid token makes authenticated API calls unavailable; the plugin never silently falls back to guest access.
+Both account fields empty means anonymous access. Web search needs login on the live deployment, while public Wenku downloads and web details/chapters can be read anonymously. If either account field is supplied, both values are submitted without trimming or local completeness checks; upstream decides whether they are valid. A failed login makes API calls unavailable rather than silently falling back to guest access.
 
-The plugin posts `{app: "n", username, password}` to the configured authentication service's `/api/v1/auth/login` and uses its returned JWT as the API Bearer token. Login is lazy: one submission per export call that needs network data, reused across API requests in that call. Password submissions are never retried. The guest is stateless between calls, so later calls log in afresh rather than keeping an expiring token or browser refresh cookie. Illustration requests receive neither credentials nor the Bearer token.
+The plugin posts `{app: "n", username, password}` to the configured authentication service's `/api/v1/auth/login` and uses the successful response body verbatim as the API Bearer token, without checking JWT structure. Login is lazy: one submission per export call that needs network data, reused across API requests in that call. Password submissions are never retried. The guest is stateless between calls, so later calls log in afresh rather than keeping an expiring token or browser refresh cookie. Illustration requests receive neither credentials nor the Bearer token.
 
-Only use trusted site and authentication endpoints. Credentials are stored in ordinary instance configuration, **not encrypted by this plugin**; protect administrator access and database backups. The admin form masks password fields visually, which is not a storage security boundary. Real credentials are never supplied as defaults or committed to the repository; login logs omit passwords, tokens and response bodies.
+Only use trusted site and authentication endpoints, preferably HTTPS. Credentials are stored in ordinary instance configuration, **not encrypted by this plugin**; protect administrator access and database backups. The admin form masks password fields visually, which is not a storage security boundary. Real credentials are never supplied as defaults or committed to the repository; login logs omit passwords, tokens and response bodies.
 
 ## IDs and content loading
 
 - Web book metadata and content: `web:<providerId>:<novelId>`, e.g. `web:syosetu:n9669bk`.
-- Wenku content only: `wenku-volume:<novelId>:<encoded-volumeId>`. Take `novelId` from the series URL and `volumeId` exactly from `volumeJp[].volumeId` in the site's API. Each component is UTF-8 percent encoded. Plain Unicode filenames are also accepted when they contain no reserved colon/percent characters; the returned ID is canonicalized.
+- Wenku content only: `wenku-volume:<novelId>:<encoded-volumeId>`. Take `novelId` from the series URL and `volumeId` exactly from `volumeJp[].volumeId` in the site's API. Each component is UTF-8 percent encoded. Plain Unicode filenames are also accepted; escape a literal percent sign as `%25`. Only the first two colons delimit the namespace and series ID; the returned ID is canonicalized.
 
 For example, this live upload can be addressed as:
 
@@ -39,7 +39,7 @@ For example, this live upload can be addressed as:
 wenku-volume:6806f70f2d549f092c9ae862:筺底のエルピス5　－迷い子たちの一歩－.epub
 ```
 
-`volumeId` is the upstream upload filename, now explicitly used as identity. It is not an ASIN, inferred title, list index or filename hash. Exact filename spelling is preserved: no fuzzy, width or whitespace matching. Reordering uploads does not change an ID; renaming/removing an upload makes the old ID unavailable. Duplicate upload IDs fail closed. The plugin only reads the upload list and translation availability, ignoring bibliographic `volumes`, ASINs, titles and covers. Admin-only Chinese uploads (`volumeZh`) are not exposed.
+`volumeId` is the upstream upload filename, now explicitly used as identity. It is not an ASIN, inferred title, list index or filename hash. Exact filename spelling is preserved: no fuzzy, width or whitespace matching. Reordering uploads does not change an ID; renaming/removing an upload makes the old ID unavailable. The plugin only reads the upload list and translation availability, ignoring bibliographic `volumes`, ASINs, titles and covers. Admin-only Chinese uploads (`volumeZh`) are not exposed.
 
 Wenku declares file-mode content and returns a translated EPUB/TXT through `get-book-file`; it does not return book or series metadata. Web novels declare chapter-mode content: TOC headings without chapter IDs are omitted, and each chapter call resolves its index to the upstream chapter ID. Prose is escaped HTML; original `<图片>URL` markers become stored-image figures (failed image downloads retain the HTTP(S) URL).
 
@@ -61,7 +61,7 @@ cargo test -p mandara-plugin --test novelia compiled_guest -- --ignored
 cargo test -p mandara-plugin --test novelia live_guest -- --ignored
 ```
 
-Mock integration tests exercise the actual Wasm component, login JSON/password whitespace, token use, one login per call, failed-login behavior, illustration isolation, content-only Wenku lookups and file redirects. A captured upload-list fixture tests exact volumeId addressing independently of metadata.
+Mock integration tests exercise the actual Wasm component, verbatim account/password JSON, opaque token use, one login per call, upstream rejection of incomplete credentials, illustration isolation, content-only Wenku lookups and file redirects. A captured upload-list fixture tests exact volumeId addressing independently of metadata.
 
 Set `NOVELIA_TEST_USERNAME` and `NOVELIA_TEST_PASSWORD` in the test process environment to also validate the guest's login and authenticated web search. Never persist real credentials in test fixtures or shell history. Live tests are opt-in because network availability, permissions and upstream catalog data can change.
 
