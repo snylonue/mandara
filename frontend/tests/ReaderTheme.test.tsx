@@ -48,6 +48,16 @@ it.each(["light", "dark"])("keeps reading themes independent from the %s app the
     expect(getComputedStyle(article).backgroundColor).toBe(background);
     expect(getComputedStyle(article).getPropertyValue("--fg").trim()).toBe(foreground);
     expect(getComputedStyle(article).colorScheme).toBe(theme === "dark" ? "dark" : "light");
+    const chrome = getComputedStyle(container.querySelector(".reader")!);
+    expect(chrome.colorScheme).toBe(theme === "dark" ? "dark" : "light");
+    expect(chrome.getPropertyValue("--bg").trim()).toBe(
+      theme === "dark" ? "#0f1115" : theme === "sepia" ? "#f4ecd8" : "#efede4");
+    expect(chrome.getPropertyValue("--surface").trim()).toBe(
+      theme === "dark" ? "#171a21" : theme === "sepia" ? "#f8f1e3" : "#fcfbf6");
+    expect(chrome.getPropertyValue("--surface-raised").trim()).toBe(
+      theme === "dark" ? "#1b1f28" : theme === "sepia" ? "#fcf6e9" : "#fffefb");
+    expect(getComputedStyle(document.documentElement).getPropertyValue("--bg").trim()).toBe(
+      appTheme === "dark" ? "#0f1115" : "#efede4");
     expect(document.documentElement.dataset.theme).toBe(appTheme);
     expect(JSON.parse(localStorage.getItem("mandara_reader_settings")!).theme).toBe(theme);
   }

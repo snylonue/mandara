@@ -5,7 +5,10 @@
  * (title / secondary / tertiary). Everything below resolves through them —
  * no hardcoded light-theme fallbacks anywhere else.
  */
-:root {
+/* A reader resets the full palette locally, so its controls and popovers
+   follow reading settings without changing the shelf theme. */
+:root,
+.reader {
   color-scheme: dark;
 
   /* surfaces */
@@ -111,7 +114,9 @@
 }
 
 /* Light theme — warm paper, navy ink, serif type, squared corners. */
-:root[data-theme="light"] {
+:root[data-theme="light"],
+.reader[data-theme="light"],
+.reader[data-theme="sepia"] {
   color-scheme: light;
 
   --bg: #efede4;
@@ -155,4 +160,22 @@
   --radius-md: 4px;
   --radius-pill: 4px;
   --fs-3xl: 34px;
+}
+
+/* Sepia reader chrome uses the same paper and ink as its reading column. */
+.reader[data-theme="sepia"] {
+  --bg: #f4ecd8;
+  --surface: #f8f1e3;
+  --surface-2: #eee3ce;
+  --surface-raised: #fcf6e9;
+  --border: #d8c9a8;
+  --border-strong: #baa887;
+  --text-1: #43382a;
+  --text-2: #8a7a5f;
+  --text-3: #968970;
+  --accent: #795b34;
+  --accent-hover: #604728;
+  --accent-dim: rgb(121 91 52 / 0.12);
+  --wash: rgb(67 56 42 / 0.07);
+  --backdrop: rgb(67 56 42 / 0.32);
 }
