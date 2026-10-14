@@ -22,6 +22,14 @@ Restart the server, then register `novelia.wasm` in the admin UI. The plugin bui
 
 Live Wenku search, metadata and translated downloads, plus web-novel details and chapters, were verified without an account. Live web-novel search returns HTTP 401 for guests and requires a token; optional authentication in the source routes does not imply anonymous access in the deployed service. Tokens are ordinary instance configuration: protect admin access and database backups. No password/login automation or token refresh is provided. Unauthorized responses are not retried anonymously.
 
+## Obtaining an access token
+
+1. Log in at [Novelia](https://n.novelia.cc) using the normal browser login flow. Authentication is handled by [the official authentication service](https://auth.novelia.cc/).
+2. In browser developer tools, open the Network tab and inspect the successful login or refresh request to the authentication service (`/api/v1/auth/login` or `/api/v1/auth/refresh?app=n`). Its response body is the access-token JWT.
+3. Copy that JWT into the plugin instance's `access-token` field. Do not copy your password or the refresh-token cookie, and do not share the token or screenshots containing it.
+
+The live `n` application token has a two-hour lifetime, consistent with the [upstream token policy](https://github.com/auto-novel/auth/blob/8a7152d1965fa14921941948b918a7a9e7431cd4/apps/api/internal/infra/issuer.go). The browser renews its own session, but the plugin cannot use the browser's HttpOnly refresh cookie. After the configured token expires, obtain a fresh access token through the browser and update the instance configuration. This plugin does not store passwords, automate login or refresh tokens.
+
 ## Identity and loading
 
 - Web books/content: `web:<providerId>:<novelId>`, e.g. `web:syosetu:n1234ab`. Metadata prefers translated titles/descriptions and preserves the original title. TOC headings without chapter IDs are omitted. Each chapter call reloads the TOC to resolve its index. Prose is escaped HTML; `<图片>URL` paragraphs become stored-image figures (failed image downloads retain the HTTP(S) URL).
@@ -52,4 +60,4 @@ The ignored mock integration test requires the built component and exercises act
 
 The API contract was inspected at upstream revision [cbfd3f8](https://github.com/auto-novel/auto-novel/tree/cbfd3f8bf754d848c7401812b3922ad3677cc355): [web API](https://github.com/auto-novel/auto-novel/blob/cbfd3f8bf754d848c7401812b3922ad3677cc355/web/src/api/WebNovelApi.ts), [Wenku API](https://github.com/auto-novel/auto-novel/blob/cbfd3f8bf754d848c7401812b3922ad3677cc355/web/src/api/WenkuNovelApi.ts), [web routes](https://github.com/auto-novel/auto-novel/blob/cbfd3f8bf754d848c7401812b3922ad3677cc355/server/src/main/kotlin/api/RouteWebNovel.kt), [Wenku routes](https://github.com/auto-novel/auto-novel/blob/cbfd3f8bf754d848c7401812b3922ad3677cc355/server/src/main/kotlin/api/RouteWenkuNovel.kt).
 
-Live catalog identity was checked against [Wenku metadata](https://n.novelia.cc/api/wenku/6806f70f2d549f092c9ae862); anonymous web lookup and chapters were checked with `web:syosetu:n9669bk`. Live tests remain opt-in because network availability, permissions and upstream catalog data can change.
+Live catalog identity was checked against [Wenku metadata](https://n.novelia.cc/api/wenku/6806f70f2d549f092c9ae862); anonymous web lookup and chapters were checked with `web:syosetu:n9669bk`. Authenticated web search also passed through the compiled Wasm guest using a real login token held only in the test process environment, without persisting credentials. Live tests remain opt-in because network availability, permissions and upstream catalog data can change.
