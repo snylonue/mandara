@@ -1,9 +1,30 @@
 /* ---- reader ---- */
+/* Mobile browsers can make 100vh taller than the visible 100dvh viewport.
+   Bound the entire reader shell, not only the chapter pane, and leave
+   document scrolling to the EPUB frame (or the text viewport). */
+:root:has(.app-reader),
+body:has(.app-reader),
+#root:has(.app-reader) {
+  height: 100dvh;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+.app-reader {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .app-reader > .nav {
   display: none;
 }
 
 .app-reader > .content {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
   max-width: none;
   width: 100%;
   margin: 0;
@@ -11,7 +32,9 @@
 }
 
 .reader-page {
-  height: 100dvh;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
   display: flex;
   flex-direction: column;
   overflow: hidden;
