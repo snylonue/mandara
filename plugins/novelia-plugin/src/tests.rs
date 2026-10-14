@@ -7,15 +7,15 @@ fn settings(translation: u32) -> Settings {
         providers: vec![],
         translation,
         token: String::new(),
+        bindings: Some(vec![]),
     }
 }
 
 #[test]
 fn opaque_ids_roundtrip_and_reject_malformed_components() {
-    let filename = "第一卷 [a+b] 100%:测试.epub";
     assert_eq!(
-        Id::parse(&volume_id("series", filename)),
-        Some(Id::Volume("series".into(), filename.into()))
+        Id::parse(&volume_id("series", "B000000001")),
+        Some(Id::Volume("series".into(), "B000000001".into()))
     );
     assert_eq!(
         Id::parse("web:syosetu:n1234ab"),
@@ -30,6 +30,10 @@ fn opaque_ids_roundtrip_and_reject_malformed_components() {
         "web:a:..",
         "wenku:",
         "wenku-volume:a:b:c",
+        "wenku-volume:a:old.epub",
+        "wenku-asin:a:old.epub",
+        "wenku-asin:a:b000000001",
+        "wenku-asin:a:",
     ] {
         assert_eq!(Id::parse(bad), None, "{bad}");
     }
@@ -192,17 +196,115 @@ fn html_escapes_prose_and_preserves_images_from_original_paragraphs() {
     assert!(html.ends_with("<p></p>"));
 }
 
-#[test]
-fn wenku_file_identity_survives_reordering_without_inventing_asin_matches() {
-    let mut novel: WenkuNovel = serde_json::from_value(json!({
-        "title": "原系列", "titleZh": "译系列", "cover": null, "authors": ["作者"], "artists": ["画师"],
-        "introduction": "简介", "volumes": [{"asin": "unrelated", "title": "不应猜测"}], "volumeJp": [
+fn wenku() -> WenkuNovel {
+    serde_json::from_value(json!({
+        "title": "原系列", "titleZh": "译系列", "cover": "https://example.com/series.jpg", "authors": ["作者"], "artists": ["画师"],
+        "introduction": "简介", "imprint": "文库", "volumes": [
+            {"asin": "B000000001", "title": "第一卷", "titleZh": "第一卷译名", "cover": "https://example.com/1.jpg", "publisher": "出版社"},
+            {"asin": "B000000002", "title": "第二卷"},
+            {"asin": "B000000003", "title": "未上传卷"}
+        ], "volumeJp": [
             {"volumeId": "第二卷.epub", "gpt": 3}, {"volumeId": "第一卷.txt", "sakura": 2}
         ]
-    })).unwrap();
+    })).unwrap()
+}
+
+#[test]
+fn wenku_identity_uses_asin_and_metadata_not_upload_names_or_positions() {
+    let mut novel = wenku();
     let first = novel.books("id").remove(0);
-    assert_eq!(first.title, "第二卷");
+    assert_eq!(first.id, "wenku-asin:id:B000000001");
+    assert_eq!(first.title, "第一卷译名");
+    assert_eq!(
+        first.cover_url.as_deref(),
+        Some("https://example.com/1.jpg")
+    );
     assert_eq!(first.series.unwrap().id, "wenku:id");
+    assert_eq!(novel.books("id").len(), 3); // Metadata exists without a download.
+    assert_eq!(
+        novel
+            .upload("id", "B000000001", &settings(0))
+            .unwrap()
+            .volume_id,
+        "第一卷.txt"
+    );
     novel.volume_jp.reverse();
-    assert_eq!(novel.books("id")[1].id, first.id);
+    novel.volume_jp[0].volume_id = "第 一 卷 (文库) - 作者.epub".into();
+    assert_eq!(novel.books("id")[0].id, first.id);
+    assert_eq!(
+        novel
+            .upload("id", "B000000001", &settings(0))
+            .unwrap()
+            .volume_id,
+        "第 一 卷 (文库) - 作者.epub"
+    );
+    novel.volumes.reverse();
+    assert_eq!(novel.books("id")[2].id, first.id);
+    assert!(novel.upload("id", "B000000003", &settings(0)).is_none());
+    assert!(novel.upload("id", "B999999999", &settings(0)).is_none());
+    novel.volume_jp.clear();
+    assert_eq!(novel.books("id")[2].id, first.id);
+}
+
+#[test]
+fn ambiguous_uploads_editions_and_invalid_asins_are_never_guessed() {
+    let mut novel = wenku();
+    novel.volume_jp.push(WenkuVolume {
+        volume_id: "第一卷.epub".into(),
+        gpt: 1,
+        sakura: 0,
+        youdao: 0,
+    });
+    assert!(novel.upload("id", "B000000001", &settings(0)).is_none());
+    novel.volume_jp.pop();
+    novel.volumes[1].title = "第一卷".into();
+    assert!(novel.upload("id", "B000000001", &settings(0)).is_none());
+    novel.volumes[1].asin = "B000000001".into();
+    assert!(novel.edition("B000000001").is_none());
+    assert_eq!(novel.books("id").len(), 1);
+    novel.volumes[2].asin.clear();
+    assert!(novel.books("id").is_empty());
+}
+
+#[test]
+fn explicit_download_bindings_do_not_change_asin_identity_or_fallback() {
+    let mut novel = wenku();
+    novel.volume_jp[1].volume_id = "完全无关的文件名.txt".into();
+    assert!(novel.upload("id", "B000000001", &settings(0)).is_none());
+    let mut config = settings(0);
+    config.bindings = Some(vec![FileBinding {
+        novel_id: "id".into(),
+        asin: "B000000001".into(),
+        filename: "完全无关的文件名.txt".into(),
+    }]);
+    assert_eq!(
+        novel.upload("id", "B000000001", &config).unwrap().volume_id,
+        "完全无关的文件名.txt"
+    );
+    assert_eq!(novel.books("id")[0].id, "wenku-asin:id:B000000001");
+    config.bindings.as_mut().unwrap()[0].filename = "已删除.txt".into();
+    assert!(novel.upload("id", "B000000001", &config).is_none());
+    config.bindings = None; // Invalid mapping JSON must not trigger automatic resolution.
+    assert!(novel.upload("id", "B000000002", &config).is_none());
+}
+
+#[test]
+fn live_wenku_snapshot_maps_reordered_decorated_uploads_to_asins() {
+    let novel: WenkuNovel = serde_json::from_str(include_str!(
+        "../fixtures/wenku-6806f70f2d549f092c9ae862.json"
+    ))
+    .unwrap();
+    assert_eq!(
+        novel.books("6806f70f2d549f092c9ae862")[0].id,
+        "wenku-asin:6806f70f2d549f092c9ae862:B00R4JX10Q"
+    );
+    for edition in &novel.volumes {
+        assert!(
+            novel
+                .upload("6806f70f2d549f092c9ae862", &edition.asin, &settings(0))
+                .is_some(),
+            "{}",
+            edition.asin
+        );
+    }
 }

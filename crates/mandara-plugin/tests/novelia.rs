@@ -1,4 +1,5 @@
-//! Run after building the guest: cargo test -p mandara-plugin --test novelia -- --ignored.
+//! Build first, then run mock tests: cargo test -p mandara-plugin --test novelia compiled_guest -- --ignored.
+//! Live validation is opt-in: cargo test -p mandara-plugin --test novelia live_guest -- --ignored.
 use std::sync::{Arc, Mutex};
 
 use mandara_plugin::host::{validate_config, values_from_config};
@@ -65,7 +66,8 @@ fn compiled_guest_adapts_web_chapters_and_wenku_downloads() {
             }
             "/api/wenku/series" => json!({
                 "title": "原系列", "titleZh": "译系列", "cover": null, "authors": ["作者"], "artists": ["画师"], "introduction": "简介",
-                "volumeJp": [{"volumeId": "第一卷.txt", "gpt": 1}, {"volumeId": "第二卷.epub", "sakura": 1}, {"volumeId": "未译.txt", "gpt": 0}]
+                "volumes": [{"asin": "B000000001", "title": "第一卷"}, {"asin": "B000000002", "title": "第二卷"}, {"asin": "B000000003", "title": "未译"}],
+                "volumeJp": [{"volumeId": "第二卷.epub", "sakura": 1}, {"volumeId": "第一卷.txt", "gpt": 1}, {"volumeId": "未译.txt", "gpt": 0}]
             }),
             p if p.starts_with("/api/wenku/series/file/") => {
                 assert!(query.contains("mode=zh"));
@@ -174,6 +176,13 @@ fn compiled_guest_adapts_web_chapters_and_wenku_downloads() {
     let series = plugin.get_series(&wenku, "wenku:series").unwrap().unwrap();
     assert_eq!(series.books.len(), 3);
     let first = &series.books[0].id;
+    assert_eq!(first, "wenku-asin:series:B000000001");
+    assert!(
+        plugin
+            .get_book(&wenku, "wenku-volume:series:第一卷.txt")
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(plugin.get_book(&wenku, first).unwrap().unwrap().id, *first);
     let content = plugin.get_content(&wenku, first).unwrap().unwrap();
     assert!(matches!(
@@ -209,6 +218,15 @@ fn compiled_guest_adapts_web_chapters_and_wenku_downloads() {
             .is_none()
     );
 
+    let mut mapped = wenku.clone();
+    mapped[3] = ConfigValue::EnumIndex(0);
+    mapped[5] = ConfigValue::Text(
+        r#"[{"novel-id":"series","asin":"B000000001","filename":"第一卷.txt"}]"#.into(),
+    );
+    assert!(plugin.get_content(&mapped, first).unwrap().is_some());
+    mapped[5] = ConfigValue::Text("invalid-json".into());
+    assert!(plugin.get_content(&mapped, first).unwrap().is_none());
+
     let requests = requests.lock().unwrap();
     for (target, headers) in requests.iter() {
         let auth = headers
@@ -221,4 +239,91 @@ fn compiled_guest_adapts_web_chapters_and_wenku_downloads() {
             assert_eq!(auth, Some("Bearer test-token"));
         }
     }
+}
+
+#[test]
+#[ignore = "calls live Novelia endpoints and downloads an EPUB"]
+fn live_guest_reads_metadata_chapters_and_asin_downloads() {
+    struct NoImages;
+    impl ImageStore for NoImages {
+        fn store_image(&self, _bytes: &[u8], _mime: &str) -> Result<String, ImageStoreError> {
+            Ok("a".repeat(64))
+        }
+    }
+    let bytes = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../plugins-built/novelia.wasm"
+    ))
+    .unwrap();
+    let plugin = WasmPlugin::load(
+        "novelia.wasm",
+        bytes,
+        Arc::new(FetchPolicy::default()),
+        Arc::new(NoImages),
+    )
+    .unwrap();
+    let schema = plugin.config_schema().unwrap();
+    let token = std::env::var("NOVELIA_TEST_ACCESS_TOKEN").unwrap_or_default();
+    let mut config = values_from_config(
+        &schema,
+        &validate_config(
+            &schema,
+            &json!({"catalog": 1, "access-token": token.as_str()}),
+        )
+        .unwrap(),
+    );
+    assert!(
+        !plugin
+            .search_books(&config, "", 0, 2)
+            .unwrap()
+            .items
+            .is_empty()
+    );
+    let series = plugin
+        .get_series(&config, "wenku:6806f70f2d549f092c9ae862")
+        .unwrap()
+        .unwrap();
+    assert!(
+        series
+            .books
+            .iter()
+            .any(|b| b.id == "wenku-asin:6806f70f2d549f092c9ae862:B00R4JX10Q")
+    );
+    let id = "wenku-asin:6806f70f2d549f092c9ae862:B074W7THKZ";
+    assert!(plugin.get_book(&config, id).unwrap().is_some());
+    assert!(plugin.get_content(&config, id).unwrap().is_some());
+    let file = plugin
+        .get_book_file(&config, id)
+        .unwrap()
+        .expect("ASIN resolves to a real EPUB download");
+    assert_eq!(file.mime, "application/epub+zip");
+    assert!(file.bytes.len() > 1000);
+    if !token.is_empty() {
+        config[1] = ConfigValue::EnumIndex(0);
+        assert!(
+            !plugin
+                .search_books(&config, "无职转生", 0, 2)
+                .unwrap()
+                .items
+                .is_empty()
+        );
+    }
+    let web_id = "web:syosetu:n9669bk";
+    assert!(plugin.get_book(&config, web_id).unwrap().is_some());
+    assert!(
+        !plugin
+            .get_content(&config, web_id)
+            .unwrap()
+            .unwrap()
+            .chapters
+            .is_empty()
+    );
+    assert!(
+        !plugin
+            .get_chapter(&config, web_id, 0)
+            .unwrap()
+            .unwrap()
+            .content
+            .is_empty()
+    );
 }

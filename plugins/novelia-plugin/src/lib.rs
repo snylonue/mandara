@@ -1,9 +1,10 @@
 //! Novelia's public JSON API, adapted to Mandara's stateless WIT world.
-//! Web novels use chapter mode; Wenku upload filenames identify file-mode
-//! volumes. ASIN metadata and uploaded files have no reliable association.
+//! Web novels use chapter mode; Wenku editions use upstream ASINs for identity.
+//! Upload filenames are download locators, resolved separately from identity.
 
 use serde::Deserialize;
 use serde_json::json;
+use unicode_normalization::UnicodeNormalization;
 use url::Url;
 
 wit_bindgen::generate!({
@@ -28,6 +29,15 @@ struct Settings {
     providers: Vec<String>,
     translation: u32,
     token: String,
+    bindings: Option<Vec<FileBinding>>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct FileBinding {
+    novel_id: String,
+    asin: String,
+    filename: String,
 }
 
 impl Settings {
@@ -50,6 +60,8 @@ impl Settings {
             },
             translation: choice(3),
             token: text(4, ""),
+            // Invalid explicit mappings fail closed rather than guessing a file.
+            bindings: serde_json::from_str(&text(5, "[]")).ok(),
         }
     }
 
@@ -230,6 +242,25 @@ struct WenkuVolume {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct WenkuEdition {
+    asin: String,
+    title: String,
+    title_zh: Option<String>,
+    cover: Option<String>,
+    publisher: Option<String>,
+    imprint: Option<String>,
+    publish_at: Option<i64>,
+}
+
+fn valid_asin(asin: &str) -> bool {
+    asin.len() == 10
+        && asin
+            .bytes()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct WenkuNovel {
     title: String,
     title_zh: String,
@@ -239,6 +270,9 @@ struct WenkuNovel {
     introduction: String,
     #[serde(default)]
     keywords: Vec<String>,
+    publisher: Option<String>,
+    imprint: Option<String>,
+    volumes: Vec<WenkuEdition>,
     volume_jp: Vec<WenkuVolume>,
 }
 
@@ -249,8 +283,8 @@ fn preferred(original: &str, translated: Option<&str>) -> String {
         .to_string()
 }
 
-// Opaque IDs encode each component independently, including punctuation in
-// uploaded filenames. Reject malformed escapes instead of aliasing another ID.
+// Opaque IDs encode upstream identifiers, never upload filenames. Reject
+// malformed escapes and old filename IDs rather than silently rebinding them.
 fn encode(s: &str) -> String {
     s.bytes()
         .map(|b| {
@@ -297,7 +331,9 @@ impl Id {
         match parts.as_slice() {
             ["web", p, n] => Some(Self::Web(component(p)?, component(n)?)),
             ["wenku", n] => Some(Self::Wenku(component(n)?)),
-            ["wenku-volume", n, v] => Some(Self::Volume(component(n)?, component(v)?)),
+            ["wenku-asin", n, asin] if valid_asin(asin) => {
+                Some(Self::Volume(component(n)?, (*asin).into()))
+            }
             _ => None,
         }
     }
@@ -306,8 +342,8 @@ impl Id {
 fn web_id(p: &str, n: &str) -> String {
     format!("web:{}:{}", encode(p), encode(n))
 }
-fn volume_id(n: &str, v: &str) -> String {
-    format!("wenku-volume:{}:{}", encode(n), encode(v))
+fn volume_id(n: &str, asin: &str) -> String {
+    format!("wenku-asin:{}:{asin}", encode(n))
 }
 
 impl WebNovel {
@@ -348,31 +384,123 @@ impl WenkuNovel {
         }
     }
 
+    fn edition(&self, asin: &str) -> Option<&WenkuEdition> {
+        if !valid_asin(asin) {
+            return None;
+        }
+        let mut matches = self.volumes.iter().filter(|v| v.asin == asin);
+        let edition = matches.next()?;
+        matches.next().is_none().then_some(edition)
+    }
+
     fn books(&self, id: &str) -> Vec<BookEntry> {
-        // Preserve upstream order as display order only. Identity is the actual
-        // upload filename, never an inferred ordinal or ASIN/file match.
-        self.volume_jp
+        self.volumes
             .iter()
             .enumerate()
+            .filter(|(_, v)| self.edition(&v.asin).is_some())
             .map(|(i, v)| BookEntry {
-                id: volume_id(id, &v.volume_id),
-                title: v
-                    .volume_id
-                    .strip_suffix(".epub")
-                    .or_else(|| v.volume_id.strip_suffix(".txt"))
-                    .unwrap_or(&v.volume_id)
-                    .into(),
+                id: volume_id(id, &v.asin),
+                title: preferred(&v.title, v.title_zh.as_deref()),
                 authors: self.authors.clone(),
                 description: Some(self.introduction.clone()),
-                cover_url: self.cover.clone(),
+                cover_url: v.cover.clone().or_else(|| self.cover.clone()),
                 extra: Some(
-                    json!({"illustrators": self.artists, "novelia_filename": v.volume_id})
-                        .to_string(),
+                    json!({
+                        "original_title": v.title, "illustrators": self.artists,
+                        "publisher": v.publisher.as_ref().or(self.publisher.as_ref()),
+                        "novelia_asin": v.asin, "novelia_publish_at": v.publish_at,
+                    })
+                    .to_string(),
                 ),
                 series: Some(self.series(id)),
                 volume_no: i as u32 + 1,
             })
             .collect()
+    }
+
+    fn title_key(&self, title: &str, edition: &WenkuEdition) -> String {
+        let mut normalized: String = title.nfkc().collect();
+        // Strip only explicitly known publisher/imprint suffixes, not arbitrary
+        // subtitles, volume numbers or fuzzy prefixes.
+        for label in [
+            &edition.imprint,
+            &self.imprint,
+            &edition.publisher,
+            &self.publisher,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let suffix = format!("({})", label.nfkc().collect::<String>());
+            if let Some(prefix) = normalized.trim_end().strip_suffix(&suffix) {
+                normalized = prefix.trim_end().to_string();
+            }
+        }
+        normalized.chars().filter(|c| !c.is_whitespace()).collect()
+    }
+
+    fn upload_key(&self, filename: &str, edition: &WenkuEdition) -> Option<String> {
+        let stem = filename
+            .strip_suffix(".epub")
+            .or_else(|| filename.strip_suffix(".txt"))?;
+        let mut stem: String = stem.nfkc().collect();
+        for author in &self.authors {
+            let suffix = format!(" - {}", author.nfkc().collect::<String>());
+            if let Some(prefix) = stem.strip_suffix(&suffix) {
+                stem = prefix.to_string();
+            }
+        }
+        Some(self.title_key(&stem, edition))
+    }
+
+    fn upload_matches(&self, upload: &WenkuVolume, edition: &WenkuEdition) -> bool {
+        let Some(key) = self.upload_key(&upload.volume_id, edition) else {
+            return false;
+        };
+        !key.is_empty()
+            && std::iter::once(edition.title.as_str())
+                .chain(edition.title_zh.as_deref())
+                .any(|title| !title.is_empty() && self.title_key(title, edition) == key)
+    }
+
+    fn upload<'a>(
+        &'a self,
+        novel: &str,
+        asin: &str,
+        settings: &Settings,
+    ) -> Option<&'a WenkuVolume> {
+        let edition = self.edition(asin)?;
+        let bindings = settings.bindings.as_ref()?;
+        let mut bindings = bindings
+            .iter()
+            .filter(|b| b.novel_id == novel && b.asin == asin);
+        if let Some(binding) = bindings.next() {
+            if bindings.next().is_some() {
+                return None;
+            }
+            let mut uploads = self
+                .volume_jp
+                .iter()
+                .filter(|v| v.volume_id == binding.filename);
+            let upload = uploads.next()?;
+            return uploads.next().is_none().then_some(upload);
+        }
+        let mut uploads = self
+            .volume_jp
+            .iter()
+            .filter(|v| self.upload_matches(v, edition));
+        let upload = uploads.next()?;
+        if uploads.next().is_some() {
+            return None;
+        }
+        // One upload must identify exactly one edition in the catalog as well.
+        (self
+            .volumes
+            .iter()
+            .filter(|v| self.upload_matches(upload, v))
+            .count()
+            == 1)
+            .then_some(upload)
     }
 }
 
@@ -581,8 +709,13 @@ impl Guest for NoveliaPlugin {
                 default: Some(json!("").to_string()),
                 required: false,
                 hint: Some(
-                    "一般向无需登录；受限目录可填写登录会话的 Bearer 令牌，不要填写密码".into(),
+                    "网络小说搜索需要登录；可填写登录会话的 Bearer 令牌，不要填写密码".into(),
                 ),
+            },
+            ConfigField {
+                key: "volume-files".into(), label: "文库下载文件映射（可选）".into(),
+                kind: ConfigKind::Text, default: Some(json!("[]").to_string()), required: false,
+                hint: Some("JSON 数组：[{\"novel-id\":\"系列书号\",\"asin\":\"ASIN\",\"filename\":\"文件名.epub\"}]；仅在标题无法唯一匹配时使用".into()),
             },
         ]
     }
@@ -707,7 +840,7 @@ impl Guest for NoveliaPlugin {
             }
             Id::Volume(n, v) => {
                 let novel = settings.wenku(&n)?;
-                let volume = novel.volume_jp.iter().find(|vol| vol.volume_id == v)?;
+                let volume = novel.upload(&n, &v, &settings)?;
                 file_url(&settings, &n, volume)?;
                 Some(DeclaredContent {
                     id: volume_id(&n, &v),
@@ -749,11 +882,12 @@ impl Guest for NoveliaPlugin {
         };
         let settings = Settings::load();
         let novel = settings.wenku(&n)?;
-        let volume = novel.volume_jp.iter().find(|vol| vol.volume_id == v)?;
+        let volume = novel.upload(&n, &v, &settings)?;
         let bytes = settings.fetch(&file_url(&settings, &n, volume)?, true)?;
-        let mime = if v.ends_with(".epub") && bytes.starts_with(b"PK\x03\x04") {
+        let filename = &volume.volume_id;
+        let mime = if filename.ends_with(".epub") && bytes.starts_with(b"PK\x03\x04") {
             "application/epub+zip"
-        } else if v.ends_with(".txt")
+        } else if filename.ends_with(".txt")
             && std::str::from_utf8(&bytes).ok().is_some_and(|s| {
                 let start = s
                     .trim_start_matches('\u{feff}')
@@ -771,7 +905,7 @@ impl Guest for NoveliaPlugin {
             return None;
         };
         Some(BookFile {
-            filename: v,
+            filename: filename.clone(),
             mime: mime.into(),
             bytes,
         })

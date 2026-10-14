@@ -17,15 +17,20 @@ Restart the server, then register `novelia.wasm` in the admin UI. The plugin bui
 | `catalog` | `0`: web novels (default); `1`: Wenku series. |
 | `providers` | Web-search source IDs: syosetu, kakuyomu, hameln, pixiv, alphapolis, novelup. An empty list searches nothing. |
 | `translation` | `0`: GPT → Sakura → Youdao → Japanese; `1`: GPT only; `2`: Sakura only; `3`: Youdao only; `4`: Japanese only (web novels). |
-| `access-token` | Optional existing login-session Bearer token for restricted catalog metadata. Never sent to illustration hosts. |
+| `access-token` | Existing login-session Bearer token. Required by live web-novel search and restricted catalogs; never sent to illustration hosts. |
+| `volume-files` | Optional JSON array of `{ "novel-id": "series ID", "asin": "ASIN", "filename": "upload.epub" }` bindings for files without a unique title match. Default `[]`. |
 
-General-audience reads do not require an account according to the upstream routes. Tokens are ordinary instance configuration: protect admin access and database backups. No password/login automation or token refresh is provided. Unauthorized responses are not retried anonymously.
+Live Wenku search, metadata and translated downloads, plus web-novel details and chapters, were verified without an account. Live web-novel search returns HTTP 401 for guests and requires a token; optional authentication in the source routes does not imply anonymous access in the deployed service. Tokens are ordinary instance configuration: protect admin access and database backups. No password/login automation or token refresh is provided. Unauthorized responses are not retried anonymously.
 
 ## Identity and loading
 
 - Web books/content: `web:<providerId>:<novelId>`, e.g. `web:syosetu:n1234ab`. Metadata prefers translated titles/descriptions and preserves the original title. TOC headings without chapter IDs are omitted. Each chapter call reloads the TOC to resolve its index. Prose is escaped HTML; `<图片>URL` paragraphs become stored-image figures (failed image downloads retain the HTTP(S) URL).
 - Wenku series: `wenku:<novelId>`.
-- Wenku books/content: `wenku-volume:<novelId>:<encoded-upload-filename>`. UTF-8 percent encoding is applied to each ID component. Filenames, not list positions, identify actual `volumeJp` uploads. The API has no reliable ASIN-to-upload association: file titles come from filenames, with series-level authors/covers/illustrators. Admin-only Chinese uploads (`volumeZh`) are not exposed.
+- Wenku books/content: `wenku-asin:<novelId>:<ASIN>`, e.g. `wenku-asin:6806f70f2d549f092c9ae862:B00R4JX10Q`. Books are enumerated from bibliographic `volumes`, not uploads. IDs, titles, per-volume covers and publishers come from metadata and survive upload renames, removals and reordering. Missing/invalid/duplicate ASINs are not replaced with filenames, hashes or list positions. Metadata may exist without content. Admin-only Chinese uploads (`volumeZh`) are not exposed.
+
+The API still takes filenames as download **locators**, but exposes no explicit ASIN-to-upload association. Automatic resolution requires an exact, unique normalized title match in both directions. It applies Unicode NFKC and whitespace normalization, and removes only known publisher/imprint and author suffixes; it never matches by ordinal, substring or fuzzy similarity. Ambiguous or unmatched downloads return unavailable. Use `volume-files` to bind the known ASIN to a specific upload when necessary; stale, duplicate or malformed bindings fail closed. Updating the locator does not change the ASIN identity.
+
+Legacy `wenku-volume:...` filename IDs are intentionally rejected, not silently reinterpreted. Previously imported Wenku content must be reacquired under its ASIN ID; existing cached bodies are not migrated or deleted.
 
 Web automatic mode chooses the first complete paragraph array; absent/malformed translations fall back to Japanese. A fixed translator with no complete array returns unavailable, never a missing-translation banner. Original illustration markers take precedence. Empty chapters remain valid. After changing translation settings, rematerialize content to replace cached bodies.
 
@@ -38,11 +43,13 @@ Search uses pages of 100, slicing across page boundaries for arbitrary host offs
 ```sh
 cargo test -p novelia-plugin
 ./scripts/build-plugins.sh novelia
-cargo test -p mandara-plugin --test novelia -- --ignored
+cargo test -p mandara-plugin --test novelia compiled_guest -- --ignored
+# Opt-in network validation (downloads one translated EPUB):
+cargo test -p mandara-plugin --test novelia live_guest -- --ignored
 ```
 
-The ignored integration test requires the built component and exercises actual WIT configuration, HTTP imports, image storage and download redirects against local mock endpoints. It needs neither an account nor external network.
+The ignored mock integration test requires the built component and exercises actual WIT configuration, ASIN lookups, HTTP imports, image storage and download redirects against local endpoints. It needs neither an account nor external network. The separate live test validates anonymous Wenku search, ASIN metadata/downloads and web metadata/chapters. Set `NOVELIA_TEST_ACCESS_TOKEN` to also validate authenticated web search; the token is not persisted. A captured live Wenku catalog fixture tests every edition against unordered, decorated upload filenames.
 
 The API contract was inspected at upstream revision [cbfd3f8](https://github.com/auto-novel/auto-novel/tree/cbfd3f8bf754d848c7401812b3922ad3677cc355): [web API](https://github.com/auto-novel/auto-novel/blob/cbfd3f8bf754d848c7401812b3922ad3677cc355/web/src/api/WebNovelApi.ts), [Wenku API](https://github.com/auto-novel/auto-novel/blob/cbfd3f8bf754d848c7401812b3922ad3677cc355/web/src/api/WenkuNovelApi.ts), [web routes](https://github.com/auto-novel/auto-novel/blob/cbfd3f8bf754d848c7401812b3922ad3677cc355/server/src/main/kotlin/api/RouteWebNovel.kt), [Wenku routes](https://github.com/auto-novel/auto-novel/blob/cbfd3f8bf754d848c7401812b3922ad3677cc355/server/src/main/kotlin/api/RouteWenkuNovel.kt).
 
-Live-site verification is separate from these mocks; the implementation environment could not establish TLS to the site.
+Live catalog identity was checked against [Wenku metadata](https://n.novelia.cc/api/wenku/6806f70f2d549f092c9ae862); anonymous web lookup and chapters were checked with `web:syosetu:n9669bk`. Live tests remain opt-in because network availability, permissions and upstream catalog data can change.
