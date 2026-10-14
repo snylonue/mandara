@@ -48,20 +48,30 @@ impl Fixture {
             )
             .await
             .unwrap();
+        let runtime = Arc::new(
+            mandara_plugin::PluginRuntime::new(
+                mandara_plugin::FetchPolicy::default(),
+                crate::service::images::DbImageStore::new(diesel_db.clone(), dir.join("files")),
+            )
+            .unwrap(),
+        );
         let wasm = if load_plugin {
-            vec![Arc::new(
-                mandara_plugin::WasmPlugin::load(
-                    "fixture.wasm",
-                    include_bytes!("../../../mandara-plugin/tests/fixtures/hello.wasm").to_vec(),
-                    Arc::new(mandara_plugin::FetchPolicy::default()),
-                    crate::service::images::DbImageStore::new(diesel_db.clone(), dir.join("files")),
-                )
-                .unwrap(),
-            )]
+            vec![
+                runtime
+                    .compile(
+                        "fixture.wasm",
+                        include_bytes!("../../../mandara-plugin/tests/fixtures/hello.wasm"),
+                    )
+                    .unwrap(),
+            ]
         } else {
             vec![]
         };
-        let plugins = Arc::new(PluginService::new(diesel_db.clone(), wasm));
+        let plugins = Arc::new(
+            PluginService::new(diesel_db.clone(), runtime, wasm)
+                .await
+                .unwrap(),
+        );
         if load_plugin {
             plugins.register("fixture", "fixture.wasm").await.unwrap();
         }

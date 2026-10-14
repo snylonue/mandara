@@ -2812,16 +2812,21 @@ mod tests {
         crate::db::run_migrations(&path).await.unwrap();
         let db = crate::db::connect_diesel(&path).unwrap();
         let images = crate::service::images::DbImageStore::new(db.clone(), dir.join("files"));
-        let wasm = Arc::new(
-            mandara_plugin::WasmPlugin::load(
-                "fixture.wasm",
-                include_bytes!("../../../mandara-plugin/tests/fixtures/hello.wasm").to_vec(),
-                Arc::new(mandara_plugin::FetchPolicy::default()),
-                images,
-            )
-            .unwrap(),
+        let runtime = Arc::new(
+            mandara_plugin::PluginRuntime::new(mandara_plugin::FetchPolicy::default(), images)
+                .unwrap(),
         );
-        let plugins = Arc::new(PluginService::new(db.clone(), vec![wasm]));
+        let wasm = runtime
+            .compile(
+                "fixture.wasm",
+                include_bytes!("../../../mandara-plugin/tests/fixtures/hello.wasm"),
+            )
+            .unwrap();
+        let plugins = Arc::new(
+            PluginService::new(db.clone(), runtime, vec![wasm])
+                .await
+                .unwrap(),
+        );
         plugins.register("fixture", "fixture.wasm").await.unwrap();
         plugins
             .set_config("fixture", serde_json::json!({"site-name": "示例"}))
@@ -3374,7 +3379,24 @@ mod tests {
         let db = crate::db::connect_diesel(&path).unwrap();
         let library = Library::new(
             db.clone(),
-            Arc::new(PluginService::new(db.clone(), vec![])),
+            Arc::new(
+                PluginService::new(
+                    db.clone(),
+                    Arc::new(
+                        mandara_plugin::PluginRuntime::new(
+                            mandara_plugin::FetchPolicy::default(),
+                            crate::service::images::DbImageStore::new(
+                                db.clone(),
+                                dir.join("files"),
+                            ),
+                        )
+                        .unwrap(),
+                    ),
+                    vec![],
+                )
+                .await
+                .unwrap(),
+            ),
             dir.join("files"),
         );
         let mut book = SourceBook {

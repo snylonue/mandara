@@ -283,15 +283,23 @@ mod tests {
         }
     }
 
-    fn service(db: DieselDb) -> super::super::plugins::PluginService {
-        let wasm = mandara_plugin::WasmPlugin::load(
-            "hello.wasm",
-            include_bytes!("../../../mandara-plugin/tests/fixtures/hello.wasm").to_vec(),
-            Arc::new(mandara_plugin::FetchPolicy::default()),
-            Arc::new(NoImages),
-        )
-        .unwrap();
-        super::super::plugins::PluginService::new(db, vec![Arc::new(wasm)])
+    async fn service(db: DieselDb) -> super::super::plugins::PluginService {
+        let runtime = Arc::new(
+            mandara_plugin::PluginRuntime::new(
+                mandara_plugin::FetchPolicy::default(),
+                Arc::new(NoImages),
+            )
+            .unwrap(),
+        );
+        let wasm = runtime
+            .compile(
+                "hello.wasm",
+                include_bytes!("../../../mandara-plugin/tests/fixtures/hello.wasm"),
+            )
+            .unwrap();
+        super::super::plugins::PluginService::new(db, runtime, vec![wasm])
+            .await
+            .unwrap()
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -299,7 +307,7 @@ mod tests {
         let (dir, db) = fixture().await;
         let first = DbPluginState::new(db.clone(), "first".into());
         let second = DbPluginState::new(db.clone(), "second".into());
-        let plugins = service(db.clone());
+        let plugins = service(db.clone()).await;
         tokio::task::spawn_blocking(move || {
             // Constructing the compiled-file registry must not call exports.
             assert_eq!(first.get("demo:metadata-called").unwrap(), None);
@@ -354,7 +362,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn service_binds_instance_state_and_unregister_cascades() {
         let (dir, db) = fixture().await;
-        let plugins = service(db.clone());
+        let plugins = service(db.clone()).await;
         assert_eq!(
             plugins
                 .get_chapter("first", "state:key", 1)
@@ -396,7 +404,7 @@ mod tests {
         );
         drop(plugins);
         // Loading a replacement compiled component keeps the instance namespace.
-        let plugins = service(db.clone());
+        let plugins = service(db.clone()).await;
         assert_eq!(
             plugins
                 .get_chapter("first", "state:key", 0)

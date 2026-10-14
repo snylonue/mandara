@@ -13,11 +13,12 @@ pub mod state;
 
 pub use error::ImageStoreError;
 pub use host::{
-    BookEntry, CatalogEntry, ConfigErrors, ConfigField, ConfigFieldError, ConfigKind, ConfigValue,
-    ContentMode, DeclaredBook, DeclaredChapter, DeclaredContent, ImageStore, MAX_BOOK_FILE_BYTES,
-    MAX_CALL_IMAGE_BYTES, MAX_CHAPTER_CONTENT_BYTES, MAX_DECLARE_BOOKS, MAX_DECLARE_CHAPTERS,
-    MAX_IMAGE_BYTES, MAX_SEARCH_LIMIT, MAX_SEARCH_OFFSET, SearchResult, SeriesEntry, SeriesResult,
-    SourceInfo, WasmPlugin, load_dir, validate_config, values_from_config,
+    BookEntry, CatalogEntry, CompiledPlugin, ConfigErrors, ConfigField, ConfigFieldError,
+    ConfigKind, ConfigValue, ContentMode, DeclaredBook, DeclaredChapter, DeclaredContent,
+    ImageStore, MAX_BOOK_FILE_BYTES, MAX_CALL_IMAGE_BYTES, MAX_CHAPTER_CONTENT_BYTES,
+    MAX_DECLARE_BOOKS, MAX_DECLARE_CHAPTERS, MAX_IMAGE_BYTES, MAX_SEARCH_LIMIT, MAX_SEARCH_OFFSET,
+    PluginInstance, PluginRuntime, SearchResult, SeriesEntry, SeriesResult, SourceInfo,
+    validate_config, values_from_config,
 };
 pub use http_fetch::{FetchError, FetchPolicy, FetchRequest, FetchResponse, MAX_REDIRECTS};
 pub use state::{StateStore, StateStoreError};

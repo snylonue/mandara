@@ -31,7 +31,7 @@ use ureq::http::{HeaderName, HeaderValue};
 pub const MAX_REDIRECTS: u32 = 5;
 
 /// Operational caps for plugin `fetch` calls (timeout/size only).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct FetchPolicy {
     /// Hard overall timeout per `fetch` call (ms). The plugin's requested
     /// timeout is clamped to this.

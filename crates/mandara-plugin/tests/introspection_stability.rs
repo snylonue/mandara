@@ -24,27 +24,31 @@ fn introspection_is_stable_under_fuel_metering() {
     {
         let file = "fixture.wasm";
         let wasm = include_bytes!("fixtures/hello.wasm").to_vec();
-        let plugin = mandara_plugin::WasmPlugin::load(
-            "t.wasm",
-            wasm,
-            std::sync::Arc::new(mandara_plugin::FetchPolicy::default()),
-            std::sync::Arc::new(NoImages),
-        )
-        .expect("load");
+        let runtime = std::sync::Arc::new(
+            mandara_plugin::PluginRuntime::new(
+                mandara_plugin::FetchPolicy::default(),
+                std::sync::Arc::new(NoImages),
+            )
+            .unwrap(),
+        );
+        let compiled = runtime.compile("t.wasm", &wasm).expect("load");
+        let plugin = runtime
+            .instance("test", compiled, serde_json::json!({}), common::state())
+            .unwrap();
         let mut fails = 0;
         let mut last = String::new();
         for _ in 0..30 {
-            let r = plugin.name(common::state());
+            let r = runtime.name(&plugin);
             if r.is_err() {
                 fails += 1;
                 last = format!("{r:?}");
             }
-            let c = plugin.capabilities(common::state());
+            let c = runtime.capabilities(&plugin);
             if c.is_err() && fails < 1 {
                 fails += 1;
                 last = format!("{c:?}");
             }
-            let s = plugin.config_schema(common::state());
+            let s = runtime.config_schema(&plugin);
             if s.is_err() && fails < 1 {
                 fails += 1;
                 last = format!("{s:?}");

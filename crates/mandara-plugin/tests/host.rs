@@ -9,8 +9,8 @@ use std::sync::Arc;
 use mandara_plugin::FetchPolicy;
 use mandara_plugin::error::Error;
 use mandara_plugin::host::{
-    ConfigErrors, ConfigField, ConfigKind, ConfigValue, MAX_SEARCH_LIMIT, WasmPlugin,
-    validate_config, values_from_config,
+    CompiledPlugin, ConfigErrors, ConfigField, ConfigKind, ConfigValue, MAX_SEARCH_LIMIT,
+    PluginInstance, PluginRuntime, validate_config, values_from_config,
 };
 
 const FIXTURE: &[u8] = include_bytes!("fixtures/hello.wasm");
@@ -32,16 +32,15 @@ impl mandara_plugin::StateStore for TestState {
 }
 
 fn state_probe(
-    plugin: &WasmPlugin,
-    store: Arc<dyn mandara_plugin::StateStore>,
+    runtime: &PluginRuntime,
+    plugin: &PluginInstance,
     key: &str,
     index: u32,
     value: &str,
 ) -> String {
-    plugin
+    runtime
         .get_chapter(
-            store,
-            &[ConfigValue::Text(value.into())],
+            &plugin.with_config(serde_json::json!({"site-name":value})),
             &format!("state:{key}"),
             index,
         )
@@ -52,92 +51,65 @@ fn state_probe(
 
 #[test]
 fn state_imports_survive_fresh_guest_calls_and_are_scoped() {
-    let compiled = load();
-    let state = Arc::new(TestState::default());
-    let first = state.clone();
-    let second = Arc::new(TestState::default());
+    let (runtime, compiled) = compile(FetchPolicy::default());
+    let store = Arc::new(TestState::default());
+    let first = runtime
+        .instance(
+            "first",
+            compiled.clone(),
+            serde_json::json!({}),
+            store.clone(),
+        )
+        .unwrap();
+    let second = runtime
+        .instance("second", compiled, serde_json::json!({}), state())
+        .unwrap();
+    assert_eq!(state_probe(&runtime, &first, "目录", 0, ""), "Ok(None)");
+    assert_eq!(state_probe(&runtime, &first, "目录", 1, "a"), "Ok(())");
     assert_eq!(
-        state_probe(&compiled, first.clone(), "目录", 0, ""),
-        "Ok(None)"
-    );
-    assert_eq!(
-        state_probe(&compiled, first.clone(), "目录", 1, "a"),
-        "Ok(())"
-    );
-    assert_eq!(
-        state_probe(&compiled, first.clone(), "目录", 0, ""),
+        state_probe(&runtime, &first, "目录", 0, ""),
         "Ok(Some([97]))"
     );
+    assert_eq!(state_probe(&runtime, &second, "目录", 0, ""), "Ok(None)");
+    // Recompiling does not change the instance's persistent backend.
+    let (runtime, compiled) = compile(FetchPolicy::default());
+    let first = runtime
+        .instance("first", compiled, serde_json::json!({}), store)
+        .unwrap();
     assert_eq!(
-        state_probe(&compiled, second.clone(), "目录", 0, ""),
-        "Ok(None)"
-    );
-    // A new compiled component sees the same store supplied to each call.
-    let compiled = load();
-    let first = state;
-    assert_eq!(
-        state_probe(&compiled, first.clone(), "目录", 0, ""),
+        state_probe(&runtime, &first, "目录", 0, ""),
         "Ok(Some([97]))"
     );
+    assert_eq!(state_probe(&runtime, &first, "目录", 1, "b"), "Ok(())");
     assert_eq!(
-        state_probe(&compiled, first.clone(), "目录", 1, "b"),
-        "Ok(())"
-    );
-    assert_eq!(
-        state_probe(&compiled, first.clone(), "目录", 0, ""),
+        state_probe(&runtime, &first, "目录", 0, ""),
         "Ok(Some([98]))"
     );
-    assert_eq!(
-        state_probe(&compiled, first.clone(), "目录", 4, ""),
-        "Ok(())"
-    );
-    assert_eq!(
-        state_probe(&compiled, first.clone(), "目录", 0, ""),
-        "Ok(Some([]))"
-    );
-    assert_eq!(
-        state_probe(&compiled, first.clone(), "目录", 2, ""),
-        "Ok(true)"
-    );
-    assert_eq!(
-        state_probe(&compiled, first.clone(), "目录", 2, ""),
-        "Ok(false)"
-    );
-    assert_eq!(
-        state_probe(&compiled, first.clone(), "目录", 0, ""),
-        "Ok(None)"
-    );
+    assert_eq!(state_probe(&runtime, &first, "目录", 4, ""), "Ok(())");
+    assert_eq!(state_probe(&runtime, &first, "目录", 0, ""), "Ok(Some([]))");
+    assert_eq!(state_probe(&runtime, &first, "目录", 2, ""), "Ok(true)");
+    assert_eq!(state_probe(&runtime, &first, "目录", 2, ""), "Ok(false)");
+    assert_eq!(state_probe(&runtime, &first, "目录", 0, ""), "Ok(None)");
 }
 
 #[test]
 fn state_imports_delegate_key_and_value_policy() {
-    let compiled = load();
-    let state = Arc::new(TestState::default());
-    let plugin = state.clone();
+    let (runtime, compiled) = compile(FetchPolicy::default());
+    let store = Arc::new(TestState::default());
+    let plugin = runtime
+        .instance("first", compiled, serde_json::json!({}), store.clone())
+        .unwrap();
     for key in [String::new(), "字".repeat(1024)] {
+        assert_eq!(state_probe(&runtime, &plugin, &key, 0, ""), "Ok(None)");
+        assert_eq!(state_probe(&runtime, &plugin, &key, 1, "a"), "Ok(())");
         assert_eq!(
-            state_probe(&compiled, plugin.clone(), &key, 0, ""),
-            "Ok(None)"
-        );
-        assert_eq!(
-            state_probe(&compiled, plugin.clone(), &key, 1, "a"),
-            "Ok(())"
-        );
-        assert_eq!(
-            state_probe(&compiled, plugin.clone(), &key, 0, ""),
+            state_probe(&runtime, &plugin, &key, 0, ""),
             "Ok(Some([97]))"
         );
-        assert_eq!(
-            state_probe(&compiled, plugin.clone(), &key, 2, ""),
-            "Ok(true)"
-        );
+        assert_eq!(state_probe(&runtime, &plugin, &key, 2, ""), "Ok(true)");
     }
-    // The host forwards values without imposing the SQLite backend's cap.
-    assert_eq!(
-        state_probe(&compiled, plugin.clone(), "key", 3, ""),
-        "Ok(())"
-    );
-    assert_eq!(state.0.lock().unwrap()["key"].len(), 256 * 1024 + 1);
+    assert_eq!(state_probe(&runtime, &plugin, "key", 3, ""), "Ok(())");
+    assert_eq!(store.0.lock().unwrap()["key"].len(), 256 * 1024 + 1);
 }
 
 struct FailingState(bool);
@@ -151,7 +123,11 @@ impl FailingState {
     }
 }
 impl mandara_plugin::StateStore for FailingState {
-    fn get(&self, _: &str) -> Result<Option<Vec<u8>>, mandara_plugin::StateStoreError> {
+    fn get(&self, key: &str) -> Result<Option<Vec<u8>>, mandara_plugin::StateStoreError> {
+        // Allow schema introspection; the probe exercises errors on business keys.
+        if key == "demo:no-default" {
+            return Ok(None);
+        }
         Err(self.error())
     }
     fn set(&self, _: &str, _: &[u8]) -> Result<(), mandara_plugin::StateStoreError> {
@@ -164,11 +140,18 @@ impl mandara_plugin::StateStore for FailingState {
 
 #[test]
 fn state_backend_errors_are_redacted_and_quota_is_reported() {
-    let compiled = load();
+    let (runtime, compiled) = compile(FetchPolicy::default());
     for (quota, message) in [(false, "storage unavailable"), (true, "quota exceeded")] {
-        let plugin = Arc::new(FailingState(quota));
+        let plugin = runtime
+            .instance(
+                "test",
+                compiled.clone(),
+                serde_json::json!({}),
+                Arc::new(FailingState(quota)),
+            )
+            .unwrap();
         for operation in [0, 1, 2] {
-            let result = state_probe(&compiled, plugin.clone(), "key", operation, "value");
+            let result = state_probe(&runtime, &plugin, "key", operation, "value");
             assert!(result.starts_with("Err("));
             assert!(result.contains(message));
             assert!(!result.contains("private backend"));
@@ -197,36 +180,129 @@ impl mandara_plugin::host::ImageStore for TestImages {
     }
 }
 
-fn load() -> Arc<WasmPlugin> {
-    Arc::new(
-        WasmPlugin::load(
-            "hello.wasm",
-            FIXTURE.to_vec(),
-            Arc::new(FetchPolicy::default()),
-            Arc::new(TestImages::default()),
+fn compile(policy: FetchPolicy) -> (Arc<PluginRuntime>, Arc<CompiledPlugin>) {
+    let runtime = Arc::new(PluginRuntime::new(policy, Arc::new(TestImages::default())).unwrap());
+    let plugin = runtime
+        .compile("hello.wasm", FIXTURE)
+        .expect("fixture loads");
+    (runtime, plugin)
+}
+
+fn load() -> (Arc<PluginRuntime>, PluginInstance) {
+    let (runtime, compiled) = compile(FetchPolicy::default());
+    let instance = runtime
+        .instance("test", compiled, serde_json::json!({}), state())
+        .unwrap();
+    (runtime, instance)
+}
+
+#[test]
+fn runtime_shares_code_and_binds_storage_to_configuration_snapshots() {
+    let (runtime, compiled) = compile(FetchPolicy::default());
+    let another = runtime.compile("another.wasm", FIXTURE).unwrap();
+    let store = Arc::new(TestState::default());
+    let first = runtime
+        .instance(
+            "first",
+            compiled.clone(),
+            serde_json::json!({"site-name":"站点一"}),
+            store.clone(),
         )
-        .expect("fixture loads"),
-    )
+        .unwrap();
+    let second = runtime
+        .instance(
+            "second",
+            compiled.clone(),
+            serde_json::json!({"site-name":"站点二"}),
+            state(),
+        )
+        .unwrap();
+    let third = runtime
+        .instance("third", another, serde_json::json!({}), state())
+        .unwrap();
+    // Compilation and binding must not execute metadata exports.
+    assert!(store.0.lock().unwrap().is_empty());
+    assert_eq!(runtime.name(&third).unwrap(), "hello");
+    assert!(!first.same_registration(&second));
+    assert_eq!(state_probe(&runtime, &first, "key", 1, "value"), "Ok(())");
+    let updated = first.with_config(serde_json::json!({"site-name":"新站点"}));
+    assert!(first.same_registration(&updated));
+    assert_eq!(updated.id(), "first");
+    assert_eq!(
+        state_probe(&runtime, &updated, "key", 0, ""),
+        "Ok(Some([118, 97, 108, 117, 101]))"
+    );
+    assert_eq!(state_probe(&runtime, &second, "key", 0, ""), "Ok(None)");
+    assert!(
+        runtime.declare(&first).unwrap().unwrap()[0]
+            .book
+            .title
+            .contains("站点一")
+    );
+    assert!(
+        runtime.declare(&updated).unwrap().unwrap()[0]
+            .book
+            .title
+            .contains("新站点")
+    );
+    assert!(
+        runtime.declare(&second).unwrap().unwrap()[0]
+            .book
+            .title
+            .contains("站点二")
+    );
+    assert_eq!(first.config()["site-name"], "站点一");
+    let recreated = runtime
+        .instance("first", compiled.clone(), serde_json::json!({}), state())
+        .unwrap();
+    assert!(!first.same_registration(&recreated));
+    let foreign = Arc::new(
+        PluginRuntime::new(FetchPolicy::default(), Arc::new(TestImages::default())).unwrap(),
+    );
+    assert!(
+        foreign
+            .instance("invalid", compiled, serde_json::json!({}), state())
+            .is_err()
+    );
+}
+
+#[test]
+fn instances_do_not_retain_the_executor_or_shared_host_services() {
+    let images = Arc::new(TestImages::default());
+    let weak_images = Arc::downgrade(&images);
+    let runtime = Arc::new(PluginRuntime::new(FetchPolicy::default(), images).unwrap());
+    let weak_runtime = Arc::downgrade(&runtime);
+    let compiled = runtime.compile("hello.wasm", FIXTURE).unwrap();
+    let instance = runtime
+        .instance("test", compiled, serde_json::json!({}), state())
+        .unwrap();
+    let updated = instance.with_config(serde_json::json!({"site-name":"测试站点"}));
+    assert_eq!(runtime.name(&instance).unwrap(), "hello");
+    drop(runtime);
+    assert!(weak_runtime.upgrade().is_none());
+    assert!(weak_images.upgrade().is_none());
+    assert_eq!(instance.id(), "test");
+    assert!(instance.same_registration(&updated));
 }
 
 #[test]
 fn fixture_is_valid() {
-    let plugin = load();
+    let (runtime, plugin) = load();
     assert_eq!(plugin.file(), "hello.wasm");
-    assert_eq!(plugin.name(state()).unwrap(), "hello");
+    assert_eq!(runtime.name(&plugin).unwrap(), "hello");
 }
 
 #[test]
 fn capabilities_stub_declares_supported_patterns() {
-    let plugin = load();
-    let caps = plugin.capabilities(state()).unwrap();
+    let (runtime, plugin) = load();
+    let caps = runtime.capabilities(&plugin).unwrap();
     assert_eq!(caps, vec!["declare", "identify", "content"]);
 }
 
 #[test]
 fn config_schema_roundtrip() {
-    let plugin = load();
-    let fields = plugin.config_schema(state()).unwrap();
+    let (runtime, plugin) = load();
+    let fields = runtime.config_schema(&plugin).unwrap();
     let keys: Vec<&str> = fields.iter().map(|f| f.key.as_str()).collect();
     assert_eq!(keys, vec!["site-name", "mode", "verbose", "spin", "tags"]);
     let site = &fields[0];
@@ -240,8 +316,8 @@ fn config_schema_roundtrip() {
 
 #[test]
 fn config_validation_accepts_defaults_and_rejects_bad_values() {
-    let plugin = load();
-    let fields = plugin.config_schema(state()).unwrap();
+    let (runtime, plugin) = load();
+    let fields = runtime.config_schema(&plugin).unwrap();
 
     // Empty config -> healthy defaults (a default satisfies `required`).
     let normalized = validate_config(&fields, &serde_json::json!({})).unwrap();
@@ -321,20 +397,17 @@ fn config_validation_accepts_defaults_and_rejects_bad_values() {
 
 #[test]
 fn config_is_injected_into_calls() {
-    let plugin = load();
-    let fields = plugin.config_schema(state()).unwrap();
+    let (runtime, plugin) = load();
+    let fields = runtime.config_schema(&plugin).unwrap();
     let config = validate_config(
         &fields,
         &serde_json::json!({ "site-name": "测试站点", "tags": ["tag1", "tag2"] }),
     )
     .unwrap();
-    let values = values_from_config(&fields, &config);
+    let plugin = plugin.with_config(config);
 
     // The declared catalog is shaped by the injected configuration.
-    let declared = plugin
-        .declare(state(), &values)
-        .unwrap()
-        .expect("some books");
+    let declared = runtime.declare(&plugin).unwrap().expect("some books");
     assert_eq!(declared.len(), 2);
     let first = &declared[0];
     assert_eq!(first.book.id, "hello-1");
@@ -345,10 +418,7 @@ fn config_is_injected_into_calls() {
         content.mode,
         mandara_plugin::ContentMode::Chapters
     ));
-    let loaded = plugin
-        .get_content(state(), &values, &content.id)
-        .unwrap()
-        .unwrap();
+    let loaded = runtime.get_content(&plugin, &content.id).unwrap().unwrap();
     assert_eq!(loaded.id, content.id);
     assert_eq!(loaded.mode, mandara_core::model::ContentMode::Chapters);
     assert_eq!(loaded.chapters.len(), 2);
@@ -359,8 +429,8 @@ fn config_is_injected_into_calls() {
             .all(|chapter| chapter.content.is_none())
     );
     assert!(
-        plugin
-            .get_content(state(), &values, &first.book.id)
+        runtime
+            .get_content(&plugin, &first.book.id)
             .unwrap()
             .is_none()
     );
@@ -383,62 +453,53 @@ fn config_is_injected_into_calls() {
     );
 
     // Chapters serve the injected site name and mode variant.
-    let ch = plugin
-        .get_chapter(state(), &values, "hello-content-1", 0)
+    let ch = runtime
+        .get_chapter(&plugin, "hello-content-1", 0)
         .unwrap()
         .expect("chapter");
     assert!(ch.content.contains("wasm 插件"));
-    let alt = values_from_config(
-        &fields,
-        &validate_config(&fields, &serde_json::json!({ "site-name": "x", "mode": 1 })).unwrap(),
+    let alt = plugin.with_config(
+        validate_config(&fields, &serde_json::json!({ "site-name": "x", "mode": 1 })).unwrap(),
     );
-    let ch = plugin
-        .get_chapter(state(), &alt, "hello-content-1", 0)
+    let ch = runtime
+        .get_chapter(&alt, "hello-content-1", 0)
         .unwrap()
         .expect("chapter");
     assert!(ch.title.contains("变体"));
 
     // Unknown book -> None.
-    assert!(
-        plugin
-            .get_book(state(), &values, "hello-1")
-            .unwrap()
-            .is_none()
-    );
+    assert!(runtime.get_book(&plugin, "hello-1").unwrap().is_none());
     // Stubbed search returns an empty result.
-    let result = plugin
-        .search_books(state(), &values, "", 0, MAX_SEARCH_LIMIT)
+    let result = runtime
+        .search_books(&plugin, "", 0, MAX_SEARCH_LIMIT)
         .unwrap();
     assert_eq!(result.items.len(), 0);
 }
 
 #[test]
 fn declared_bodies_preserve_absence_and_empty_content() {
-    let plugin = load();
-    let declared = plugin.declare(state(), &[]).unwrap().unwrap();
+    let (runtime, plugin) = load();
+    let declared = runtime.declare(&plugin).unwrap().unwrap();
     let content = declared[1].content.as_ref().unwrap();
     let chapters = &content.chapters;
     assert_eq!(chapters.len(), 3);
     assert!(chapters[0].content.is_some());
     assert_eq!(chapters[1].content, None);
     assert_eq!(chapters[2].content.as_deref(), Some(""));
-    let declared_content = plugin
-        .get_content(state(), &[], &content.id)
-        .unwrap()
-        .unwrap();
+    let declared_content = runtime.get_content(&plugin, &content.id).unwrap().unwrap();
     assert_eq!(
         declared_content.mode,
         mandara_core::model::ContentMode::Chapters
     );
     assert_eq!(declared_content.chapters[1].content, None);
     assert_eq!(declared_content.chapters[2].content.as_deref(), Some(""));
-    let empty = plugin
-        .get_chapter(state(), &[], &content.id, 2)
+    let empty = runtime
+        .get_chapter(&plugin, &content.id, 2)
         .unwrap()
         .unwrap();
     assert_eq!(empty.content, "");
-    let lazy = plugin
-        .get_chapter(state(), &[], &content.id, 1)
+    let lazy = runtime
+        .get_chapter(&plugin, &content.id, 1)
         .unwrap()
         .unwrap();
     assert!(lazy.content.contains("正文"));
@@ -446,16 +507,16 @@ fn declared_bodies_preserve_absence_and_empty_content() {
 
 #[test]
 fn upload_identification() {
-    let plugin = load();
-    let fields = plugin.config_schema(state()).unwrap();
+    let (runtime, plugin) = load();
+    let fields = runtime.config_schema(&plugin).unwrap();
     let config = validate_config(&fields, &serde_json::json!({ "site-name": "示例库" })).unwrap();
-    let values = values_from_config(&fields, &config);
-    let hit = plugin
-        .identify_upload(state(), &values, "hello-novel.txt", "abc")
+    let plugin = plugin.with_config(config);
+    let hit = runtime
+        .identify_upload(&plugin, "hello-novel.txt", "abc")
         .unwrap();
     assert_eq!(hit.unwrap().id, "hello-1");
-    let miss = plugin
-        .identify_upload(state(), &values, "其他书名.epub", "abc")
+    let miss = runtime
+        .identify_upload(&plugin, "其他书名.epub", "abc")
         .unwrap();
     assert!(miss.is_none());
 }
@@ -463,28 +524,23 @@ fn upload_identification() {
 #[test]
 fn runaway_plugin_is_trapped_by_fuel() {
     // Guest computation is bounded independently of the HTTP timeout.
-    let plugin = Arc::new(
-        WasmPlugin::load(
-            "hello.wasm",
-            FIXTURE.to_vec(),
-            Arc::new(FetchPolicy {
-                timeout_ms: 100,
-                ..FetchPolicy::default()
-            }),
-            Arc::new(TestImages::default()),
-        )
-        .expect("fixture loads"),
-    );
-    let fields = plugin.config_schema(state()).unwrap();
+    let (runtime, compiled) = compile(FetchPolicy {
+        timeout_ms: 100,
+        ..FetchPolicy::default()
+    });
+    let plugin = runtime
+        .instance("spin", compiled, serde_json::json!({}), state())
+        .unwrap();
+    let fields = runtime.config_schema(&plugin).unwrap();
     // `spin: true` makes the guest loop forever inside get_chapter.
     let config = validate_config(
         &fields,
         &serde_json::json!({ "site-name": "x", "spin": true }),
     )
     .unwrap();
-    let values = values_from_config(&fields, &config);
-    let err = plugin
-        .get_chapter(state(), &values, "hello-content-1", 0)
+    let plugin = plugin.with_config(config);
+    let err = runtime
+        .get_chapter(&plugin, "hello-content-1", 0)
         .expect_err("spin must trap");
     match err {
         Error::Runtime(source) => {

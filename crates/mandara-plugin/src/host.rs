@@ -1,8 +1,8 @@
 //! The wasmtime component host (plugin interface v2).
 //!
 //! Each `*.wasm` file in the plugins directory is compiled once at startup
-//! into a [`WasmPlugin`]. The server registers *instances* of a plugin:
-//! one wasm file can back several instances, each with its own validated
+//! through a shared [`PluginRuntime`] into a [`CompiledPlugin`]. The server registers *instances* of a plugin:
+//! one wasm file can back several [`PluginInstance`] values, each with its own stored
 //! configuration, id, and enable flag.
 //!
 //! Calls into a plugin are synchronous with fresh guest memory: a new
@@ -81,28 +81,41 @@ pub trait ImageStore: Send + Sync {
     -> std::result::Result<String, ImageStoreError>;
 }
 
-/// Host-side state handed to plugin imports for the duration of one call.
-struct HostState {
-    /// Wasm file name, used as the log tag.
-    name: String,
-    /// Validated configuration values, in `config-schema` field order.
-    config: Vec<ConfigValue>,
-    /// Outbound HTTP policy (timeout/size caps) — shared by all plugins.
-    policy: Arc<FetchPolicy>,
-    /// Image store backing the `store-image` import.
+/// Cheap per-call service handles, independent of the Wasmtime execution environment.
+#[derive(Clone)]
+struct HostServices {
+    policy: FetchPolicy,
     images: Arc<dyn ImageStore>,
-    /// Total bytes stored this call (per-call cap accounting; a fresh
-    /// state per call resets it).
-    image_bytes_stored: u64,
+}
+
+/// Per-call context: only identity, bound storage, services, and invocation data.
+struct HostState {
+    instance_id: Arc<str>,
+    file: Arc<str>,
     state: Arc<dyn StateStore>,
+    services: HostServices,
+    /// Derived positional configuration for this invocation only.
+    config: Vec<ConfigValue>,
+    image_bytes_stored: u64,
 }
 
 impl HostState {
+    fn new(instance: &PluginInstance, services: HostServices, config: Vec<ConfigValue>) -> Self {
+        Self {
+            instance_id: instance.data.id.clone(),
+            file: instance.data.plugin.file.clone(),
+            state: instance.data.state.clone(),
+            services,
+            config,
+            image_bytes_stored: 0,
+        }
+    }
+
     fn state_error(&self, error: StateStoreError) -> String {
         match error {
             StateStoreError::QuotaExceeded => "plugin state quota exceeded".into(),
             StateStoreError::Backend(error) => {
-                warn!(plugin = %self.name, error = %error, "plugin state storage failed");
+                warn!(plugin = %self.instance_id, error = %error, "plugin state storage failed");
                 "plugin state storage unavailable".into()
             }
         }
@@ -128,13 +141,13 @@ impl mandara::plugin::state::Host for HostState {
 impl mandara::plugin::store::Host for HostState {
     // Logging is infallible; image storage is a trappable host import.
     fn log(&mut self, message: String) {
-        info!(plugin = %self.name, "plugin: {message}");
+        info!(plugin = %self.instance_id, "plugin: {message}");
     }
 
     fn store_image(&mut self, bytes: Vec<u8>, mime: String) -> wasmtime::Result<String> {
         if bytes.len() > MAX_IMAGE_BYTES {
             return Err(Error::ContentLimit {
-                file: self.name.clone(),
+                file: self.file.to_string(),
                 resource: "store-image (per-image)",
                 limit: MAX_IMAGE_BYTES,
             }
@@ -142,16 +155,17 @@ impl mandara::plugin::store::Host for HostState {
         }
         if self.image_bytes_stored + bytes.len() as u64 > MAX_CALL_IMAGE_BYTES as u64 {
             return Err(Error::ContentLimit {
-                file: self.name.clone(),
+                file: self.file.to_string(),
                 resource: "store-image (per-call)",
                 limit: MAX_CALL_IMAGE_BYTES,
             }
             .into());
         }
         let id = self
+            .services
             .images
             .store_image(&bytes, &mime)
-            .with_context(|| format!("`{}` store-image failed", self.name))?;
+            .with_context(|| format!("`{}` store-image failed", self.file))?;
         self.image_bytes_stored += bytes.len() as u64;
         Ok(id)
     }
@@ -189,7 +203,7 @@ impl mandara::plugin::http::Host for HostState {
             body: request.body,
             timeout_ms: request.timeout_ms,
         };
-        match http_fetch::fetch(&self.policy, req) {
+        match http_fetch::fetch(&self.services.policy, req) {
             Ok(resp) => Ok(mandara::plugin::http::Response {
                 status: resp.status,
                 headers: resp
@@ -222,111 +236,206 @@ impl mandara::plugin::http::Host for HostState {
     }
 }
 
-/// One compiled wasm component (per wasm file, shared by all instances).
-pub struct WasmPlugin {
-    /// Basename of the wasm file, e.g. `"wiki.wasm"` (instance rows refer
-    /// to this).
-    file: String,
+/// Shared execution environment for all compiled plugins.
+pub struct PluginRuntime {
     engine: Engine,
-    component: Component,
     linker: Linker<HostState>,
-    /// Outbound HTTP policy of the `http.fetch` import (timeout/size
-    /// caps). Shared by every instance of this file.
-    policy: Arc<FetchPolicy>,
-    /// Image store backing the `store-image` import.
-    images: Arc<dyn ImageStore>,
+    services: HostServices,
 }
 
-impl WasmPlugin {
-    /// Compile a component from raw wasm bytes. `policy` governs the
-    /// `http.fetch` import and `images` backs the `store-image` import of
-    /// every instance of this file.
-    pub fn load(
-        file: impl Into<String>,
-        wasm: Vec<u8>,
-        policy: Arc<FetchPolicy>,
-        images: Arc<dyn ImageStore>,
-    ) -> anyhow::Result<Self> {
-        let file = file.into();
+impl PluginRuntime {
+    pub fn new(policy: FetchPolicy, images: Arc<dyn ImageStore>) -> anyhow::Result<Self> {
         let mut config = Config::new();
         config.wasm_component_model(true);
         config.consume_fuel(true);
         let engine = Engine::new(&config)?;
-        let component = Component::new(&engine, &wasm)
-            .with_context(|| format!("{file} is not a valid wasm component"))?;
         let mut linker = Linker::new(&engine);
         MandaraPlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |state: &mut HostState| state)?;
         Ok(Self {
-            file,
             engine,
-            component,
             linker,
-            policy,
-            images,
+            services: HostServices { policy, images },
         })
     }
 
+    /// Compile code without instantiating or executing guest exports.
+    pub fn compile(
+        &self,
+        file: impl Into<String>,
+        wasm: &[u8],
+    ) -> anyhow::Result<Arc<CompiledPlugin>> {
+        let file = file.into();
+        let component = Component::new(&self.engine, wasm)
+            .with_context(|| format!("{file} is not a valid wasm component"))?;
+        Ok(Arc::new(CompiledPlugin {
+            file: file.into(),
+            component,
+        }))
+    }
+
+    /// Bind code, configuration, and storage to one registered instance.
+    pub fn instance(
+        &self,
+        id: impl Into<String>,
+        plugin: Arc<CompiledPlugin>,
+        config: serde_json::Value,
+        state: Arc<dyn StateStore>,
+    ) -> anyhow::Result<PluginInstance> {
+        anyhow::ensure!(
+            Engine::same(&self.engine, plugin.component.engine()),
+            "plugin component belongs to another runtime"
+        );
+        Ok(PluginInstance {
+            data: Arc::new(InstanceData {
+                id: Arc::from(id.into()),
+                plugin,
+                config,
+                state,
+            }),
+        })
+    }
+
+    /// Load directory entries through this runtime's shared engine.
+    pub fn load_dir(&self, dir: &Path) -> anyhow::Result<Vec<Arc<CompiledPlugin>>> {
+        let mut plugins = Vec::new();
+        if !dir.is_dir() {
+            return Ok(plugins);
+        }
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("wasm") {
+                continue;
+            }
+            let file = path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("plugin.wasm")
+                .to_string();
+            let wasm = std::fs::read(&path)?;
+            match self.compile(file.clone(), &wasm) {
+                Ok(plugin) => {
+                    info!(file = %file, "loaded wasm plugin");
+                    plugins.push(plugin);
+                }
+                Err(e) => {
+                    warn!(file = %file, "skipping plugin: {e:#}");
+                }
+            }
+        }
+        plugins.sort_by(|a, b| a.file().cmp(b.file()));
+        Ok(plugins)
+    }
+}
+
+/// Compiled code and its identity, shared by registered instances.
+pub struct CompiledPlugin {
+    file: Arc<str>,
+    component: Component,
+}
+
+impl CompiledPlugin {
     pub fn file(&self) -> &str {
         &self.file
     }
+}
 
-    /// Instantiate the component in a fresh store and run `f` against the
-    /// typed bindings. Configuration and the instance state store are
-    /// injected into this call, never attached to the compiled component.
-    fn call<T>(
+/// An immutable configuration snapshot of a registered plugin instance.
+/// Clones and configuration updates retain the same instance-bound storage.
+#[derive(Clone)]
+pub struct PluginInstance {
+    data: Arc<InstanceData>,
+}
+
+struct InstanceData {
+    id: Arc<str>,
+    plugin: Arc<CompiledPlugin>,
+    config: serde_json::Value,
+    state: Arc<dyn StateStore>,
+}
+
+impl PluginInstance {
+    pub fn id(&self) -> &str {
+        &self.data.id
+    }
+    pub fn file(&self) -> &str {
+        self.data.plugin.file()
+    }
+    pub fn config(&self) -> &serde_json::Value {
+        &self.data.config
+    }
+
+    /// Update configuration without rebinding the instance's storage.
+    pub fn with_config(&self, config: serde_json::Value) -> Self {
+        Self {
+            data: Arc::new(InstanceData {
+                id: self.data.id.clone(),
+                plugin: self.data.plugin.clone(),
+                config,
+                state: self.data.state.clone(),
+            }),
+        }
+    }
+
+    /// Distinguish a live registration from a deleted and recreated ID.
+    pub fn same_registration(&self, other: &Self) -> bool {
+        self.id() == other.id()
+            && Arc::ptr_eq(&self.data.plugin, &other.data.plugin)
+            && Arc::ptr_eq(&self.data.state, &other.data.state)
+    }
+}
+
+impl PluginRuntime {
+    fn invoke<T>(
         &self,
-        state: Arc<dyn StateStore>,
-        config: &[ConfigValue],
+        instance: &PluginInstance,
+        config: Vec<ConfigValue>,
         f: impl FnOnce(&mut Store<HostState>, &MandaraPlugin) -> wasmtime::Result<T>,
     ) -> Result<T> {
         let mut store = Store::new(
-            &self.engine,
-            HostState {
-                name: self.file.clone(),
-                config: config.to_vec(),
-                policy: self.policy.clone(),
-                images: self.images.clone(),
-                image_bytes_stored: 0,
-                state,
-            },
+            instance.data.plugin.component.engine(),
+            HostState::new(instance, self.services.clone(), config),
         );
-        // Meter guest work, not the elapsed time of host imports.
         store.set_fuel(MAX_CALL_FUEL)?;
-        let bindings = MandaraPlugin::instantiate(&mut store, &self.component, &self.linker)
-            .with_context(|| format!("instantiate `{}`", self.file))?;
-        Ok(f(&mut store, &bindings).with_context(|| format!("call into `{}`", self.file))?)
+        let bindings =
+            MandaraPlugin::instantiate(&mut store, &instance.data.plugin.component, &self.linker)
+                .with_context(|| format!("instantiate '{}'", instance.file()))?;
+        Ok(f(&mut store, &bindings).with_context(|| format!("call into '{}'", instance.file()))?)
     }
 
-    /// Human-readable plugin name, read with the instance state store.
-    pub fn name(&self, state: Arc<dyn StateStore>) -> Result<String> {
-        self.call(state, &[], |store, b| b.call_name(store))
+    /// Resolve positional configuration from this instance, never caller-supplied storage.
+    fn call<T>(
+        &self,
+        instance: &PluginInstance,
+        f: impl FnOnce(&mut Store<HostState>, &MandaraPlugin) -> wasmtime::Result<T>,
+    ) -> Result<T> {
+        let schema = self.config_schema(instance)?;
+        self.invoke(
+            instance,
+            values_from_config(&schema, &instance.data.config),
+            f,
+        )
     }
 
-    /// Interaction hints for a registered instance.
-    pub fn source_info(&self, state: Arc<dyn StateStore>) -> Result<SourceInfo> {
-        self.call(state, &[], |store, b| b.call_source_info(store))
+    /// Metadata exports run before configuration is available, but always with instance storage.
+    pub fn name(&self, instance: &PluginInstance) -> Result<String> {
+        self.invoke(instance, Vec::new(), |store, b| b.call_name(store))
     }
-
-    /// Configuration schema, read with an instance state store.
-    pub fn config_schema(&self, state: Arc<dyn StateStore>) -> Result<Vec<ConfigField>> {
-        self.call(state, &[], |store, b| b.call_config_schema(store))
+    pub fn source_info(&self, instance: &PluginInstance) -> Result<SourceInfo> {
+        self.invoke(instance, Vec::new(), |store, b| b.call_source_info(store))
     }
-
-    /// Declared capabilities of a registered instance. The host keys all
-    /// policy (sync, browsing, reads) off this list.
-    pub fn capabilities(&self, state: Arc<dyn StateStore>) -> Result<Vec<String>> {
-        self.call(state, &[], |store, b| b.call_capabilities(store))
+    pub fn config_schema(&self, instance: &PluginInstance) -> Result<Vec<ConfigField>> {
+        self.invoke(instance, Vec::new(), |store, b| b.call_config_schema(store))
+    }
+    pub fn capabilities(&self, instance: &PluginInstance) -> Result<Vec<String>> {
+        self.invoke(instance, Vec::new(), |store, b| b.call_capabilities(store))
     }
 
     /// Full static catalog (`declare` capability). Enforced: never more
     /// than [`MAX_DECLARE_BOOKS`] books / [`MAX_DECLARE_CHAPTERS`]
     /// chapters (warns beyond 90% of the cap).
-    pub fn declare(
-        &self,
-        state: Arc<dyn StateStore>,
-        config: &[ConfigValue],
-    ) -> Result<Option<Vec<DeclaredBook>>> {
-        let declared = self.call(state, config, |store, b| b.call_declare(store))?;
+    pub fn declare(&self, instance: &PluginInstance) -> Result<Option<Vec<DeclaredBook>>> {
+        let declared = self.call(instance, |store, b| b.call_declare(store))?;
         if let Some(books) = &declared {
             let chapters = books
                 .iter()
@@ -335,7 +444,7 @@ impl WasmPlugin {
                 .sum::<usize>();
             if books.len() > MAX_DECLARE_BOOKS || chapters > MAX_DECLARE_CHAPTERS {
                 return Err(Error::CatalogLimit {
-                    file: self.file.clone(),
+                    file: instance.file().to_string(),
                     books: books.len(),
                     max_books: MAX_DECLARE_BOOKS,
                     chapters,
@@ -345,7 +454,7 @@ impl WasmPlugin {
             if books.len() > MAX_DECLARE_BOOKS * 9 / 10 || chapters > MAX_DECLARE_CHAPTERS * 9 / 10
             {
                 warn!(
-                    plugin = %self.file,
+                    plugin = %instance.file(),
                     books = books.len(),
                     chapters,
                     "declare catalog close to the size cap"
@@ -359,46 +468,39 @@ impl WasmPlugin {
     /// `limit` and `offset` to [`MAX_SEARCH_LIMIT`] / [`MAX_SEARCH_OFFSET`].
     pub fn search_books(
         &self,
-        state: Arc<dyn StateStore>,
-        config: &[ConfigValue],
+        instance: &PluginInstance,
         query: &str,
         offset: u32,
         limit: u32,
     ) -> Result<SearchResult> {
         let offset = offset.min(MAX_SEARCH_OFFSET);
         let limit = limit.min(MAX_SEARCH_LIMIT);
-        self.call(state, config, |store, b| {
+        self.call(instance, |store, b| {
             b.call_search_books(store, query, offset, limit)
         })
     }
 
     /// Single book by id (`lookup` capability).
-    pub fn get_book(
-        &self,
-        state: Arc<dyn StateStore>,
-        config: &[ConfigValue],
-        book_id: &str,
-    ) -> Result<Option<BookEntry>> {
-        self.call(state, config, |store, b| b.call_get_book(store, book_id))
+    pub fn get_book(&self, instance: &PluginInstance, book_id: &str) -> Result<Option<BookEntry>> {
+        self.call(instance, |store, b| b.call_get_book(store, book_id))
     }
 
     /// Fetch one chapter (`content` capability). Content is capped at
     /// [`MAX_CHAPTER_CONTENT_BYTES`] per call.
     pub fn get_chapter(
         &self,
-        state: Arc<dyn StateStore>,
-        config: &[ConfigValue],
+        instance: &PluginInstance,
         book_id: &str,
         index: u32,
     ) -> Result<Option<SourceChapter>> {
-        let chapter = self.call(state, config, |store, b| {
+        let chapter = self.call(instance, |store, b| {
             b.call_get_chapter(store, book_id, index)
         })?;
         match chapter {
             Some(c) => {
                 if c.content.len() > MAX_CHAPTER_CONTENT_BYTES {
                     return Err(Error::ContentLimit {
-                        file: self.file.clone(),
+                        file: instance.file().to_string(),
                         resource: "chapter",
                         limit: MAX_CHAPTER_CONTENT_BYTES,
                     });
@@ -416,18 +518,17 @@ impl WasmPlugin {
     /// Content identity, loading and chapter declarations from one plugin call.
     pub fn get_content(
         &self,
-        state: Arc<dyn StateStore>,
-        config: &[ConfigValue],
+        instance: &PluginInstance,
         content_id: &str,
     ) -> Result<Option<mandara_core::source::SourceDeclaredContent>> {
-        let content = self.call(state, config, |store, bindings| {
+        let content = self.call(instance, |store, bindings| {
             bindings.call_get_content(store, content_id)
         })?;
         if let Some(content) = &content
             && content.chapters.len() > MAX_DECLARE_CHAPTERS
         {
             return Err(Error::ContentLimit {
-                file: self.file.clone(),
+                file: instance.file().to_string(),
                 resource: "content chapters",
                 limit: MAX_DECLARE_CHAPTERS,
             });
@@ -438,12 +539,11 @@ impl WasmPlugin {
     /// Upload identification (`identify` capability).
     pub fn identify_upload(
         &self,
-        state: Arc<dyn StateStore>,
-        config: &[ConfigValue],
+        instance: &PluginInstance,
         filename: &str,
         file_hash: &str,
     ) -> Result<Option<SourceBook>> {
-        let book = self.call(state, config, |store, b| {
+        let book = self.call(instance, |store, b| {
             b.call_identify_upload(store, filename, file_hash)
         })?;
         Ok(book.map(SourceBook::try_from).transpose()?)
@@ -452,11 +552,10 @@ impl WasmPlugin {
     /// Resolve a series into individually identified, validated member books.
     pub fn get_series(
         &self,
-        state: Arc<dyn StateStore>,
-        config: &[ConfigValue],
+        instance: &PluginInstance,
         series_id: &str,
     ) -> Result<Option<SeriesResult>> {
-        let result = self.call(state, config, |store, bindings| {
+        let result = self.call(instance, |store, bindings| {
             bindings.call_get_series(store, series_id)
         })?;
         if let Some(series) = &result {
@@ -484,18 +583,15 @@ impl WasmPlugin {
     /// Bytes are capped at [`MAX_BOOK_FILE_BYTES`].
     pub fn get_book_file(
         &self,
-        state: Arc<dyn StateStore>,
-        config: &[ConfigValue],
+        instance: &PluginInstance,
         book_id: &str,
     ) -> Result<Option<SourceBookFile>> {
-        let file = self.call(state, config, |store, b| {
-            b.call_get_book_file(store, book_id)
-        })?;
+        let file = self.call(instance, |store, b| b.call_get_book_file(store, book_id))?;
         match file {
             Some(f) => {
                 if f.bytes.len() > MAX_BOOK_FILE_BYTES {
                     return Err(Error::ContentLimit {
-                        file: self.file.clone(),
+                        file: instance.file().to_string(),
                         resource: "book file",
                         limit: MAX_BOOK_FILE_BYTES,
                     });
@@ -574,45 +670,6 @@ impl TryFrom<BookEntry> for SourceBook {
             volume_no: b.volume_no,
         })
     }
-}
-
-/// Loads every `*.wasm` component in `dir`, skipping invalid files with a
-/// warning so a bad plugin never prevents the server from starting.
-/// The returned map is keyed by file basename (e.g. `"hello.wasm"`).
-/// `policy` governs the `http.fetch` import of every plugin.
-pub fn load_dir(
-    dir: &Path,
-    policy: Arc<FetchPolicy>,
-    images: Arc<dyn ImageStore>,
-) -> anyhow::Result<Vec<Arc<WasmPlugin>>> {
-    let mut plugins = Vec::new();
-    if !dir.is_dir() {
-        return Ok(plugins);
-    }
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("wasm") {
-            continue;
-        }
-        let file = path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("plugin.wasm")
-            .to_string();
-        let wasm = std::fs::read(&path)?;
-        match WasmPlugin::load(file.clone(), wasm, policy.clone(), images.clone()) {
-            Ok(plugin) => {
-                info!(file = %file, "loaded wasm plugin");
-                plugins.push(Arc::new(plugin));
-            }
-            Err(e) => {
-                warn!(file = %file, "skipping plugin: {e:#}");
-            }
-        }
-    }
-    plugins.sort_by(|a, b| a.file().cmp(b.file()));
-    Ok(plugins)
 }
 
 // ---- configuration validation ----------------------------------------------

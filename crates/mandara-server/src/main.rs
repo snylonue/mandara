@@ -21,7 +21,7 @@ use clap::Parser;
 use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
 
-use mandara_plugin::{FetchPolicy, load_dir};
+use mandara_plugin::{FetchPolicy, PluginRuntime};
 use service::plugins::PluginService;
 use state::AppState;
 
@@ -72,7 +72,7 @@ async fn main() -> anyhow::Result<()> {
     // (MANDARA_PLUGIN_FETCH_* env vars). Plugins get plain network
     // access; calls run on blocking threads, so a slow source never
     // stalls a worker.
-    let fetch_policy = Arc::new(FetchPolicy::from_env());
+    let fetch_policy = FetchPolicy::from_env();
     tracing::info!(
         timeout_ms = fetch_policy.timeout_ms,
         max_bytes = fetch_policy.max_bytes,
@@ -85,10 +85,11 @@ async fn main() -> anyhow::Result<()> {
     let files_dir = data_dir.join("files");
     tokio::fs::create_dir_all(&files_dir).await?;
     let image_store = service::images::DbImageStore::new(diesel_db.clone(), files_dir.clone());
-    let wasms = load_dir(&cfg.plugins_dir, fetch_policy, image_store)?;
+    let runtime = Arc::new(PluginRuntime::new(fetch_policy, image_store)?);
+    let wasms = runtime.load_dir(&cfg.plugins_dir)?;
     tracing::info!(files = wasms.len(), "loaded wasm plugin files");
 
-    let plugins = Arc::new(PluginService::new(diesel_db.clone(), wasms));
+    let plugins = Arc::new(PluginService::new(diesel_db.clone(), runtime, wasms).await?);
     let library = service::Library::new(diesel_db.clone(), plugins, files_dir);
     // Startup sync materializes the catalog of every enabled
     // `declare`-capable instance; search/lookup-only instances stay lazy.

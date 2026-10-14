@@ -29,6 +29,41 @@ the full design. This guide is for plugin authors.
   calls. Use the instance-scoped `state` import for durable plugin data;
   materialized books and chapter bodies remain the host library cache.
 
+## Host ownership
+
+The Rust host separates four lifetimes:
+
+- `PluginRuntime` owns one shared Wasmtime engine/linker, the HTTP policy
+  (stored by value), and the shared image store.
+- `CompiledPlugin` contains only a file identity and compiled component.
+  `PluginRuntime::load_dir` scans files and `compile` compiles their bytes;
+  neither executes guest exports.
+- `PluginInstance` binds a registered ID, compiled code, stored configuration,
+  and its state store, but does not retain the executor or host services.
+  The server restores these objects at startup and creates them after
+  inserting a new registration.
+- `HostState` holds only shared instance-ID/file strings, the instance-bound
+  state-store handle, a cheap clone of `HostServices`, derived positional
+  configuration, and per-call image accounting. It retains neither the
+  complete instance nor its compiled component or raw JSON configuration.
+  Identity handles share their strings without copying them per call, and the
+  state handle is cloned from the bound instance, never constructed per call.
+  Cloning services copies the HTTP policy and clones only the shared image-store
+  handle, without an additional reference-counted service wrapper.
+
+Guest exports are methods on `PluginRuntime`, for example
+`runtime.get_chapter(&instance, content_id, index)`. Calls receive the bound
+instance, never separately selected configuration and storage. The call store
+uses the compiled component's engine directly, while the runtime supplies
+the linker and shared host services. Components are bound through their
+compiling runtime; calls do not repeat that engine-identity check.
+
+Configuration saves publish a new immutable snapshot while retaining the
+same state store. In-flight calls keep their original configuration snapshot;
+subsequent calls use the saved configuration. Unregistering removes the live
+instance and its database-owned state. Wasm exports and protocol v0.13.0 are
+unchanged by this ownership split.
+
 ## Persistent plugin state
 
 The state import extends protocol v0.13.0 without changing existing exports:
