@@ -229,7 +229,7 @@
   text-align: center;
 }
 
-.reader-topbar .sm.active {
+.reader-settings .seg button.active {
   background: var(--accent-dim);
   color: var(--accent);
 }
@@ -373,6 +373,7 @@
 }
 
 .reader-nav-btn {
+  font-family: inherit;
   flex: 1;
   min-width: 0;
   display: flex;
