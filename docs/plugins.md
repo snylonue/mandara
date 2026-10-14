@@ -388,8 +388,8 @@ sessions, shares and archived original bytes. Colliding legacy items are kept.
 ## Example plugins
 
 - `plugins/novelia-plugin/` — Novelia web novels (`search` + `lookup` +
-  chapter content) and Wenku series/volume downloads (`book-file`). Configurable
-  catalog, providers, translation choice and optional Bearer token. See
+  chapter content) and content-only Wenku downloads (`book-file`), identified by
+  upstream volumeId. Configurable providers, translation and account login. See
   [Novelia setup and limitations](novelia-plugin.md).
 
 - `plugins/hello-plugin/` — small `declare` + `identify` + `content`

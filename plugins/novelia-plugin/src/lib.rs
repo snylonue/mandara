@@ -1,10 +1,10 @@
 //! Novelia's public JSON API, adapted to Mandara's stateless WIT world.
-//! Web novels use chapter mode; Wenku editions use upstream ASINs for identity.
-//! Upload filenames are download locators, resolved separately from identity.
+//! Web novels provide metadata and chapters; Wenku provides content only.
+//! Wenku content uses the upstream volumeId, scoped by its series ID.
 
 use serde::Deserialize;
 use serde_json::json;
-use unicode_normalization::UnicodeNormalization;
+use std::cell::RefCell;
 use url::Url;
 
 wit_bindgen::generate!({
@@ -13,6 +13,7 @@ wit_bindgen::generate!({
 });
 
 const BASE: &str = "https://n.novelia.cc";
+const AUTH_BASE: &str = "https://auth.novelia.cc";
 const PROVIDERS: &[&str] = &[
     "syosetu",
     "kakuyomu",
@@ -25,62 +26,135 @@ const PAGE_SIZE: u32 = 100;
 
 struct Settings {
     base: String,
-    wenku: bool,
     providers: Vec<String>,
     translation: u32,
-    token: String,
-    bindings: Option<Vec<FileBinding>>,
+    username: String,
+    password: String,
+    auth_base: String,
+    // Guest state lasts one export call. Cache success/failure only within it.
+    token: RefCell<Option<Option<String>>>,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "kebab-case", deny_unknown_fields)]
-struct FileBinding {
-    novel_id: String,
-    asin: String,
-    filename: String,
+fn endpoint(base: &str, segments: &[&str]) -> Option<Url> {
+    let mut url = Url::parse(base).ok()?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return None;
+    }
+    url.set_query(None);
+    url.set_fragment(None);
+    url.path_segments_mut()
+        .ok()?
+        .pop_if_empty()
+        .extend(segments);
+    Some(url)
 }
 
 impl Settings {
     fn load() -> Self {
-        let values = mandara::plugin::config::configure();
+        Self::from_values(&mandara::plugin::config::configure())
+    }
+
+    fn from_values(values: &[ConfigValue]) -> Self {
         let text = |i, default: &str| match values.get(i) {
             Some(ConfigValue::Text(s)) if !s.trim().is_empty() => s.trim().to_string(),
             _ => default.into(),
         };
-        let choice = |i| match values.get(i) {
-            Some(ConfigValue::EnumIndex(n)) => *n,
-            _ => 0,
-        };
         Self {
             base: text(0, BASE),
-            wenku: choice(1) == 1,
-            providers: match values.get(2) {
+            providers: match values.get(1) {
                 Some(ConfigValue::StringList(p)) => p.clone(),
                 _ => PROVIDERS.iter().map(|p| (*p).into()).collect(),
             },
-            translation: choice(3),
-            token: text(4, ""),
-            // Invalid explicit mappings fail closed rather than guessing a file.
-            bindings: serde_json::from_str(&text(5, "[]")).ok(),
+            translation: match values.get(2) {
+                Some(ConfigValue::EnumIndex(n)) => *n,
+                _ => 0,
+            },
+            username: text(3, ""),
+            // Password whitespace is significant, unlike URL/account whitespace.
+            password: match values.get(4) {
+                Some(ConfigValue::Text(s)) => s.clone(),
+                _ => String::new(),
+            },
+            auth_base: text(5, AUTH_BASE),
+            token: RefCell::new(None),
         }
     }
 
     fn url(&self, segments: &[&str]) -> Option<Url> {
-        let mut url = Url::parse(&self.base).ok()?;
-        if !matches!(url.scheme(), "http" | "https")
-            || url.host_str().is_none()
-            || !url.username().is_empty()
-            || url.password().is_some()
+        endpoint(&self.base, segments)
+    }
+
+    fn login_url(&self) -> Option<Url> {
+        let url = endpoint(&self.auth_base, &["api", "v1", "auth", "login"])?;
+        // Only local mock services may receive passwords without TLS.
+        if url.scheme() != "https"
+            && !matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"))
         {
             return None;
         }
-        url.set_query(None);
-        url.set_fragment(None);
-        url.path_segments_mut()
-            .ok()?
-            .pop_if_empty()
-            .extend(segments);
         Some(url)
+    }
+
+    fn login(&self) -> Option<String> {
+        use mandara::plugin::http::{Header, Request, fetch};
+        if self.username.is_empty() && self.password.is_empty() {
+            return Some(String::new());
+        }
+        if self.username.is_empty() || self.password.is_empty() {
+            log("Novelia requires both username and password");
+            return None;
+        }
+        let url = self.login_url()?;
+        // Do not retry password submissions, downgrade to guest, or log bodies.
+        let response = match fetch(&Request {
+            method: "POST".into(),
+            url: url.to_string(),
+            headers: vec![
+                Header {
+                    name: "Content-Type".into(),
+                    value: "application/json".into(),
+                },
+                Header {
+                    name: "User-Agent".into(),
+                    value: "snylonue/mandara Novelia plugin".into(),
+                },
+            ],
+            body: Some(
+                json!({"app": "n", "username": self.username, "password": self.password})
+                    .to_string()
+                    .into_bytes(),
+            ),
+            timeout_ms: Some(30_000),
+        }) {
+            Ok(response) => response,
+            Err(_) => {
+                log("Novelia login transport/policy failure");
+                return None;
+            }
+        };
+        if response.status != 200 {
+            log(&format!("Novelia login HTTP {}", response.status));
+            return None;
+        }
+        let token = String::from_utf8(response.body).ok()?.trim().to_string();
+        if !valid_token(&token) {
+            log("Novelia login returned an invalid token");
+            return None;
+        }
+        Some(token)
+    }
+
+    fn access_token(&self) -> Option<String> {
+        if let Some(token) = self.token.borrow().as_ref() {
+            return token.clone();
+        }
+        let token = self.login();
+        *self.token.borrow_mut() = Some(token.clone());
+        token
     }
 
     fn translators(&self) -> &'static [&'static str] {
@@ -99,11 +173,14 @@ impl Settings {
             name: "User-Agent".into(),
             value: "snylonue/mandara Novelia plugin".into(),
         }];
-        if authenticated && !self.token.is_empty() {
-            headers.push(Header {
-                name: "Authorization".into(),
-                value: format!("Bearer {}", self.token),
-            });
+        if authenticated {
+            let token = self.access_token()?;
+            if !token.is_empty() {
+                headers.push(Header {
+                    name: "Authorization".into(),
+                    value: format!("Bearer {token}"),
+                });
+            }
         }
         // Do not retry authorization failures or log response bodies/tokens.
         for attempt in 0..2 {
@@ -221,15 +298,6 @@ struct WebChapter {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct WenkuOutline {
-    id: String,
-    title: String,
-    title_zh: String,
-    cover: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct WenkuVolume {
     volume_id: String,
     #[serde(default)]
@@ -242,38 +310,27 @@ struct WenkuVolume {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct WenkuEdition {
-    asin: String,
-    title: String,
-    title_zh: Option<String>,
-    cover: Option<String>,
-    publisher: Option<String>,
-    imprint: Option<String>,
-    publish_at: Option<i64>,
-}
-
-fn valid_asin(asin: &str) -> bool {
-    asin.len() == 10
-        && asin
-            .bytes()
-            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct WenkuNovel {
-    title: String,
-    title_zh: String,
-    cover: Option<String>,
-    authors: Vec<String>,
-    artists: Vec<String>,
-    introduction: String,
-    #[serde(default)]
-    keywords: Vec<String>,
-    publisher: Option<String>,
-    imprint: Option<String>,
-    volumes: Vec<WenkuEdition>,
+    // Deliberately ignore bibliographic volumes/ASINs and other metadata.
     volume_jp: Vec<WenkuVolume>,
+}
+
+impl WenkuNovel {
+    fn upload(&self, volume_id: &str) -> Option<&WenkuVolume> {
+        let mut matches = self.volume_jp.iter().filter(|v| v.volume_id == volume_id);
+        let upload = matches.next()?;
+        matches.next().is_none().then_some(upload)
+    }
+}
+
+fn valid_token(token: &str) -> bool {
+    let parts: Vec<_> = token.split('.').collect();
+    parts.len() == 3
+        && parts.iter().all(|p| {
+            !p.is_empty()
+                && p.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+        })
 }
 
 fn preferred(original: &str, translated: Option<&str>) -> String {
@@ -283,8 +340,8 @@ fn preferred(original: &str, translated: Option<&str>) -> String {
         .to_string()
 }
 
-// Opaque IDs encode upstream identifiers, never upload filenames. Reject
-// malformed escapes and old filename IDs rather than silently rebinding them.
+// Encode each upstream ID component, including Wenku volumeId filenames.
+// Preserve exact spelling; reject malformed escapes rather than aliasing IDs.
 fn encode(s: &str) -> String {
     s.bytes()
         .map(|b| {
@@ -316,7 +373,6 @@ fn decode(s: &str) -> Option<String> {
 #[derive(Debug, PartialEq)]
 enum Id {
     Web(String, String),
-    Wenku(String),
     Volume(String, String),
 }
 
@@ -330,9 +386,12 @@ impl Id {
         };
         match parts.as_slice() {
             ["web", p, n] => Some(Self::Web(component(p)?, component(n)?)),
-            ["wenku", n] => Some(Self::Wenku(component(n)?)),
-            ["wenku-asin", n, asin] if valid_asin(asin) => {
-                Some(Self::Volume(component(n)?, (*asin).into()))
+            ["wenku-volume", n, v] => {
+                let volume = component(v)?;
+                if volume.contains(['/', '\\']) {
+                    return None;
+                }
+                Some(Self::Volume(component(n)?, volume))
             }
             _ => None,
         }
@@ -342,8 +401,8 @@ impl Id {
 fn web_id(p: &str, n: &str) -> String {
     format!("web:{}:{}", encode(p), encode(n))
 }
-fn volume_id(n: &str, asin: &str) -> String {
-    format!("wenku-asin:{}:{asin}", encode(n))
+fn volume_id(n: &str, volume: &str) -> String {
+    format!("wenku-volume:{}:{}", encode(n), encode(volume))
 }
 
 impl WebNovel {
@@ -369,138 +428,6 @@ impl WebNovel {
         self.toc
             .iter()
             .filter(|c| c.chapter_id.as_ref().is_some_and(|id| !id.is_empty()))
-    }
-}
-
-impl WenkuNovel {
-    fn series(&self, id: &str) -> SeriesEntry {
-        SeriesEntry {
-            id: format!("wenku:{}", encode(id)),
-            title: preferred(&self.title, Some(&self.title_zh)),
-            authors: self.authors.clone(),
-            description: Some(self.introduction.clone()),
-            cover_url: self.cover.clone(),
-            extra: Some(json!({"original_title": self.title, "tags": self.keywords}).to_string()),
-        }
-    }
-
-    fn edition(&self, asin: &str) -> Option<&WenkuEdition> {
-        if !valid_asin(asin) {
-            return None;
-        }
-        let mut matches = self.volumes.iter().filter(|v| v.asin == asin);
-        let edition = matches.next()?;
-        matches.next().is_none().then_some(edition)
-    }
-
-    fn books(&self, id: &str) -> Vec<BookEntry> {
-        self.volumes
-            .iter()
-            .enumerate()
-            .filter(|(_, v)| self.edition(&v.asin).is_some())
-            .map(|(i, v)| BookEntry {
-                id: volume_id(id, &v.asin),
-                title: preferred(&v.title, v.title_zh.as_deref()),
-                authors: self.authors.clone(),
-                description: Some(self.introduction.clone()),
-                cover_url: v.cover.clone().or_else(|| self.cover.clone()),
-                extra: Some(
-                    json!({
-                        "original_title": v.title, "illustrators": self.artists,
-                        "publisher": v.publisher.as_ref().or(self.publisher.as_ref()),
-                        "novelia_asin": v.asin, "novelia_publish_at": v.publish_at,
-                    })
-                    .to_string(),
-                ),
-                series: Some(self.series(id)),
-                volume_no: i as u32 + 1,
-            })
-            .collect()
-    }
-
-    fn title_key(&self, title: &str, edition: &WenkuEdition) -> String {
-        let mut normalized: String = title.nfkc().collect();
-        // Strip only explicitly known publisher/imprint suffixes, not arbitrary
-        // subtitles, volume numbers or fuzzy prefixes.
-        for label in [
-            &edition.imprint,
-            &self.imprint,
-            &edition.publisher,
-            &self.publisher,
-        ]
-        .into_iter()
-        .flatten()
-        {
-            let suffix = format!("({})", label.nfkc().collect::<String>());
-            if let Some(prefix) = normalized.trim_end().strip_suffix(&suffix) {
-                normalized = prefix.trim_end().to_string();
-            }
-        }
-        normalized.chars().filter(|c| !c.is_whitespace()).collect()
-    }
-
-    fn upload_key(&self, filename: &str, edition: &WenkuEdition) -> Option<String> {
-        let stem = filename
-            .strip_suffix(".epub")
-            .or_else(|| filename.strip_suffix(".txt"))?;
-        let mut stem: String = stem.nfkc().collect();
-        for author in &self.authors {
-            let suffix = format!(" - {}", author.nfkc().collect::<String>());
-            if let Some(prefix) = stem.strip_suffix(&suffix) {
-                stem = prefix.to_string();
-            }
-        }
-        Some(self.title_key(&stem, edition))
-    }
-
-    fn upload_matches(&self, upload: &WenkuVolume, edition: &WenkuEdition) -> bool {
-        let Some(key) = self.upload_key(&upload.volume_id, edition) else {
-            return false;
-        };
-        !key.is_empty()
-            && std::iter::once(edition.title.as_str())
-                .chain(edition.title_zh.as_deref())
-                .any(|title| !title.is_empty() && self.title_key(title, edition) == key)
-    }
-
-    fn upload<'a>(
-        &'a self,
-        novel: &str,
-        asin: &str,
-        settings: &Settings,
-    ) -> Option<&'a WenkuVolume> {
-        let edition = self.edition(asin)?;
-        let bindings = settings.bindings.as_ref()?;
-        let mut bindings = bindings
-            .iter()
-            .filter(|b| b.novel_id == novel && b.asin == asin);
-        if let Some(binding) = bindings.next() {
-            if bindings.next().is_some() {
-                return None;
-            }
-            let mut uploads = self
-                .volume_jp
-                .iter()
-                .filter(|v| v.volume_id == binding.filename);
-            let upload = uploads.next()?;
-            return uploads.next().is_none().then_some(upload);
-        }
-        let mut uploads = self
-            .volume_jp
-            .iter()
-            .filter(|v| self.upload_matches(v, edition));
-        let upload = uploads.next()?;
-        if uploads.next().is_some() {
-            return None;
-        }
-        // One upload must identify exactly one edition in the catalog as well.
-        (self
-            .volumes
-            .iter()
-            .filter(|v| self.upload_matches(upload, v))
-            .count()
-            == 1)
-            .then_some(upload)
     }
 }
 
@@ -655,7 +582,10 @@ impl Guest for NoveliaPlugin {
         SourceInfo {
             kind: "search".into(),
             id_kind: "opaque".into(),
-            id_hint: Some("网络小说：web:来源:书号；文库系列：wenku:书号".into()),
+            id_hint: Some(
+                "网络小说：web:来源:书号；文库仅正文：wenku-volume:系列书号:编码后的 volumeId"
+                    .into(),
+            ),
             search_hint: Some("搜索 Novelia 书名 / 作者".into()),
         }
     }
@@ -669,14 +599,6 @@ impl Guest for NoveliaPlugin {
                 default: Some(json!(BASE).to_string()),
                 required: true,
                 hint: Some("Novelia 站点根地址（不含 /api）".into()),
-            },
-            ConfigField {
-                key: "catalog".into(),
-                label: "搜索目录".into(),
-                kind: ConfigKind::EnumOptions(vec!["网络小说".into(), "文库小说".into()]),
-                default: Some("0".into()),
-                required: true,
-                hint: Some("可注册两个实例，分别搜索网络小说和文库小说".into()),
             },
             ConfigField {
                 key: "providers".into(),
@@ -703,19 +625,30 @@ impl Guest for NoveliaPlugin {
                 ),
             },
             ConfigField {
-                key: "access-token".into(),
-                label: "访问令牌（可选）".into(),
+                key: "username".into(),
+                label: "账号（邮箱或用户名）".into(),
+                kind: ConfigKind::Text,
+                default: Some(json!("").to_string()),
+                required: false,
+                hint: Some("网络小说搜索需要登录；账号和密码均留空时匿名访问".into()),
+            },
+            ConfigField {
+                key: "password".into(),
+                label: "密码".into(),
                 kind: ConfigKind::Text,
                 default: Some(json!("").to_string()),
                 required: false,
                 hint: Some(
-                    "网络小说搜索需要登录；可填写登录会话的 Bearer 令牌，不要填写密码".into(),
+                    "与账号同时填写；凭据保存在实例配置中，请保护管理员权限和数据库备份".into(),
                 ),
             },
             ConfigField {
-                key: "volume-files".into(), label: "文库下载文件映射（可选）".into(),
-                kind: ConfigKind::Text, default: Some(json!("[]").to_string()), required: false,
-                hint: Some("JSON 数组：[{\"novel-id\":\"系列书号\",\"asin\":\"ASIN\",\"filename\":\"文件名.epub\"}]；仅在标题无法唯一匹配时使用".into()),
+                key: "auth-url".into(),
+                label: "认证服务地址".into(),
+                kind: ConfigKind::Text,
+                default: Some(json!(AUTH_BASE).to_string()),
+                required: true,
+                hint: Some("官方统一认证服务；仅填写可信 HTTPS 地址，不含 /api".into()),
             },
         ]
     }
@@ -731,94 +664,51 @@ impl Guest for NoveliaPlugin {
         if limit == 0 {
             return empty();
         }
-        if settings.wenku {
-            let result = search_pages::<WenkuOutline>(offset, limit, |page| {
-                let mut url = settings.url(&["api", "wenku"])?;
-                url.query_pairs_mut()
-                    .append_pair("page", &page.to_string())
-                    .append_pair("pageSize", &PAGE_SIZE.to_string())
-                    .append_pair("query", &query)
-                    .append_pair("level", "0");
-                settings.get(&url)
-            });
-            result
-                .map(|(total, items)| SearchResult {
-                    total,
-                    items: items
-                        .into_iter()
-                        .map(|n| {
-                            CatalogEntry::Series(SeriesEntry {
-                                id: format!("wenku:{}", encode(&n.id)),
-                                title: preferred(&n.title, Some(&n.title_zh)),
-                                authors: vec![],
-                                description: None,
-                                cover_url: n.cover,
-                                extra: Some(json!({"original_title": n.title}).to_string()),
-                            })
-                        })
-                        .collect(),
-                })
-                .unwrap_or_else(empty)
-        } else {
-            if settings.providers.is_empty() {
-                return empty();
-            }
-            let result = search_pages::<WebOutline>(offset, limit, |page| {
-                let mut url = settings.url(&["api", "novel"])?;
-                url.query_pairs_mut()
-                    .append_pair("page", &page.to_string())
-                    .append_pair("pageSize", &PAGE_SIZE.to_string())
-                    .append_pair("query", &query)
-                    .append_pair("provider", &settings.providers.join(","))
-                    .append_pair("type", "0")
-                    .append_pair("level", "0")
-                    .append_pair("translate", "0")
-                    .append_pair("sort", "0");
-                settings.get(&url)
-            });
-            result
-                .map(|(total, items)| SearchResult {
-                    total,
-                    items: items
-                        .into_iter()
-                        .map(|n| {
-                            CatalogEntry::Single(BookEntry {
-                                id: web_id(&n.provider_id, &n.novel_id),
-                                title: preferred(&n.title_jp, n.title_zh.as_deref()),
-                                authors: vec![],
-                                description: None,
-                                cover_url: None,
-                                extra: Some(json!({"original_title": n.title_jp}).to_string()),
-                                series: None,
-                                volume_no: 0,
-                            })
-                        })
-                        .collect(),
-                })
-                .unwrap_or_else(empty)
+        if settings.providers.is_empty() {
+            return empty();
         }
+        let result = search_pages::<WebOutline>(offset, limit, |page| {
+            let mut url = settings.url(&["api", "novel"])?;
+            url.query_pairs_mut()
+                .append_pair("page", &page.to_string())
+                .append_pair("pageSize", &PAGE_SIZE.to_string())
+                .append_pair("query", &query)
+                .append_pair("provider", &settings.providers.join(","))
+                .append_pair("type", "0")
+                .append_pair("level", "0")
+                .append_pair("translate", "0")
+                .append_pair("sort", "0");
+            settings.get(&url)
+        });
+        result
+            .map(|(total, items)| SearchResult {
+                total,
+                items: items
+                    .into_iter()
+                    .map(|n| {
+                        CatalogEntry::Single(BookEntry {
+                            id: web_id(&n.provider_id, &n.novel_id),
+                            title: preferred(&n.title_jp, n.title_zh.as_deref()),
+                            authors: vec![],
+                            description: None,
+                            cover_url: None,
+                            extra: Some(json!({"original_title": n.title_jp}).to_string()),
+                            series: None,
+                            volume_no: 0,
+                        })
+                    })
+                    .collect(),
+            })
+            .unwrap_or_else(empty)
     }
-    fn get_series(series_id: String) -> Option<SeriesResult> {
-        let Id::Wenku(n) = Id::parse(&series_id)? else {
-            return None;
-        };
-        let novel = Settings::load().wenku(&n)?;
-        Some(SeriesResult {
-            series: novel.series(&n),
-            books: novel.books(&n),
-        })
+    fn get_series(_series_id: String) -> Option<SeriesResult> {
+        None
     }
     fn get_book(book_id: String) -> Option<BookEntry> {
-        let settings = Settings::load();
-        match Id::parse(&book_id)? {
-            Id::Web(p, n) => Some(settings.web(&p, &n)?.book(web_id(&p, &n))),
-            Id::Volume(n, v) => settings
-                .wenku(&n)?
-                .books(&n)
-                .into_iter()
-                .find(|b| b.id == volume_id(&n, &v)),
-            Id::Wenku(_) => None,
-        }
+        let Id::Web(p, n) = Id::parse(&book_id)? else {
+            return None;
+        };
+        Some(Settings::load().web(&p, &n)?.book(web_id(&p, &n)))
     }
     fn get_content(content_id: String) -> Option<DeclaredContent> {
         let settings = Settings::load();
@@ -840,7 +730,7 @@ impl Guest for NoveliaPlugin {
             }
             Id::Volume(n, v) => {
                 let novel = settings.wenku(&n)?;
-                let volume = novel.upload(&n, &v, &settings)?;
+                let volume = novel.upload(&v)?;
                 file_url(&settings, &n, volume)?;
                 Some(DeclaredContent {
                     id: volume_id(&n, &v),
@@ -848,7 +738,6 @@ impl Guest for NoveliaPlugin {
                     chapters: vec![],
                 })
             }
-            Id::Wenku(_) => None,
         }
     }
     fn get_chapter(content_id: String, index: u32) -> Option<Chapter> {
@@ -882,7 +771,7 @@ impl Guest for NoveliaPlugin {
         };
         let settings = Settings::load();
         let novel = settings.wenku(&n)?;
-        let volume = novel.upload(&n, &v, &settings)?;
+        let volume = novel.upload(&v)?;
         let bytes = settings.fetch(&file_url(&settings, &n, volume)?, true)?;
         let filename = &volume.volume_id;
         let mime = if filename.ends_with(".epub") && bytes.starts_with(b"PK\x03\x04") {

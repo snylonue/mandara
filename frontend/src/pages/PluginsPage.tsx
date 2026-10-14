@@ -143,6 +143,8 @@ function ConfigForm({
           </label>
           {f.kind === "string" && (
             <input
+              type={f.key === "password" ? "password" : "text"}
+              autoComplete={f.key === "password" ? "off" : undefined}
               value={(values[f.key] as string) ?? ""}
               onChange={(e) => setValue(f.key, e.target.value)}
             />

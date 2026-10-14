@@ -3,19 +3,23 @@ use super::*;
 fn settings(translation: u32) -> Settings {
     Settings {
         base: BASE.into(),
-        wenku: false,
         providers: vec![],
         translation,
-        token: String::new(),
-        bindings: Some(vec![]),
+        username: String::new(),
+        password: String::new(),
+        auth_base: AUTH_BASE.into(),
+        token: RefCell::new(None),
     }
 }
 
 #[test]
 fn opaque_ids_roundtrip_and_reject_malformed_components() {
     assert_eq!(
-        Id::parse(&volume_id("series", "B000000001")),
-        Some(Id::Volume("series".into(), "B000000001".into()))
+        Id::parse(&volume_id("series", "第一卷 [a+b] 100%:测试.epub")),
+        Some(Id::Volume(
+            "series".into(),
+            "第一卷 [a+b] 100%:测试.epub".into()
+        ))
     );
     assert_eq!(
         Id::parse("web:syosetu:n1234ab"),
@@ -30,7 +34,10 @@ fn opaque_ids_roundtrip_and_reject_malformed_components() {
         "web:a:..",
         "wenku:",
         "wenku-volume:a:b:c",
-        "wenku-volume:a:old.epub",
+        "wenku-volume:a:",
+        "wenku:a",
+        "wenku-volume:a:..",
+        "wenku-volume:a:%2F",
         "wenku-asin:a:old.epub",
         "wenku-asin:a:b000000001",
         "wenku-asin:a:",
@@ -196,115 +203,99 @@ fn html_escapes_prose_and_preserves_images_from_original_paragraphs() {
     assert!(html.ends_with("<p></p>"));
 }
 
-fn wenku() -> WenkuNovel {
-    serde_json::from_value(json!({
-        "title": "原系列", "titleZh": "译系列", "cover": "https://example.com/series.jpg", "authors": ["作者"], "artists": ["画师"],
-        "introduction": "简介", "imprint": "文库", "volumes": [
-            {"asin": "B000000001", "title": "第一卷", "titleZh": "第一卷译名", "cover": "https://example.com/1.jpg", "publisher": "出版社"},
-            {"asin": "B000000002", "title": "第二卷"},
-            {"asin": "B000000003", "title": "未上传卷"}
-        ], "volumeJp": [
-            {"volumeId": "第二卷.epub", "gpt": 3}, {"volumeId": "第一卷.txt", "sakura": 2}
-        ]
-    })).unwrap()
-}
-
 #[test]
-fn wenku_identity_uses_asin_and_metadata_not_upload_names_or_positions() {
-    let mut novel = wenku();
-    let first = novel.books("id").remove(0);
-    assert_eq!(first.id, "wenku-asin:id:B000000001");
-    assert_eq!(first.title, "第一卷译名");
+fn wenku_uses_exact_upstream_volume_ids_without_metadata_or_asins() {
+    let mut novel: WenkuNovel = serde_json::from_value(json!({"volumeJp": [
+        {"volumeId": "第二卷.epub", "gpt": 3}, {"volumeId": "第一卷.txt", "sakura": 2}
+    ]}))
+    .unwrap();
+    let id = volume_id("series", "第一卷.txt");
     assert_eq!(
-        first.cover_url.as_deref(),
-        Some("https://example.com/1.jpg")
+        Id::parse(&id),
+        Some(Id::Volume("series".into(), "第一卷.txt".into()))
     );
-    assert_eq!(first.series.unwrap().id, "wenku:id");
-    assert_eq!(novel.books("id").len(), 3); // Metadata exists without a download.
-    assert_eq!(
-        novel
-            .upload("id", "B000000001", &settings(0))
-            .unwrap()
-            .volume_id,
-        "第一卷.txt"
-    );
+    assert!(novel.upload("第一卷.txt").is_some());
     novel.volume_jp.reverse();
-    novel.volume_jp[0].volume_id = "第 一 卷 (文库) - 作者.epub".into();
-    assert_eq!(novel.books("id")[0].id, first.id);
-    assert_eq!(
-        novel
-            .upload("id", "B000000001", &settings(0))
-            .unwrap()
-            .volume_id,
-        "第 一 卷 (文库) - 作者.epub"
-    );
-    novel.volumes.reverse();
-    assert_eq!(novel.books("id")[2].id, first.id);
-    assert!(novel.upload("id", "B000000003", &settings(0)).is_none());
-    assert!(novel.upload("id", "B999999999", &settings(0)).is_none());
-    novel.volume_jp.clear();
-    assert_eq!(novel.books("id")[2].id, first.id);
-}
-
-#[test]
-fn ambiguous_uploads_editions_and_invalid_asins_are_never_guessed() {
-    let mut novel = wenku();
+    assert!(novel.upload("第一卷.txt").is_some());
+    novel.volume_jp[0].volume_id = "重新上传.txt".into();
+    assert!(novel.upload("第一卷.txt").is_none());
+    assert!(novel.upload("重新上传.txt").is_some());
+    // Width/whitespace normalization must not alias distinct upstream filenames.
+    assert!(novel.upload("第 一 卷.txt").is_none());
     novel.volume_jp.push(WenkuVolume {
-        volume_id: "第一卷.epub".into(),
-        gpt: 1,
-        sakura: 0,
+        volume_id: "重新上传.txt".into(),
+        gpt: 0,
+        sakura: 1,
         youdao: 0,
     });
-    assert!(novel.upload("id", "B000000001", &settings(0)).is_none());
-    novel.volume_jp.pop();
-    novel.volumes[1].title = "第一卷".into();
-    assert!(novel.upload("id", "B000000001", &settings(0)).is_none());
-    novel.volumes[1].asin = "B000000001".into();
-    assert!(novel.edition("B000000001").is_none());
-    assert_eq!(novel.books("id").len(), 1);
-    novel.volumes[2].asin.clear();
-    assert!(novel.books("id").is_empty());
+    assert!(novel.upload("重新上传.txt").is_none());
 }
 
 #[test]
-fn explicit_download_bindings_do_not_change_asin_identity_or_fallback() {
-    let mut novel = wenku();
-    novel.volume_jp[1].volume_id = "完全无关的文件名.txt".into();
-    assert!(novel.upload("id", "B000000001", &settings(0)).is_none());
-    let mut config = settings(0);
-    config.bindings = Some(vec![FileBinding {
-        novel_id: "id".into(),
-        asin: "B000000001".into(),
-        filename: "完全无关的文件名.txt".into(),
-    }]);
-    assert_eq!(
-        novel.upload("id", "B000000001", &config).unwrap().volume_id,
-        "完全无关的文件名.txt"
-    );
-    assert_eq!(novel.books("id")[0].id, "wenku-asin:id:B000000001");
-    config.bindings.as_mut().unwrap()[0].filename = "已删除.txt".into();
-    assert!(novel.upload("id", "B000000001", &config).is_none());
-    config.bindings = None; // Invalid mapping JSON must not trigger automatic resolution.
-    assert!(novel.upload("id", "B000000002", &config).is_none());
-}
-
-#[test]
-fn live_wenku_snapshot_maps_reordered_decorated_uploads_to_asins() {
+fn live_wenku_snapshot_addresses_each_upload_by_volume_id() {
     let novel: WenkuNovel = serde_json::from_str(include_str!(
         "../fixtures/wenku-6806f70f2d549f092c9ae862.json"
     ))
     .unwrap();
-    assert_eq!(
-        novel.books("6806f70f2d549f092c9ae862")[0].id,
-        "wenku-asin:6806f70f2d549f092c9ae862:B00R4JX10Q"
-    );
-    for edition in &novel.volumes {
-        assert!(
-            novel
-                .upload("6806f70f2d549f092c9ae862", &edition.asin, &settings(0))
-                .is_some(),
-            "{}",
-            edition.asin
+    assert_eq!(novel.volume_jp.len(), 9);
+    for upload in &novel.volume_jp {
+        assert_eq!(
+            Id::parse(&volume_id("series", &upload.volume_id)),
+            Some(Id::Volume("series".into(), upload.volume_id.clone()))
         );
+        assert!(novel.upload(&upload.volume_id).is_some());
+    }
+}
+
+#[test]
+fn configuration_preserves_password_whitespace_and_defaults_to_anonymous() {
+    let defaults = Settings::from_values(&[]);
+    assert!(defaults.username.is_empty());
+    assert!(defaults.password.is_empty());
+    assert_eq!(defaults.auth_base, AUTH_BASE);
+    let configured = Settings::from_values(&[
+        ConfigValue::Text(BASE.into()),
+        ConfigValue::StringList(vec![]),
+        ConfigValue::EnumIndex(2),
+        ConfigValue::Text("  测试账号  ".into()),
+        ConfigValue::Text(" password with spaces ".into()),
+    ]);
+    assert_eq!(configured.username, "测试账号");
+    assert_eq!(configured.password, " password with spaces ");
+    assert_eq!(configured.translation, 2);
+}
+
+#[test]
+fn login_url_requires_tls_except_for_loopback_mock_servers() {
+    let mut s = settings(0);
+    for base in [
+        "http://example.com",
+        "https://user:secret@example.com",
+        "file:///tmp",
+    ] {
+        s.auth_base = base.into();
+        assert!(s.login_url().is_none());
+    }
+    s.auth_base = "http://127.0.0.1:8080".into();
+    assert_eq!(s.login_url().unwrap().path(), "/api/v1/auth/login");
+    s.auth_base = AUTH_BASE.into();
+    assert_eq!(
+        s.login_url().unwrap().as_str(),
+        "https://auth.novelia.cc/api/v1/auth/login"
+    );
+}
+
+#[test]
+fn login_token_validation_rejects_html_errors_and_header_injection() {
+    assert!(valid_token("header.payload.signature"));
+    for invalid in [
+        "",
+        "<html>error</html>",
+        "wrong password",
+        "a..c",
+        "a.b.c.d",
+        "a.b.c\r\nx:secret",
+    ] {
+        assert!(!valid_token(invalid));
     }
 }
