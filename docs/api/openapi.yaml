@@ -1059,6 +1059,10 @@ paths:
       tags: [files]
       summary: File detail with chapter titles and its book metadata
       operationId: getFile
+      description: |
+        Complete stored chapter titles are returned without contacting the content
+        source. Missing or incomplete titles are materialized on demand. Refreshing
+        a complete directory requires explicit re-materialization.
       security:
         - bearerAuth: []
       parameters:

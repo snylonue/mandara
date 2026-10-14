@@ -2458,6 +2458,24 @@ impl Library {
     /// `chapter_titles` works for books never read yet). Titles come from
     /// the file's *content* instance.
     pub async fn ensure_titles(&self, file: &FileMeta) -> Result<(), ApiError> {
+        // Reading a complete stored TOC must not depend on provider availability.
+        // Count only the expected range: an extra stale row cannot hide a gap.
+        if file.chapter_count > 0 {
+            let count: i64 = schema::chapters::table
+                .filter(
+                    schema::chapters::file_id
+                        .eq(&file.id)
+                        .and(schema::chapters::idx.ge(0))
+                        .and(schema::chapters::idx.lt(i64::from(file.chapter_count))),
+                )
+                .count()
+                .get_result(&mut self.diesel_db.get().await?)
+                .await?;
+            if count == i64::from(file.chapter_count) {
+                return Ok(());
+            }
+        }
+        // Explicit re-materialization calls the inner loader to refresh titles.
         self.ensure_titles_inner(file).await.map(|_| ())
     }
 
@@ -2890,6 +2908,92 @@ mod tests {
             .get_result(&mut library.diesel_db.get().await.unwrap())
             .await
             .unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stored_titles_allow_reading_without_the_provider() {
+        let (library, mut file, dir) = download_fixture().await;
+        let titles = library.chapter_titles(&file.id).await.unwrap();
+        assert!(!titles.is_empty());
+        let chapter = library.get_chapter(&file, 0).await.unwrap();
+        // A complete directory remains usable with only one cached body.
+        diesel::update(
+            schema::chapters::table.filter(
+                schema::chapters::file_id
+                    .eq(&file.id)
+                    .and(schema::chapters::idx.ne(0)),
+            ),
+        )
+        .set(schema::chapters::content.eq(None::<String>))
+        .execute(&mut library.diesel_db.get().await.unwrap())
+        .await
+        .unwrap();
+        file.source = "unavailable".into();
+        library.ensure_titles(&file).await.unwrap();
+        assert_eq!(
+            serde_json::to_value(library.chapter_titles(&file.id).await.unwrap()).unwrap(),
+            serde_json::to_value(titles).unwrap(),
+        );
+        assert_eq!(
+            serde_json::to_value(library.get_chapter(&file, 0).await.unwrap()).unwrap(),
+            serde_json::to_value(chapter).unwrap(),
+        );
+        library.delete_file(&file.id).await.unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn incomplete_stored_titles_are_fetched_without_overwriting_bodies() {
+        let (library, file, dir) = download_fixture().await;
+        assert!(file.chapter_count > 1);
+        let chapter = library.get_chapter(&file, 0).await.unwrap();
+        diesel::delete(schema::chapters::table.find((&file.id, 1_i64)))
+            .execute(&mut library.diesel_db.get().await.unwrap())
+            .await
+            .unwrap();
+        // Keep the total row count unchanged, but leave a gap in the real TOC.
+        library
+            .upsert_placeholder_titles(
+                &file.id,
+                &vec!["stale".into(); file.chapter_count as usize + 1],
+            )
+            .await
+            .unwrap();
+        diesel::delete(schema::chapters::table.find((&file.id, 1_i64)))
+            .execute(&mut library.diesel_db.get().await.unwrap())
+            .await
+            .unwrap();
+        let mut unavailable = file.clone();
+        unavailable.source = "unavailable".into();
+        assert!(library.ensure_titles(&unavailable).await.is_err());
+        library.ensure_titles(&file).await.unwrap();
+        assert_eq!(
+            library.chapter_titles(&file.id).await.unwrap().len(),
+            file.chapter_count as usize
+        );
+        assert_eq!(
+            serde_json::to_value(library.get_chapter(&file, 0).await.unwrap()).unwrap(),
+            serde_json::to_value(chapter).unwrap(),
+        );
+        library.delete_file(&file.id).await.unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn missing_stored_titles_are_fetched_on_first_read() {
+        let (library, file, dir) = download_fixture().await;
+        diesel::delete(schema::chapters::table.filter(schema::chapters::file_id.eq(&file.id)))
+            .execute(&mut library.diesel_db.get().await.unwrap())
+            .await
+            .unwrap();
+        library.ensure_titles(&file).await.unwrap();
+        assert_eq!(
+            library.chapter_titles(&file.id).await.unwrap().len(),
+            file.chapter_count as usize
+        );
+        assert_eq!(cached_count(&library, &file).await, 0);
+        library.delete_file(&file.id).await.unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]

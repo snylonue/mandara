@@ -569,7 +569,12 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** File detail with chapter titles and its book metadata */
+        /**
+         * File detail with chapter titles and its book metadata
+         * @description Complete stored chapter titles are returned without contacting the content
+         *     source. Missing or incomplete titles are materialized on demand. Refreshing
+         *     a complete directory requires explicit re-materialization.
+         */
         get: operations["getFile"];
         put?: never;
         post?: never;
