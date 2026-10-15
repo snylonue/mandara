@@ -109,6 +109,7 @@ use crate::rows::{
     file_columns,
 };
 use crate::service::plugins::{DeclaredCatalog, PluginService};
+use crate::writes::{BookVolume, ChapterIndex, FileChapterCount, ImageDimensions};
 
 /// Where the *content* of a library addition comes from. Every addition
 /// to the library is "acquire content, then attach metadata": this is the
@@ -321,7 +322,9 @@ impl Library {
                     .await?;
                 file.chapter_count = self.upsert_chapters(&file.id, &content.chapters).await?;
                 diesel::update(schema::book_files::table.find(&file.id))
-                    .set(schema::book_files::chapter_count.eq(i64::from(file.chapter_count)))
+                    .set(FileChapterCount {
+                        chapter_count: file.chapter_count,
+                    })
                     .execute(&mut self.diesel_db.get().await?)
                     .await?;
                 self.queue_download(&file);
@@ -437,7 +440,7 @@ impl Library {
                 schema::book_files::format.eq(format),
                 schema::book_files::label.eq(&label),
                 schema::book_files::toc.eq(toc_json),
-                schema::book_files::chapter_count.eq(i64::from(chapter_count)),
+                FileChapterCount { chapter_count },
                 schema::book_files::orig_ext.eq(&original.ext),
                 schema::book_files::orig_sha256.eq(&original.sha256),
                 schema::book_files::orig_size.eq(i64::try_from(original.size)
@@ -454,7 +457,7 @@ impl Library {
                 diesel::insert_into(schema::chapters::table)
                     .values((
                         schema::chapters::file_id.eq(file_id),
-                        schema::chapters::idx.eq(i64::from(idx)),
+                        ChapterIndex { idx },
                         schema::chapters::title.eq(&chapter.title),
                         schema::chapters::content.eq(&chapter.content),
                         schema::chapters::linear.eq(chapter.linear),
@@ -662,7 +665,9 @@ impl Library {
                 // overwrite rule as title/description/cover).
                 schema::books::ext.eq(&ext_value),
                 schema::books::series_id.eq(&series_id),
-                schema::books::volume_no.eq(i64::from(book.volume_no)),
+                BookVolume {
+                    volume_no: book.volume_no,
+                },
             ))
             .execute(&mut self.diesel_db.get().await?)
             .await?;
@@ -722,7 +727,7 @@ impl Library {
             diesel::insert_into(schema::chapters::table)
                 .values((
                     schema::chapters::file_id.eq(file_id),
-                    schema::chapters::idx.eq(i64::from(idx)),
+                    ChapterIndex { idx },
                     schema::chapters::title.eq(chapter.title.trim()),
                     schema::chapters::content.eq(&content),
                 ))
@@ -1111,7 +1116,7 @@ impl Library {
                 schema::book_files::format.eq(FileFormat::Plugin),
                 schema::book_files::visibility.eq(mandara_core::Visibility::Public),
                 schema::book_files::owner_id.eq(owner),
-                schema::book_files::chapter_count.eq(0_i64),
+                FileChapterCount { chapter_count: 0 },
                 schema::book_files::label.eq(format!("{source} 虚拟")),
             ))
             .execute(&mut self.diesel_db.get().await?)
@@ -1138,7 +1143,9 @@ impl Library {
         }
         file.chapter_count = self.upsert_chapters(&file.id, &content.chapters).await?;
         diesel::update(schema::book_files::table.find(&file.id))
-            .set(schema::book_files::chapter_count.eq(i64::from(file.chapter_count)))
+            .set(FileChapterCount {
+                chapter_count: file.chapter_count,
+            })
             .execute(&mut self.diesel_db.get().await?)
             .await?;
         Ok(file)
@@ -1311,7 +1318,7 @@ impl Library {
                 schema::book_files::label.eq(label),
                 schema::book_files::visibility.eq(visibility),
                 schema::book_files::owner_id.eq(owner_id),
-                schema::book_files::chapter_count.eq(i64::from(chapter_count)),
+                FileChapterCount { chapter_count },
                 schema::book_files::toc.eq(toc_json),
                 schema::book_files::orig_ext.eq(&original.ext),
                 schema::book_files::orig_sha256.eq(&original.sha256),
@@ -1325,7 +1332,7 @@ impl Library {
             diesel::insert_into(schema::chapters::table)
                 .values((
                     schema::chapters::file_id.eq(&file_id),
-                    schema::chapters::idx.eq(i64::from(idx)),
+                    ChapterIndex { idx },
                     schema::chapters::title.eq(&chapter.title),
                     schema::chapters::content.eq(&chapter.content),
                     schema::chapters::linear.eq(chapter.linear),
@@ -1645,7 +1652,9 @@ impl Library {
                     // Refresh replaces the extended metadata wholesale.
                     schema::books::ext.eq(ext_value),
                     schema::books::series_id.eq(&series_id),
-                    schema::books::volume_no.eq(i64::from(entry.volume_no)),
+                    BookVolume {
+                        volume_no: entry.volume_no,
+                    },
                 ))
                 .execute(&mut self.diesel_db.get().await?)
                 .await?;
@@ -1906,7 +1915,7 @@ impl Library {
         diesel::update(schema::books::table.filter(schema::books::series_id.eq(id)))
             .set((
                 schema::books::series_id.eq(Option::<String>::None),
-                schema::books::volume_no.eq(0),
+                BookVolume { volume_no: 0 },
             ))
             .execute(&mut conn)
             .await?;
@@ -1954,7 +1963,7 @@ impl Library {
         diesel::update(schema::books::table.filter(schema::books::series_id.eq(id)))
             .set((
                 schema::books::series_id.eq(Option::<String>::None),
-                schema::books::volume_no.eq(0),
+                BookVolume { volume_no: 0 },
             ))
             .execute(&mut conn)
             .await?;
@@ -1962,7 +1971,7 @@ impl Library {
             diesel::update(schema::books::table.find(bid))
                 .set((
                     schema::books::series_id.eq(id),
-                    schema::books::volume_no.eq(i64::from(volume)),
+                    BookVolume { volume_no: volume },
                 ))
                 .execute(&mut conn)
                 .await?;
@@ -2010,7 +2019,7 @@ impl Library {
             diesel::update(schema::books::table.find(book_id))
                 .set((
                     schema::books::series_id.eq(Option::<String>::None),
-                    schema::books::volume_no.eq(0),
+                    BookVolume { volume_no: 0 },
                 ))
                 .execute(&mut self.diesel_db.get().await?)
                 .await?;
@@ -2067,7 +2076,7 @@ impl Library {
         diesel::update(schema::books::table.find(book_id))
             .set((
                 schema::books::series_id.eq(&sid),
-                schema::books::volume_no.eq(i64::from(vol)),
+                BookVolume { volume_no: vol },
             ))
             .execute(&mut self.diesel_db.get().await?)
             .await?;
@@ -2409,7 +2418,7 @@ impl Library {
         diesel::insert_into(schema::chapters::table)
             .values((
                 schema::chapters::file_id.eq(&file.id),
-                schema::chapters::idx.eq(i64::from(idx)),
+                ChapterIndex { idx },
                 schema::chapters::title.eq(&chapter.title),
                 schema::chapters::content.eq(&content),
             ))
@@ -2457,7 +2466,7 @@ impl Library {
             diesel::insert_into(schema::chapters::table)
                 .values((
                     schema::chapters::file_id.eq(file_id),
-                    schema::chapters::idx.eq(i64::from(idx)),
+                    ChapterIndex { idx },
                     schema::chapters::title.eq(title.trim()),
                     schema::chapters::content.eq(None::<String>),
                 ))
@@ -2506,7 +2515,7 @@ impl Library {
         .await?;
         if chapter_count != file.chapter_count {
             diesel::update(schema::book_files::table.find(&file.id))
-                .set(schema::book_files::chapter_count.eq(i64::from(chapter_count)))
+                .set(FileChapterCount { chapter_count })
                 .execute(&mut self.diesel_db.get().await?)
                 .await?;
         }
@@ -2584,8 +2593,7 @@ pub async fn store_image(
             schema::images::size
                 .eq(i64::try_from(bytes.len())
                     .context("image size exceeds SQLite integer range")?),
-            schema::images::width.eq(dims.map(|(w, _)| i64::from(w))),
-            schema::images::height.eq(dims.map(|(_, h)| i64::from(h))),
+            dims.map(|(width, height)| ImageDimensions { width, height }),
         ))
         .on_conflict_do_nothing()
         .execute(&mut db.get().await?)
@@ -2768,7 +2776,6 @@ pub async fn reparse_originals(db: &DieselDb, files_dir: &Path) -> anyhow::Resul
         let toc_json = serde_json::to_string(&parsed.toc).unwrap_or_else(|_| "[]".into());
         let chapter_count =
             u32::try_from(parsed.chapters.len()).context("too many parsed chapters")?;
-        let count = i64::from(chapter_count);
         let mut conn = db.get().await?;
         diesel::delete(schema::chapters::table.filter(schema::chapters::file_id.eq(&file_id)))
             .execute(&mut conn)
@@ -2777,7 +2784,7 @@ pub async fn reparse_originals(db: &DieselDb, files_dir: &Path) -> anyhow::Resul
             diesel::insert_into(schema::chapters::table)
                 .values((
                     schema::chapters::file_id.eq(&file_id),
-                    schema::chapters::idx.eq(i64::from(idx)),
+                    ChapterIndex { idx },
                     schema::chapters::title.eq(&chapter.title),
                     schema::chapters::content.eq(&chapter.content),
                     schema::chapters::linear.eq(chapter.linear),
@@ -2787,7 +2794,7 @@ pub async fn reparse_originals(db: &DieselDb, files_dir: &Path) -> anyhow::Resul
         }
         diesel::update(schema::book_files::table.find(&file_id))
             .set((
-                schema::book_files::chapter_count.eq(count),
+                FileChapterCount { chapter_count },
                 schema::book_files::toc.eq(toc_json),
             ))
             .execute(&mut conn)
@@ -2803,7 +2810,7 @@ pub async fn reparse_originals(db: &DieselDb, files_dir: &Path) -> anyhow::Resul
             ))
             .execute(&mut conn)
             .await?;
-        info!(file = %file_id, ext = %ext, chapters = count, "reparse: replaced chapters + toc");
+        info!(file = %file_id, ext = %ext, chapters = chapter_count, "reparse: replaced chapters + toc");
         ok += 1;
     }
     Ok((ok, failed))

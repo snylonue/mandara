@@ -1,4 +1,7 @@
 use super::*;
+use crate::writes::{
+    BookVolume, ChapterIndex, FileChapterCount, ImageDimensions, SessionCoordinates,
+};
 use diesel::connection::SimpleConnection;
 use diesel::prelude::*;
 use diesel::result::Error::DeserializationError;
@@ -23,6 +26,7 @@ fn connection() -> SqliteConnection {
         CREATE TABLE sessions (id TEXT, user_id TEXT, file_id TEXT, label TEXT,
             chapter_idx INTEGER, offset INTEGER, fraction REAL, updated_at TEXT,
             reading_session_id TEXT, position_kind TEXT);
+        CREATE TABLE images (id TEXT PRIMARY KEY, mime TEXT, size INTEGER, created_at TEXT, width INTEGER, height INTEGER);
         CREATE TABLE shares (token TEXT, kind TEXT, file_id TEXT, session_id TEXT,
             created_by TEXT, expires_at TEXT, created_at TEXT);
         INSERT INTO users VALUES ('user', '读者', 'admin', '2026-08-26 12:34:56.789+00:00');
@@ -492,7 +496,7 @@ fn unsigned_boundaries_round_trip_through_orm() {
     let conn = &mut connection();
     for value in [0_u32, u32::MAX] {
         diesel::update(books::table)
-            .set(books::volume_no.eq(i64::from(value)))
+            .set(BookVolume { volume_no: value })
             .execute(conn)
             .unwrap();
         assert_eq!(
@@ -504,7 +508,9 @@ fn unsigned_boundaries_round_trip_through_orm() {
             value
         );
         diesel::update(book_files::table)
-            .set(book_files::chapter_count.eq(i64::from(value)))
+            .set(FileChapterCount {
+                chapter_count: value,
+            })
             .execute(conn)
             .unwrap();
         assert_eq!(
@@ -516,7 +522,7 @@ fn unsigned_boundaries_round_trip_through_orm() {
             value
         );
         diesel::update(chapters::table)
-            .set(chapters::idx.eq(i64::from(value)))
+            .set(ChapterIndex { idx: value })
             .execute(conn)
             .unwrap();
         assert_eq!(
@@ -528,10 +534,10 @@ fn unsigned_boundaries_round_trip_through_orm() {
             value
         );
         diesel::update(sessions::table)
-            .set((
-                sessions::chapter_idx.eq(i64::from(value)),
-                sessions::offset.eq(i64::from(value)),
-            ))
+            .set(SessionCoordinates {
+                chapter_idx: value,
+                offset: value,
+            })
             .execute(conn)
             .unwrap();
         let row = sessions::table
@@ -553,4 +559,115 @@ fn unsigned_boundaries_round_trip_through_orm() {
             .unwrap();
         assert_eq!(original.size, u64::try_from(size).unwrap());
     }
+}
+
+#[test]
+fn inserts_serialize_unsigned_boundaries_without_call_site_conversions() {
+    use crate::schema::{book_files, books, chapters, images, sessions};
+    let conn = &mut connection();
+    for value in [0_u32, u32::MAX] {
+        let id = format!("insert-{value}");
+        diesel::insert_into(books::table)
+            .values((books::id.eq(&id), BookVolume { volume_no: value }))
+            .execute(conn)
+            .unwrap();
+        assert_eq!(
+            books::table
+                .find(&id)
+                .select((books::volume_no,))
+                .first::<U32Value>(conn)
+                .unwrap()
+                .0,
+            value
+        );
+        diesel::insert_into(book_files::table)
+            .values((
+                book_files::id.eq(&id),
+                FileChapterCount {
+                    chapter_count: value,
+                },
+            ))
+            .execute(conn)
+            .unwrap();
+        assert_eq!(
+            book_files::table
+                .find(&id)
+                .select((book_files::chapter_count,))
+                .first::<U32Value>(conn)
+                .unwrap()
+                .0,
+            value
+        );
+        diesel::insert_into(chapters::table)
+            .values((chapters::file_id.eq(&id), ChapterIndex { idx: value }))
+            .execute(conn)
+            .unwrap();
+        assert_eq!(
+            chapters::table
+                .filter(chapters::file_id.eq(&id))
+                .select((chapters::idx,))
+                .first::<U32Value>(conn)
+                .unwrap()
+                .0,
+            value
+        );
+        diesel::insert_into(sessions::table)
+            .values((
+                sessions::id.eq(&id),
+                SessionCoordinates {
+                    chapter_idx: value,
+                    offset: value,
+                },
+            ))
+            .execute(conn)
+            .unwrap();
+        assert_eq!(
+            sessions::table
+                .find(&id)
+                .select((sessions::chapter_idx,))
+                .first::<U32Value>(conn)
+                .unwrap()
+                .0,
+            value
+        );
+        assert_eq!(
+            sessions::table
+                .find(&id)
+                .select((sessions::offset,))
+                .first::<U32Value>(conn)
+                .unwrap()
+                .0,
+            value
+        );
+        diesel::insert_into(images::table)
+            .values((
+                images::id.eq(&id),
+                Some(ImageDimensions {
+                    width: value,
+                    height: value,
+                }),
+            ))
+            .on_conflict_do_nothing()
+            .execute(conn)
+            .unwrap();
+        let dimensions = images::table
+            .find(&id)
+            .select((images::width, images::height))
+            .first::<(Option<i64>, Option<i64>)>(conn)
+            .unwrap();
+        assert_eq!(dimensions, (Some(i64::from(value)), Some(i64::from(value))));
+    }
+    diesel::insert_into(images::table)
+        .values((images::id.eq("unknown"), None::<ImageDimensions>))
+        .on_conflict_do_nothing()
+        .execute(conn)
+        .unwrap();
+    assert_eq!(
+        images::table
+            .find("unknown")
+            .select((images::width, images::height))
+            .first::<(Option<i64>, Option<i64>)>(conn)
+            .unwrap(),
+        (None, None)
+    );
 }

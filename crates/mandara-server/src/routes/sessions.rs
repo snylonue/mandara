@@ -161,6 +161,10 @@ async fn store_progress(
         InChapter::Fraction { .. } => PositionKind::Fraction,
         InChapter::CharOffset { .. } => PositionKind::Offset,
     };
+    let coordinates = crate::writes::SessionCoordinates {
+        chapter_idx: position.chapter_idx,
+        offset: position.offset(),
+    };
     let mut conn = st.diesel_db.get().await?;
     diesel::insert_into(sessions::table)
         .values((
@@ -169,8 +173,7 @@ async fn store_progress(
             sessions::label.eq(context.label),
             sessions::reading_session_id.eq(&context.id),
             sessions::file_id.eq(file_id),
-            sessions::chapter_idx.eq(i64::from(position.chapter_idx)),
-            sessions::offset.eq(i64::from(position.offset())),
+            coordinates,
             sessions::fraction.eq(position.fraction()),
             sessions::position_kind.eq(position_kind),
             sessions::updated_at.eq(now),
@@ -178,8 +181,7 @@ async fn store_progress(
         .on_conflict((sessions::reading_session_id, sessions::file_id))
         .do_update()
         .set((
-            sessions::chapter_idx.eq(i64::from(position.chapter_idx)),
-            sessions::offset.eq(i64::from(position.offset())),
+            coordinates,
             sessions::fraction.eq(position.fraction()),
             sessions::position_kind.eq(position_kind),
             sessions::updated_at.eq(now),

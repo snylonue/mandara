@@ -36,11 +36,20 @@ in route handlers or row-to-model conversions.
 ## Numeric write boundaries
 
 Write interfaces use unsigned domain types for volumes, chapter counts and
-indices, character offsets, file sizes, and image dimensions. Widen u32 with
-`i64::from`; convert u64 sizes with `i64::try_from` because SQLite integers
-are signed. Check collection lengths as u32 before writing any chapter rows,
-then enumerate using the checked unsigned range. Computed volume ordinals use
-checked addition, not saturation or truncating casts.
+indices, character offsets, file sizes, and image dimensions. Server-side
+write projections derive Insertable/AsChangeset with
+`#[diesel(serialize_as = i64)]`, so Diesel widens u32 fields automatically.
+These projections compose with other insert values and changesets; there is
+no need to duplicate a whole domain model. Optional image dimensions use an
+optional insert record, preserving NULL when the dimensions are unknown.
+
+Convert u64 sizes with `i64::try_from` because SQLite integers are signed
+and serialize_as uses Into, not TryInto. Check collection lengths as u32
+before writing any chapter rows, then enumerate using the checked unsigned
+range. Computed volume ordinals use checked addition, not saturation or
+truncating casts. Query predicates and SQL-function arguments still require
+explicit `i64::from` bindings: field serialization attributes do not apply
+to directly constructed SQL expressions.
 
 Numeric range constraints remain in the ORM and application. No STRICT-table
 migration is introduced.
