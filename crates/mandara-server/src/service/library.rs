@@ -754,7 +754,7 @@ impl Library {
             .await
             .optional()?;
         drop(conn);
-        row.map(FileRow::into_model).transpose()
+        Ok(row.map(FileRow::into_model))
     }
 
     /// Insert a bare metadata entry (no files yet) — a book added on its
@@ -1425,13 +1425,13 @@ impl Library {
         let mut by_book: std::collections::HashMap<String, Vec<FileMeta>> =
             std::collections::HashMap::new();
         for row in file_rows {
-            let meta = row.into_model()?;
+            let meta = row.into_model();
             by_book.entry(meta.book_id.clone()).or_default().push(meta);
         }
 
         let mut books = Vec::new();
         for row in rows {
-            let book = row.into_model()?;
+            let book = row.into_model();
             let files = by_book.remove(&book.id).unwrap_or_default();
             // Metadata-only entries (no visible files) belong to the
             // caller and were already admitted by the join filter above.
@@ -1447,7 +1447,7 @@ impl Library {
             .first(&mut self.diesel_db.get().await?)
             .await
             .optional()?;
-        row.map(BookRow::into_model).transpose()
+        Ok(row.map(BookRow::into_model))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1638,7 +1638,7 @@ impl Library {
         //    each file's own (content) source. Book metadata is untouched
         //    here — a file's plugin never overwrites it.
         for row in plugin_files {
-            let mut file = row.into_model()?;
+            let mut file = row.into_model();
             if !file.content_mode.has_chapters() {
                 continue;
             }
@@ -1685,7 +1685,7 @@ impl Library {
             .select(BookRow::as_select())
             .load(&mut self.diesel_db.get().await?)
             .await?;
-        rows.into_iter().map(BookRow::into_model).collect()
+        Ok(rows.into_iter().map(BookRow::into_model).collect())
     }
 
     /// Is the series visible to the caller (creator, admin, or ≥1 member
@@ -2077,7 +2077,7 @@ impl Library {
             );
         }
         let rows: Vec<FileRow> = q.load(&mut self.diesel_db.get().await?).await?;
-        rows.into_iter().map(FileRow::into_model).collect()
+        Ok(rows.into_iter().map(FileRow::into_model).collect())
     }
 
     pub async fn get_file(&self, id: &str) -> Result<Option<FileMeta>, ApiError> {
@@ -2087,7 +2087,7 @@ impl Library {
             .first(&mut self.diesel_db.get().await?)
             .await
             .optional()?;
-        row.map(FileRow::into_model).transpose()
+        Ok(row.map(FileRow::into_model))
     }
 
     pub async fn update_file(
@@ -2208,7 +2208,7 @@ impl Library {
             .into_iter()
             .map(|r| TocNode {
                 title: r.title,
-                idx: Some(r.idx.max(0) as u32),
+                idx: Some(r.idx),
                 frag: None,
                 children: Vec::new(),
             })

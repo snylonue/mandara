@@ -62,7 +62,7 @@ async fn load_share(st: &St, token: &str) -> Result<ShareRow, ApiError> {
         return Err(ApiError::not_found("share"));
     };
     if let Some(expires) = &row.expires_at
-        && DbTs::from_str(expires.clone()).parse() < chrono::Utc::now()
+        && *expires < chrono::Utc::now()
     {
         return Err(ApiError::not_found("share"));
     }
@@ -154,7 +154,7 @@ pub async fn create_share(
         .await?;
     Ok((
         StatusCode::CREATED,
-        Json(ShareResponse::from_share(row.into_model()?)),
+        Json(ShareResponse::from_share(row.into_model())),
     ))
 }
 
@@ -203,7 +203,7 @@ pub async fn get_share(
     Path(token): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
     let row = load_share(&st, &token).await?;
-    let share = row.into_model()?;
+    let share = row.into_model();
 
     let file = st
         .library

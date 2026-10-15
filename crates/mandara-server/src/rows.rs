@@ -7,26 +7,32 @@ use mandara_core::model::{
 };
 use mandara_core::{BookExt, SeriesExt};
 
-use crate::error::ApiError;
-use crate::time::DbTs;
+#[cfg(test)]
+mod tests;
+mod value;
+
+use chrono::{DateTime, Utc};
+use value::*;
 
 #[derive(Debug, diesel::prelude::Queryable, diesel::prelude::Selectable)]
 #[diesel(table_name = crate::schema::users, check_for_backend(diesel::sqlite::Sqlite))]
 pub struct UserRow {
     pub id: String,
     pub username: String,
-    pub role: String,
-    pub created_at: String,
+    #[diesel(deserialize_as = RoleValue)]
+    pub role: Role,
+    #[diesel(deserialize_as = Timestamp)]
+    pub created_at: DateTime<Utc>,
 }
 
 impl UserRow {
-    pub fn into_model(self) -> Result<User, ApiError> {
-        Ok(User {
+    pub fn into_model(self) -> User {
+        User {
             id: self.id,
             username: self.username,
-            role: self.role.parse::<Role>().map_err(ApiError::internal)?,
-            created_at: DbTs::from_str(self.created_at).parse(),
-        })
+            role: self.role,
+            created_at: self.created_at,
+        }
     }
 }
 
@@ -35,12 +41,15 @@ impl UserRow {
 pub struct SeriesRow {
     pub id: String,
     pub title: String,
-    pub authors: String,
+    #[diesel(deserialize_as = Authors)]
+    pub authors: Vec<String>,
     pub description: Option<String>,
     pub cover_url: Option<String>,
     pub created_by: Option<String>,
-    pub created_at: String,
-    pub ext_meta: String,
+    #[diesel(deserialize_as = Timestamp)]
+    pub created_at: DateTime<Utc>,
+    #[diesel(deserialize_as = SeriesExtValue)]
+    pub ext_meta: SeriesExt,
 }
 
 impl SeriesRow {
@@ -48,12 +57,12 @@ impl SeriesRow {
         SeriesMeta {
             id: self.id,
             title: self.title,
-            authors: serde_json::from_str(&self.authors).unwrap_or_default(),
+            authors: self.authors,
             description: self.description,
             cover_url: self.cover_url,
-            ext: SeriesExt::from_column(&self.ext_meta),
+            ext: self.ext_meta,
             created_by: self.created_by,
-            created_at: DbTs::from_str(self.created_at).parse(),
+            created_at: self.created_at,
         }
     }
 }
@@ -63,14 +72,18 @@ impl SeriesRow {
 pub struct BookRow {
     pub id: String,
     pub title: String,
-    pub authors: String,
+    #[diesel(deserialize_as = Authors)]
+    pub authors: Vec<String>,
     pub description: Option<String>,
     pub cover_url: Option<String>,
     pub created_by: Option<String>,
-    pub created_at: String,
+    #[diesel(deserialize_as = Timestamp)]
+    pub created_at: DateTime<Utc>,
     pub series_id: Option<String>,
-    pub volume_no: i64,
-    pub ext_meta: String,
+    #[diesel(deserialize_as = Unsigned)]
+    pub volume_no: u32,
+    #[diesel(deserialize_as = BookExtValue)]
+    pub ext_meta: BookExt,
     /// Plugin source that provided this entry's metadata (migration
     /// 0013); independent of the files' content sources. `None` = no
     /// plugin metadata source.
@@ -79,19 +92,19 @@ pub struct BookRow {
 }
 
 impl BookRow {
-    pub fn into_model(self) -> Result<BookMeta, ApiError> {
-        Ok(BookMeta {
+    pub fn into_model(self) -> BookMeta {
+        BookMeta {
             id: self.id,
             title: self.title,
-            authors: serde_json::from_str(&self.authors).unwrap_or_default(),
+            authors: self.authors,
             description: self.description,
             cover_url: self.cover_url,
-            ext: BookExt::from_column(&self.ext_meta),
+            ext: self.ext_meta,
             created_by: self.created_by,
-            created_at: DbTs::from_str(self.created_at).parse(),
+            created_at: self.created_at,
             series_id: self.series_id,
-            volume_no: self.volume_no.max(0) as u32,
-        })
+            volume_no: self.volume_no,
+        }
     }
 }
 
@@ -102,41 +115,37 @@ pub struct FileRow {
     pub book_id: String,
     pub source: String,
     pub external_id: String,
-    pub format: String,
+    #[diesel(deserialize_as = FormatValue)]
+    pub format: FileFormat,
     pub label: String,
-    pub visibility: String,
+    #[diesel(deserialize_as = VisibilityValue)]
+    pub visibility: Visibility,
     pub owner_id: Option<String>,
-    pub chapter_count: i64,
-    pub created_at: String,
-    pub content_mode: String,
+    #[diesel(deserialize_as = Unsigned)]
+    pub chapter_count: u32,
+    #[diesel(deserialize_as = Timestamp)]
+    pub created_at: DateTime<Utc>,
+    #[diesel(deserialize_as = ContentModeValue)]
+    pub content_mode: ContentMode,
     pub orig_ext: Option<String>,
     pub orig_sha256: Option<String>,
     pub orig_size: Option<i64>,
 }
 
 impl FileRow {
-    pub fn into_model(self) -> Result<FileMeta, ApiError> {
-        Ok(FileMeta {
+    pub fn into_model(self) -> FileMeta {
+        FileMeta {
             id: self.id,
             book_id: self.book_id,
             source: self.source,
             external_id: self.external_id,
-            format: self
-                .format
-                .parse::<FileFormat>()
-                .map_err(ApiError::internal)?,
+            format: self.format,
             label: self.label,
-            visibility: self
-                .visibility
-                .parse::<Visibility>()
-                .map_err(ApiError::internal)?,
+            visibility: self.visibility,
             owner_id: self.owner_id,
-            chapter_count: self.chapter_count.max(0) as u32,
-            created_at: DbTs::from_str(self.created_at).parse(),
-            content_mode: self
-                .content_mode
-                .parse::<ContentMode>()
-                .map_err(ApiError::internal)?,
+            chapter_count: self.chapter_count,
+            created_at: self.created_at,
+            content_mode: self.content_mode,
             original: match (self.orig_ext, self.orig_sha256, self.orig_size) {
                 (Some(ext), Some(sha), Some(size)) => Some(OriginalInfo {
                     ext,
@@ -145,14 +154,15 @@ impl FileRow {
                 }),
                 _ => None,
             },
-        })
+        }
     }
 }
 
 #[derive(Debug, diesel::prelude::Queryable, diesel::prelude::Selectable)]
 #[diesel(table_name = crate::schema::chapters, check_for_backend(diesel::sqlite::Sqlite))]
 pub struct ChapterRow {
-    pub idx: i64,
+    #[diesel(deserialize_as = Unsigned)]
+    pub idx: u32,
     pub title: String,
     pub content: Option<String>,
 }
@@ -160,7 +170,7 @@ pub struct ChapterRow {
 impl ChapterRow {
     pub fn into_model(self) -> Option<Chapter> {
         Some(Chapter {
-            idx: self.idx.max(0) as u32,
+            idx: self.idx,
             title: self.title,
             content: self.content?,
         })
@@ -170,17 +180,19 @@ impl ChapterRow {
 #[derive(Debug, diesel::prelude::Queryable, diesel::prelude::Selectable)]
 #[diesel(table_name = crate::schema::chapters, check_for_backend(diesel::sqlite::Sqlite))]
 pub struct ChapterTitleRow {
-    pub idx: i64,
+    #[diesel(deserialize_as = Unsigned)]
+    pub idx: u32,
     pub title: String,
-    pub linear: i64,
+    #[diesel(deserialize_as = Boolean)]
+    pub linear: bool,
 }
 
 impl ChapterTitleRow {
     pub fn into_model(self) -> ChapterMeta {
         ChapterMeta {
-            idx: self.idx.max(0) as u32,
+            idx: self.idx,
             title: self.title,
-            linear: self.linear != 0,
+            linear: self.linear,
         }
     }
 }
@@ -191,7 +203,8 @@ pub struct ReadingSessionRow {
     pub id: String,
     pub user_id: String,
     pub label: String,
-    pub created_at: String,
+    #[diesel(deserialize_as = Timestamp)]
+    pub created_at: DateTime<Utc>,
 }
 
 impl ReadingSessionRow {
@@ -200,7 +213,7 @@ impl ReadingSessionRow {
             id: self.id,
             user_id: self.user_id,
             label: self.label,
-            created_at: DbTs::from_str(self.created_at).parse(),
+            created_at: self.created_at,
         }
     }
 }
@@ -212,10 +225,12 @@ pub struct SessionRow {
     pub user_id: String,
     pub file_id: String,
     pub label: String,
-    pub chapter_idx: i64,
+    #[diesel(deserialize_as = Unsigned)]
+    pub chapter_idx: u32,
     pub offset: i64,
     pub fraction: f64,
-    pub updated_at: String,
+    #[diesel(deserialize_as = Timestamp)]
+    pub updated_at: DateTime<Utc>,
     pub reading_session_id: Option<String>,
     pub position_kind: String,
 }
@@ -229,7 +244,7 @@ impl SessionRow {
             file_id: self.file_id,
             label: self.label,
             position: Position {
-                chapter_idx: self.chapter_idx.max(0) as u32,
+                chapter_idx: self.chapter_idx,
                 in_chapter: if self.position_kind == "offset" {
                     InChapter::CharOffset {
                         offset: self.offset as u32,
@@ -240,7 +255,7 @@ impl SessionRow {
                     }
                 },
             },
-            updated_at: DbTs::from_str(self.updated_at).parse(),
+            updated_at: self.updated_at,
         }
     }
 }
@@ -249,24 +264,27 @@ impl SessionRow {
 #[diesel(table_name = crate::schema::shares, check_for_backend(diesel::sqlite::Sqlite))]
 pub struct ShareRow {
     pub token: String,
-    pub kind: String,
+    #[diesel(deserialize_as = ShareKindValue)]
+    pub kind: ShareKind,
     pub file_id: String,
     pub session_id: Option<String>,
     pub created_by: Option<String>,
-    pub expires_at: Option<String>,
-    pub created_at: String,
+    #[diesel(deserialize_as = OptionalTimestamp)]
+    pub expires_at: Option<DateTime<Utc>>,
+    #[diesel(deserialize_as = Timestamp)]
+    pub created_at: DateTime<Utc>,
 }
 
 impl ShareRow {
-    pub fn into_model(self) -> Result<Share, ApiError> {
-        Ok(Share {
+    pub fn into_model(self) -> Share {
+        Share {
             token: self.token,
-            kind: self.kind.parse::<ShareKind>().map_err(ApiError::internal)?,
+            kind: self.kind,
             file_id: self.file_id,
             session_id: self.session_id,
             created_by: self.created_by,
-            expires_at: self.expires_at.map(|e| DbTs::from_str(e).parse()),
-            created_at: DbTs::from_str(self.created_at).parse(),
-        })
+            expires_at: self.expires_at,
+            created_at: self.created_at,
+        }
     }
 }

@@ -144,7 +144,7 @@ impl AuthService {
             .first::<UserRow>(&mut conn)
             .await
             .optional()?;
-        UserRow::into_model(row.ok_or(ApiError::Unauthorized)?)
+        Ok(row.ok_or(ApiError::Unauthorized)?.into_model())
     }
 
     pub fn require_admin(user: &User) -> Result<(), ApiError> {
