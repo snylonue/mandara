@@ -6,6 +6,7 @@ use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, Salt
 use axum::http::header::AUTHORIZATION;
 use axum::http::{HeaderMap, HeaderValue};
 use chrono::Utc;
+use cookie::{Cookie, SameSite, time::Duration};
 use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
 
@@ -62,20 +63,23 @@ impl AuthService {
     /// `Set-Cookie` header value that persists `token` in the session
     /// cookie (HttpOnly + SameSite=Lax; the token is a 7-day JWT).
     pub fn set_token_cookie(&self, token: &str) -> HeaderValue {
-        let secure = if self.cookie_secure { "; Secure" } else { "" };
-        HeaderValue::from_str(&format!(
-            "{TOKEN_COOKIE}={token}; Path=/; Max-Age={TOKEN_TTL_SECS}; HttpOnly; SameSite=Lax{secure}"
-        ))
-        .expect("JWT is a valid cookie value")
+        self.token_cookie(token, Duration::seconds(TOKEN_TTL_SECS as i64))
     }
 
     /// `Set-Cookie` header value that clears the session cookie (logout).
     pub fn clear_token_cookie(&self) -> HeaderValue {
-        let secure = if self.cookie_secure { "; Secure" } else { "" };
-        HeaderValue::from_str(&format!(
-            "{TOKEN_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax{secure}"
-        ))
-        .expect("static cookie value")
+        self.token_cookie("", Duration::ZERO)
+    }
+
+    fn token_cookie(&self, token: &str, max_age: Duration) -> HeaderValue {
+        let cookie = Cookie::build((TOKEN_COOKIE, token))
+            .path("/")
+            .max_age(max_age)
+            .http_only(true)
+            .same_site(SameSite::Lax)
+            .secure(self.cookie_secure)
+            .build();
+        HeaderValue::from_str(&cookie.to_string()).expect("JWT is a valid cookie value")
     }
 
     pub fn allow_register(&self) -> bool {
@@ -167,4 +171,48 @@ fn cookie_token(headers: &HeaderMap) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_cookie_preserves_token_and_attributes() {
+        for secure in [false, true] {
+            let auth = AuthService::new(true, "test-secret", secure);
+            let header = auth.set_token_cookie("header.payload.signature");
+            let cookie = Cookie::parse(header.to_str().unwrap()).unwrap();
+
+            assert_eq!(cookie.name(), TOKEN_COOKIE);
+            assert_eq!(cookie.value(), "header.payload.signature");
+            assert_eq!(cookie.path(), Some("/"));
+            assert_eq!(
+                cookie.max_age(),
+                Some(Duration::seconds(TOKEN_TTL_SECS as i64))
+            );
+            assert_eq!(cookie.http_only(), Some(true));
+            assert_eq!(cookie.same_site(), Some(SameSite::Lax));
+            assert_eq!(cookie.secure().unwrap_or(false), secure);
+            assert_eq!(cookie.domain(), None);
+        }
+    }
+
+    #[test]
+    fn logout_cookie_clears_token_with_matching_attributes() {
+        for secure in [false, true] {
+            let auth = AuthService::new(true, "test-secret", secure);
+            let header = auth.clear_token_cookie();
+            let cookie = Cookie::parse(header.to_str().unwrap()).unwrap();
+
+            assert_eq!(cookie.name(), TOKEN_COOKIE);
+            assert_eq!(cookie.value(), "");
+            assert_eq!(cookie.path(), Some("/"));
+            assert_eq!(cookie.max_age(), Some(Duration::ZERO));
+            assert_eq!(cookie.http_only(), Some(true));
+            assert_eq!(cookie.same_site(), Some(SameSite::Lax));
+            assert_eq!(cookie.secure().unwrap_or(false), secure);
+            assert_eq!(cookie.domain(), None);
+        }
+    }
 }

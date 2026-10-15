@@ -26,6 +26,7 @@ async-trait = { workspace = true }
 sqlx = { workspace = true }
 jsonwebtoken = { workspace = true }
 argon2 = { workspace = true }
+cookie = { workspace = true }
 clap = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
