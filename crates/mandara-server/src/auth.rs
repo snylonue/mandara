@@ -9,7 +9,7 @@ use chrono::Utc;
 use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
 
-use mandara_core::model::{Role, User};
+use mandara_core::model::User;
 
 use crate::db::DieselDb;
 use crate::error::ApiError;
@@ -143,14 +143,6 @@ impl AuthService {
             .await
             .optional()?;
         row.ok_or(ApiError::Unauthorized)
-    }
-
-    pub fn require_admin(user: &User) -> Result<(), ApiError> {
-        if user.role == Role::Admin {
-            Ok(())
-        } else {
-            Err(ApiError::Forbidden)
-        }
     }
 }
 

@@ -6,9 +6,9 @@
 
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
+use mandara_core::Role;
 use mandara_core::model::User;
 
-use crate::auth::AuthService;
 use crate::error::ApiError;
 use crate::state::St;
 
@@ -38,8 +38,10 @@ impl FromRequestParts<St> for AdminUser {
 
     async fn from_request_parts(parts: &mut Parts, state: &St) -> Result<Self, Self::Rejection> {
         let AuthenticatedUser(user) = AuthenticatedUser::from_request_parts(parts, state).await?;
-        AuthService::require_admin(&user)?;
-        Ok(Self(user))
+        match user.role {
+            Role::Admin => Ok(Self(user)),
+            Role::User => Err(ApiError::Forbidden),
+        }
     }
 }
 
