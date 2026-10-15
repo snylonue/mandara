@@ -18,6 +18,7 @@ export type BookMeta = Schemas["BookMeta"];
 export type FileMeta = Schemas["FileMeta"];
 export type BookEntry = Schemas["BookEntry"];
 export type AcquireResult = Schemas["AcquireResult"];
+export type SeriesMeta = Schemas["SeriesMeta"];
 export type SeriesBrief = Schemas["SeriesBrief"];
 export type SeriesDetail = Schemas["SeriesDetail"];
 export type FileDetail = Schemas["FileDetail"];

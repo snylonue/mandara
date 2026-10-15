@@ -1992,13 +1992,10 @@ components:
                   minimum: 0
                   description: Character offset within the chapter (non-web readers)
 
-    SeriesBrief:
+    SeriesMeta:
       type: object
-      description: |
-        A series: metadata grouping for the volumes of one publication
-        family (e.g. a light-novel series split from a multi-volume
-        plugin source). Member books carry `series_id` + `volume_no`.
-      required: [id, title, authors, description, cover_url, ext, status, volume_count, created_by, created_at]
+      description: Metadata shared by series summaries and member book entries.
+      required: [id, title, authors, description, cover_url, ext, created_by, created_at]
       properties:
         id:
           type: string
@@ -2014,18 +2011,23 @@ components:
           type: [string, "null"]
         ext:
           $ref: "#/components/schemas/SeriesExt"
-        status:
-          description: Publication status projected from `ext.status` (null = unset)
-          type: [string, "null"]
-          enum: [ongoing, completed, hiatus]
-        volume_count:
-          description: Number of member books (all visibilities)
-          type: integer
         created_by:
           type: [string, "null"]
         created_at:
           type: string
           format: date-time
+
+    SeriesBrief:
+      description: Series metadata with the number of member books.
+      allOf:
+        - $ref: "#/components/schemas/SeriesMeta"
+        - type: object
+          required: [volume_count]
+          properties:
+            volume_count:
+              description: Number of member books (all visibilities)
+              type: integer
+              minimum: 0
 
     SeriesDetail:
       type: object
@@ -2047,8 +2049,9 @@ components:
       required: [series, books]
       properties:
         series:
-          $ref: "#/components/schemas/SeriesBrief"
-          nullable: true
+          oneOf:
+            - $ref: "#/components/schemas/SeriesBrief"
+            - type: "null"
         books:
           type: array
           items:
@@ -2067,8 +2070,9 @@ components:
             $ref: "#/components/schemas/FileMeta"
         series:
           description: Series this book belongs to (null = standalone)
-          $ref: "#/components/schemas/SeriesBrief"
-          nullable: true
+          oneOf:
+            - $ref: "#/components/schemas/SeriesMeta"
+            - type: "null"
 
     FileDetail:
       type: object

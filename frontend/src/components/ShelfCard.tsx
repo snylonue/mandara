@@ -5,7 +5,7 @@ import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { BookCover } from "./BookCover";
 import { IconPlugin, IconPrivate, IconPublic } from "./icons";
-import type { BookMeta, FileMeta, SeriesBrief } from "../types";
+import type { BookMeta, FileMeta, SeriesMeta } from "../types";
 import { hasStarted, percentLabel, type WithProgress } from "../progress";
 
 /** Minimal shape every card needs: a book, its visible files, progress. */
@@ -159,7 +159,7 @@ export function ShelfSeriesCard({
   series,
   volumes,
 }: {
-  series: SeriesBrief;
+  series: SeriesMeta;
   volumes: ShelfItem[];
 }) {
   const { t } = useTranslation();
@@ -257,7 +257,7 @@ export function ShelfSeriesRow({
   series,
   volumes,
 }: {
-  series: SeriesBrief;
+  series: SeriesMeta;
   volumes: ShelfItem[];
 }) {
   const { t } = useTranslation();

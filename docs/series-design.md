@@ -206,7 +206,7 @@ single-book behavior (an uploaded file is one edition), documented.
 - `FileMeta` += `volume_no: integer` (0 = whole book) and
   `volume_offset: integer` (persisted flat start — needed to map lazy
   chapter pulls; harmless to expose).
-- `BookEntry` += `series: SeriesBrief|null` — the library groups
+- `BookEntry` += `series: SeriesMeta|null` — the library groups
   client-side without extra round trips.
 - `POST /api/books` 201 body becomes
   `AcquireResult { series: SeriesBrief|null, books: [BookEntry] }`

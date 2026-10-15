@@ -1072,28 +1072,22 @@ export interface components {
                 offset: number;
             };
         };
-        /**
-         * @description A series: metadata grouping for the volumes of one publication
-         *     family (e.g. a light-novel series split from a multi-volume
-         *     plugin source). Member books carry `series_id` + `volume_no`.
-         */
-        SeriesBrief: {
+        /** @description Metadata shared by series summaries and member book entries. */
+        SeriesMeta: {
             id: string;
             title: string;
             authors: string[];
             description: string | null;
             cover_url: string | null;
             ext: components["schemas"]["SeriesExt"];
-            /**
-             * @description Publication status projected from `ext.status` (null = unset)
-             * @enum {string|null}
-             */
-            status: "ongoing" | "completed" | "hiatus" | null;
-            /** @description Number of member books (all visibilities) */
-            volume_count: number;
             created_by: string | null;
             /** Format: date-time */
             created_at: string;
+        };
+        /** @description Series metadata with the number of member books. */
+        SeriesBrief: components["schemas"]["SeriesMeta"] & {
+            /** @description Number of member books (all visibilities) */
+            volume_count: number;
         };
         SeriesDetail: {
             series: components["schemas"]["SeriesBrief"];
@@ -1105,7 +1099,7 @@ export interface components {
          *     book is acquired; series identifies its parent grouping when present.
          */
         AcquireResult: {
-            series: components["schemas"]["SeriesBrief"];
+            series: components["schemas"]["SeriesBrief"] | null;
             books: components["schemas"]["BookEntry"][];
         };
         BookEntry: {
@@ -1113,7 +1107,7 @@ export interface components {
             /** @description Files of this book visible to the caller (empty for a metadata-only entry) */
             files: components["schemas"]["FileMeta"][];
             /** @description Series this book belongs to (null = standalone) */
-            series: components["schemas"]["SeriesBrief"];
+            series: components["schemas"]["SeriesMeta"] | null;
         };
         FileDetail: {
             file: components["schemas"]["FileMeta"];

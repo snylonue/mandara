@@ -10,8 +10,8 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 
+use mandara_core::SeriesExt;
 use mandara_core::model::SeriesMeta;
-use mandara_core::{SeriesExt, SeriesStatus};
 
 use crate::error::ApiError;
 use crate::extractors::AuthenticatedUser;
@@ -21,44 +21,18 @@ use crate::service::library::BookEntry;
 /// A series as seen by the API: metadata + its member count.
 #[derive(Serialize)]
 pub struct SeriesBrief {
-    pub id: String,
-    pub title: String,
-    pub authors: mandara_core::Authors,
-    pub description: Option<String>,
-    pub cover_url: Option<String>,
-    /// Extended series metadata (publisher/status/tags/…).
-    #[serde(default)]
-    pub ext: SeriesExt,
-    /// Convenience projection: publication status (`null` = unset).
-    pub status: Option<SeriesStatus>,
+    #[serde(flatten)]
+    pub metadata: SeriesMeta,
     pub volume_count: u32,
-    pub created_by: Option<String>,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-}
-
-impl SeriesBrief {
-    fn project(series: SeriesMeta, volume_count: u32) -> Self {
-        let ext = series.ext;
-        let status = ext.status;
-        Self {
-            id: series.id,
-            title: series.title,
-            authors: series.authors,
-            description: series.description,
-            cover_url: series.cover_url,
-            ext,
-            status,
-            volume_count,
-            created_by: series.created_by,
-            created_at: series.created_at,
-        }
-    }
 }
 
 impl SeriesBrief {
     pub(crate) async fn from_meta(st: &St, series: SeriesMeta) -> Result<SeriesBrief, ApiError> {
         let volume_count = st.library.series_volume_count(&series.id).await?;
-        Ok(SeriesBrief::project(series, volume_count))
+        Ok(Self {
+            metadata: series,
+            volume_count,
+        })
     }
 }
 
@@ -70,6 +44,40 @@ pub struct SeriesDetail {
     pub books: Vec<BookEntry>,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn series_brief_reuses_metadata_without_a_status_projection() {
+        for status in [None, Some(mandara_core::SeriesStatus::Ongoing)] {
+            let metadata = SeriesMeta {
+                id: "series".into(),
+                title: "系列".into(),
+                authors: mandara_core::Authors(vec!["作者".into()]),
+                description: None,
+                cover_url: None,
+                ext: SeriesExt {
+                    status,
+                    ..Default::default()
+                },
+                created_by: None,
+                created_at: chrono::Utc::now(),
+            };
+            let mut expected = serde_json::to_value(&metadata).unwrap();
+            expected["volume_count"] = 3.into();
+            let brief = serde_json::to_value(SeriesBrief {
+                metadata,
+                volume_count: 3,
+            })
+            .unwrap();
+            assert_eq!(brief, expected);
+            assert!(brief.get("status").is_none());
+            assert!(brief.get("metadata").is_none());
+        }
+    }
+}
+
 // GET /api/series -----------------------------------------------------------
 
 pub async fn list_series(
@@ -79,7 +87,10 @@ pub async fn list_series(
     let series_list = st.library.list_series(&user).await?;
     let out: Vec<_> = series_list
         .into_iter()
-        .map(|(series, count)| SeriesBrief::project(series, count))
+        .map(|(metadata, volume_count)| SeriesBrief {
+            metadata,
+            volume_count,
+        })
         .collect();
     Ok(Json(out))
 }
@@ -139,7 +150,10 @@ async fn load_series_detail(
     let volume_count = st.library.series_volume_count(id).await?;
     let books = st.library.list_series_books(&series, user).await?;
     Ok(SeriesDetail {
-        series: SeriesBrief::project(series, volume_count),
+        series: SeriesBrief {
+            metadata: series,
+            volume_count,
+        },
         books,
     })
 }

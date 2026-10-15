@@ -12,7 +12,7 @@ vi.mock("../src/auth", () => ({ useAuth: () => ({ user: viewer }) }));
 let viewer: User | null;
 const date = "2026-10-01T00:00:00Z";
 const series: SeriesBrief = { id: "saved-series", title: "现有系列", authors: ["原作者"], description: "原简介", cover_url: null,
-  ext: {}, status: null, volume_count: 3, created_by: "reader", created_at: date };
+  ext: {}, volume_count: 3, created_by: "reader", created_at: date };
 const source: PluginInstance = { id: "wenku8", name: "文库", wasm_file: "wenku8.wasm", enabled: true,
   capabilities: ["lookup", "content"], source_info: { kind: "manual-id" } };
 function file(bookId: string): FileMeta {
@@ -29,7 +29,7 @@ const names = ["第1卷 · 卷一", "第2卷 · 卷二", "第3卷 · 卷三"];
 const match = (index: number) => screen.getByLabelText(names[index - 1] + "对应的内容");
 
 beforeEach(() => {
-  vi.clearAllMocks(); submitted = []; series.created_by = "reader";
+  vi.clearAllMocks(); submitted = []; series.created_by = "reader"; series.ext = {};
   viewer = { id: "reader", username: "读者", role: "user", created_at: date };
   books = ["卷一", "卷二", "卷三"].map((title, index) => ({
     book: { id: "local:" + (index + 1), title, authors: ["原作者"], description: "原简介", cover_url: null,
@@ -206,6 +206,12 @@ it("treats an acquisition response without the requested file as a failure", asy
   await user.click(screen.getByRole("button", { name: "添加 2 卷内容" }));
   await screen.findByRole("alert"); expect(onClose).not.toHaveBeenCalled(); expect(onChanged).not.toHaveBeenCalled();
   expect(screen.getByRole("button", { name: "重试失败内容" })).toBeTruthy();
+});
+
+it("renders publication status from series extended metadata", async () => {
+  series.ext = { status: "ongoing" };
+  page();
+  expect((await screen.findByText("连载中")).classList.contains("ext-status-ongoing")).toBe(true);
 });
 
 it("opens the batch dialog from the series page and reloads its visible files after success", async () => {

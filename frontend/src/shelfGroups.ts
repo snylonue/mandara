@@ -1,10 +1,10 @@
 import type { ShelfEntry } from "./progress";
-import type { SeriesBrief } from "./types";
+import type { SeriesMeta } from "./types";
 
 /** A series stays a series even when only one volume is visible. */
 export type ShelfItem =
   | { kind: "book"; entry: ShelfEntry }
-  | { kind: "series"; series: SeriesBrief; volumes: ShelfEntry[] };
+  | { kind: "series"; series: SeriesMeta; volumes: ShelfEntry[] };
 
 /** Collapse runs of series members into one card each (order preserved). */
 export function groupBySeries(list: ShelfEntry[]): ShelfItem[] {

@@ -303,10 +303,10 @@ export function SeriesPage() {
                 <span>{t("library.seriesRead", { read: readVolumes, total: volumes.length })}</span>
               </>
             )}
-            {series?.status && (
+            {series?.ext.status && (
               <>
                 <span>·</span>
-                <span className={`tag ext-status-${series.status}`}>{t(`ext.${series.status}`)}</span>
+                <span className={`tag ext-status-${series.ext.status}`}>{t(`ext.${series.ext.status}`)}</span>
               </>
             )}
             {series?.ext?.total_volumes != null && (
