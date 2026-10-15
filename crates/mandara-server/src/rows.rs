@@ -2,7 +2,8 @@
 
 use mandara_core::model::{
     BookMeta, Chapter, ChapterMeta, ContentMode, FileFormat, FileMeta, InChapter, OriginalInfo,
-    Position, ReadingSession, Role, SeriesMeta, Share, ShareKind, User, Visibility,
+    Position, ReadingProgress, ReadingSession, Role, SeriesMeta, Share, ShareKind, User,
+    Visibility,
 };
 use mandara_core::{BookExt, SeriesExt};
 
@@ -185,6 +186,26 @@ impl ChapterTitleRow {
 }
 
 #[derive(Debug, diesel::prelude::Queryable, diesel::prelude::Selectable)]
+#[diesel(table_name = crate::schema::reading_sessions, check_for_backend(diesel::sqlite::Sqlite))]
+pub struct ReadingSessionRow {
+    pub id: String,
+    pub user_id: String,
+    pub label: String,
+    pub created_at: String,
+}
+
+impl ReadingSessionRow {
+    pub fn into_model(self) -> ReadingSession {
+        ReadingSession {
+            id: self.id,
+            user_id: self.user_id,
+            label: self.label,
+            created_at: DbTs::from_str(self.created_at).parse(),
+        }
+    }
+}
+
+#[derive(Debug, diesel::prelude::Queryable, diesel::prelude::Selectable)]
 #[diesel(table_name = crate::schema::sessions, check_for_backend(diesel::sqlite::Sqlite))]
 pub struct SessionRow {
     pub id: String,
@@ -192,25 +213,31 @@ pub struct SessionRow {
     pub file_id: String,
     pub label: String,
     pub chapter_idx: i64,
-    /// Still read from the column for Diesel deserialization; the model
-    /// now derives the in-chapter progress from `fraction` only.
-    #[allow(dead_code)]
     pub offset: i64,
     pub fraction: f64,
     pub updated_at: String,
+    pub reading_session_id: Option<String>,
+    pub position_kind: String,
 }
 
 impl SessionRow {
-    pub fn into_model(self) -> ReadingSession {
-        ReadingSession {
+    pub fn into_model(self) -> ReadingProgress {
+        ReadingProgress {
+            session_id: self.reading_session_id.expect("progress has a context"),
             id: self.id,
             user_id: self.user_id,
             file_id: self.file_id,
             label: self.label,
             position: Position {
                 chapter_idx: self.chapter_idx.max(0) as u32,
-                in_chapter: InChapter::Fraction {
-                    fraction: self.fraction.clamp(0.0, 1.0),
+                in_chapter: if self.position_kind == "offset" {
+                    InChapter::CharOffset {
+                        offset: self.offset as u32,
+                    }
+                } else {
+                    InChapter::Fraction {
+                        fraction: self.fraction.clamp(0.0, 1.0),
+                    }
                 },
             },
             updated_at: DbTs::from_str(self.updated_at).parse(),

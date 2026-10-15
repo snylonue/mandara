@@ -25,7 +25,7 @@ import type {
   BookDetail,
   BookMeta,
   FileMeta,
-  ReadingSession,
+  ReadingProgress,
   SeriesBrief,
   SessionsResponse,
   ShareInfo,
@@ -33,7 +33,7 @@ import type {
 } from "../types";
 
 const fmtTime = (s: string) => new Date(s).toLocaleString("zh-CN", { hour12: false });
-const fmtPercent = (s: ReadingSession) => {
+const fmtPercent = (s: ReadingProgress) => {
   const frac = "fraction" in s.position.in_chapter ? s.position.in_chapter.fraction : 0;
   return `${Math.round(frac * 100)}%`;
 };
@@ -54,7 +54,7 @@ function FileSection({
 }) {
   const { t } = useTranslation();
   const toast = useToast();
-  const [sessions, setSessions] = useState<ReadingSession[]>([]);
+  const [sessions, setSessions] = useState<ReadingProgress[]>([]);
 
   const loadSessions = useCallback(async () => {
     try {
@@ -188,7 +188,7 @@ function FileSection({
               return (
                 <tr key={s.id}>
                   <td>
-                    <Link to={`/read/${file.id}?session=${s.id}`} className="strong">
+                    <Link to={`/read/${file.id}?session=${s.session_id}`} className="strong">
                       {s.label}
                     </Link>
                   </td>

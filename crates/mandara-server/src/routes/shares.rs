@@ -15,9 +15,7 @@ use diesel::expression_methods::NullableExpressionMethods as _;
 use diesel::prelude::SelectableHelper as _;
 use diesel_async::RunQueryDsl as _;
 
-use mandara_core::model::{
-    ChapterMeta, InChapter, Position, Share, ShareKind, TocNode, Visibility,
-};
+use mandara_core::model::{ChapterMeta, Position, Share, ShareKind, TocNode, Visibility};
 
 use crate::error::ApiError;
 use crate::extractors::AuthenticatedUser;
@@ -221,38 +219,30 @@ pub async fn get_share(
     let mut session = None;
     if let Some(sid) = &share.session_id {
         let mut conn = st.diesel_db.get().await?;
-        let srow: Option<(String, Option<String>, i64, i64, f64, String)> = sessions::table
+        let srow: Option<(crate::rows::SessionRow, Option<String>)> = sessions::table
             .left_join(users::table)
             .filter(sessions::id.eq(sid))
             .select((
-                sessions::label,
+                crate::rows::SessionRow::as_select(),
                 users::username.nullable(),
-                sessions::chapter_idx,
-                sessions::offset,
-                sessions::fraction,
-                sessions::updated_at,
             ))
             .first(&mut conn)
             .await
             .optional()?;
         // A session share whose session was deleted is a broken link:
         // report it as gone rather than a phantom `session: null`.
-        let Some((label, owner, chapter_idx, _offset, fraction, updated_at)) = srow else {
+        let Some((progress, owner)) = srow else {
             return Err(ApiError::not_found("share"));
         };
-        let position = Position {
-            chapter_idx: chapter_idx.max(0) as u32,
-            in_chapter: InChapter::Fraction {
-                fraction: fraction.clamp(0.0, 1.0),
-            },
-        };
+        let progress = progress.into_model();
+        let position = progress.position;
         session = Some(ShareSessionView {
             id: sid.clone(),
-            label,
+            label: progress.label,
             owner_username: owner.unwrap_or_default(),
             percent: position.percent(),
             position,
-            updated_at: DbTs::from_str(updated_at).parse(),
+            updated_at: progress.updated_at,
         });
     }
 

@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import { useSelectedProgress } from "../readingSessions";
 import { api } from "../api";
 import { shelfBookTitle } from "../shelfTitle";
 import { groupBySeries, type ShelfItem } from "../shelfGroups";
@@ -21,7 +22,7 @@ import { useToast } from "../components/toast";
 import { usePluginInstances } from "../components/SourceSearch";
 import { IconBook, IconGrid, IconGridCompact, IconList } from "../components/icons";
 import { attachProgress, progressByFile, type ShelfEntry } from "../progress";
-import type { BookListEntry, SessionList } from "../types";
+import type { BookListEntry } from "../types";
 
 type SortKey = "default" | "title" | "recent";
 type GroupKey = "series" | "flat" | "author";
@@ -96,7 +97,7 @@ export function LibraryPage() {
   const [entries, setEntries] = useState<BookListEntry[] | null>(null);
   const syncedSearch = useRef<string | null>(null);
   const adopted = useRef(false);
-  const [sessions, setSessions] = useState<SessionList>([]);
+  const sessions = useSelectedProgress();
   const [q, setQ] = useState("");
   // The unified add dialog (添加书籍 / 新建系列 → 一个对话框).
   const [addOpen, setAddOpen] = useState(false);
@@ -127,14 +128,6 @@ export function LibraryPage() {
     const timer = window.setTimeout(() => void load(q), 250);
     return () => window.clearTimeout(timer);
   }, [load, q]);
-
-  // Reading progress is fetched once per visit (`GET /api/sessions`) and
-  // mapped onto the books by file id.
-  useEffect(() => {
-    void api<SessionList>("/sessions")
-      .then(setSessions)
-      .catch(() => setSessions([]));
-  }, []);
 
   // Entering the shelf without parameters (mount, 书架 nav, back button)
   // adopts the last used preferences and writes them into the URL. Only

@@ -87,6 +87,15 @@ diesel::table! {
 }
 
 diesel::table! {
+    reading_sessions (id) {
+        id -> Text,
+        user_id -> Text,
+        label -> Text,
+        created_at -> Text,
+    }
+}
+
+diesel::table! {
     series (id) {
         id -> Text,
         title -> Text,
@@ -113,6 +122,8 @@ diesel::table! {
         offset -> BigInt,
         fraction -> Double,
         updated_at -> Text,
+        reading_session_id -> Nullable<Text>,
+        position_kind -> Text,
     }
 }
 
@@ -144,8 +155,10 @@ diesel::joinable!(books -> series (series_id));
 diesel::joinable!(books -> users (created_by));
 diesel::joinable!(chapters -> book_files (file_id));
 diesel::joinable!(plugin_state -> plugin_instances (instance_id));
+diesel::joinable!(reading_sessions -> users (user_id));
 diesel::joinable!(series -> users (created_by));
 diesel::joinable!(sessions -> book_files (file_id));
+diesel::joinable!(sessions -> reading_sessions (reading_session_id));
 diesel::joinable!(sessions -> users (user_id));
 diesel::joinable!(shares -> book_files (file_id));
 diesel::joinable!(shares -> sessions (session_id));
@@ -158,6 +171,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     images,
     plugin_instances,
     plugin_state,
+    reading_sessions,
     series,
     sessions,
     shares,

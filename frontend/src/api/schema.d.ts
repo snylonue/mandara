@@ -686,15 +686,13 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Every reading session of the caller, newest first
-         * @description Progress of one user across all files, in a single request — the
-         *     shelf and series pages derive per-book/per-volume progress from
-         *     it (only sessions on files the caller may still view are usable
-         *     by the client, which maps `file_id` through its book list).
+         * List user-wide reading contexts (oldest first)
+         * @description Account creation creates one ordinary context. All contexts are deletable; listing an empty collection does not create a replacement. New contexts start empty.
          */
         get: operations["listAllSessions"];
         put?: never;
-        post?: never;
+        /** Create a context or reuse the same label */
+        post: operations["createSession"];
         delete?: never;
         options?: never;
         head?: never;
@@ -708,11 +706,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Current user's reading sessions for a file */
+        /** List existing per-file progress across contexts */
         get: operations["listSessions"];
         put?: never;
-        /** Create a session (reuses an existing one with the same label) */
-        post: operations["createSession"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -727,11 +724,70 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Update session progress (all fields optional; clamped) */
-        put: operations["updateSession"];
+        put?: never;
         post?: never;
-        /** Delete a session (owner or admin) */
+        /** Delete an owned context and all its progress */
         delete: operations["deleteSession"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sessions/{id}/progress": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List all file progress in a context owned by the caller
+         * @description Map file ids through visible book lists before displaying progress.
+         */
+        get: operations["listProgress"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sessions/{id}/files/{file_id}/progress": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Create or update only this file progress (clamped)
+         * @description Omitted fields retain the current position, or zero for an untouched file. Only the owner can write; file visibility is enforced.
+         */
+        put: operations["updateProgress"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sessions/{id}/files/{file_id}/sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Copy this file progress from another owned context
+         * @description Explicitly overwrite the target position, including backwards moves. No other file or source progress changes. A missing source progress returns 404; copying to the same context returns 400.
+         */
+        post: operations["syncProgress"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -1087,6 +1143,16 @@ export interface components {
         ReadingSession: {
             id: string;
             user_id: string;
+            label: string;
+            /** Format: date-time */
+            created_at: string;
+        };
+        ReadingProgress: {
+            /** @description Stable per-file progress id, also used by legacy progress shares. */
+            id: string;
+            /** @description User-wide reading context id. */
+            session_id: string;
+            user_id: string;
             file_id: string;
             label: string;
             position: components["schemas"]["Position"];
@@ -1095,11 +1161,14 @@ export interface components {
         };
         SessionsResponse: {
             file_id: string;
-            sessions: components["schemas"]["ReadingSession"][];
+            sessions: components["schemas"]["ReadingProgress"][];
         };
         CreateSession: {
-            /** @description Defaults to "default" */
+            /** @description Trimmed label. Defaults to "default"; reuses the same label for this user. */
             label?: string;
+        };
+        SyncProgress: {
+            source_session_id: string;
         };
         UpdatePosition: {
             chapter_idx?: number;
@@ -1114,7 +1183,7 @@ export interface components {
         ShareKind: "book" | "session";
         CreateShare: {
             kind?: components["schemas"]["ShareKind"];
-            /** @description Required when kind is "session" */
+            /** @description Per-file ReadingProgress.id (not the context id), required when kind is "session" */
             session_id?: string;
             expires_days?: number;
         };
@@ -2527,7 +2596,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Sessions of the caller, ordered by `updated_at` desc */
+            /** @description Reading contexts */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -2537,6 +2606,36 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    createSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateSession"];
+            };
+        };
+        responses: {
+            /** @description Created or existing context */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadingSession"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
     listSessions: {
@@ -2551,7 +2650,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Sessions of the caller for this file */
+            /** @description Per-file progress; untouched contexts are omitted */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -2560,64 +2659,7 @@ export interface operations {
                     "application/json": components["schemas"]["SessionsResponse"];
                 };
             };
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
-        };
-    };
-    createSession: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Book file id */
-                id: components["parameters"]["FileId"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CreateSession"];
-            };
-        };
-        responses: {
-            /** @description Created (or the existing session with that label) */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ReadingSession"];
-                };
-            };
-            400: components["responses"]["BadRequest"];
-            403: components["responses"]["Forbidden"];
-        };
-    };
-    updateSession: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Session id */
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["UpdatePosition"];
-            };
-        };
-        responses: {
-            /** @description Updated session */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ReadingSession"];
-                };
-            };
+            401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
         };
@@ -2640,6 +2682,93 @@ export interface operations {
                 };
                 content?: never;
             };
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listProgress: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Progress in this context */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadingProgress"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    updateProgress: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                file_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdatePosition"];
+            };
+        };
+        responses: {
+            /** @description Saved progress */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadingProgress"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    syncProgress: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                file_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SyncProgress"];
+            };
+        };
+        responses: {
+            /** @description Copied progress */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadingProgress"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
         };

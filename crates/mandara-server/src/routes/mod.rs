@@ -143,13 +143,22 @@ pub fn router(state: St) -> Router {
         .route("/api/images/{id}", get(images::get_image))
         .route(
             "/api/files/{id}/sessions",
-            get(sessions::list_file_sessions).post(sessions::create_session),
+            get(sessions::list_file_sessions),
         )
-        .route("/api/sessions", get(sessions::list_my_sessions))
         .route(
-            "/api/sessions/{id}",
-            put(sessions::update_session).delete(delete(sessions::delete_session)),
+            "/api/sessions",
+            get(sessions::list_my_sessions).post(sessions::create_session),
         )
+        .route("/api/sessions/{id}/progress", get(sessions::list_progress))
+        .route(
+            "/api/sessions/{id}/files/{file_id}/progress",
+            put(sessions::update_progress),
+        )
+        .route(
+            "/api/sessions/{id}/files/{file_id}/sync",
+            post(sessions::sync_progress),
+        )
+        .route("/api/sessions/{id}", delete(sessions::delete_session))
         .route("/api/files/{id}/shares", post(shares::create_share))
         .route(
             "/api/shares/{token}",

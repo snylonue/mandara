@@ -432,8 +432,17 @@ body:has(.app-reader),
 
 .reader-session-bar {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-1);
   align-items: center;
+}
+
+.reader-session-controls {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-2);
+  min-width: 0;
 }
 
 .reader-session-bar select {

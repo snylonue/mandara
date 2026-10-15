@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import { useSelectedProgress } from "../readingSessions";
 import { api } from "../api";
 import { useAuth } from "../auth";
 import { BookCover } from "../components/BookCover";
@@ -33,7 +34,6 @@ import type {
   BookListEntry,
   SeriesBrief,
   SeriesDetail,
-  SessionList,
 } from "../types";
 
 /// One volume card of the series. Manageable cards additionally show
@@ -125,7 +125,7 @@ export function SeriesPage() {
   const [detail, setDetail] = useState<SeriesDetail | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const [sessions, setSessions] = useState<SessionList>([]);
+  const sessions = useSelectedProgress();
   // Local working copy of the member order while managing (saved on 保存).
   const [order, setOrder] = useState<string[] | null>(null);
   const [editOpen, setEditOpen] = useState(false);
@@ -155,13 +155,6 @@ export function SeriesPage() {
     void load();
   }, [load]);
 
-  // Reading progress of every volume (one request for the whole page).
-  useEffect(() => {
-    void api<SessionList>("/sessions")
-      .then(setSessions)
-      .catch(() => setSessions([]));
-  }, []);
-
   const canManage = useMemo(() => {
     if (!user || !detail) return false;
     return user.role === "admin" || detail.series.created_by === user.id;
@@ -176,7 +169,7 @@ export function SeriesPage() {
     return memberIds.map((mid) => byId.get(mid)).filter((b): b is BookDetail => !!b);
   }, [detail, memberIds]);
 
-  // Progress by file, then by volume (the busiest session per file wins).
+  // Progress in the selected context, by file and then by volume.
   const byFile = useMemo(() => {
     const counts = new Map<string, number>();
     for (const entry of detail?.books ?? []) {
@@ -204,7 +197,7 @@ export function SeriesPage() {
     const resume = session && sessionPercent(session, file.chapter_count) < FINISHED_AT;
     return {
       volumeNo: pick.book.volume_no,
-      href: `/read/${file.id}${resume ? `?session=${session!.id}` : ""}`,
+      href: `/read/${file.id}${resume ? `?session=${session!.session_id}` : ""}`,
       finished: isFinished(pick.progress),
     };
   }, [volumes]);

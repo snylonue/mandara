@@ -20,6 +20,8 @@ use crate::config::Config;
 use crate::service::{Library, plugins::PluginService};
 use crate::state::{AppState, St};
 
+mod sessions;
+
 const SECRET: &str = "extractor-tests-only";
 
 struct Fixture {
@@ -394,8 +396,10 @@ async fn protected_routes_authenticate_before_parsing_request_data() {
         ("DELETE", "/api/files/id"),
         ("GET", "/api/sessions"),
         ("GET", "/api/files/id/sessions"),
-        ("POST", "/api/files/id/sessions"),
-        ("PUT", "/api/sessions/id"),
+        ("POST", "/api/sessions"),
+        ("GET", "/api/sessions/id/progress"),
+        ("PUT", "/api/sessions/id/files/file/progress"),
+        ("POST", "/api/sessions/id/files/file/sync"),
         ("DELETE", "/api/sessions/id"),
         ("GET", "/api/series"),
         ("POST", "/api/series"),

@@ -548,12 +548,20 @@ impl Position {
     }
 }
 
-/// A reading session: one device context reading one file.
-///
-/// A user can have several sessions per file (e.g. phone + laptop), each
-/// with its own progress.
+/// A user-owned reading context containing independent progress for every file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReadingSession {
+    pub id: String,
+    pub user_id: String,
+    pub label: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Progress for one file in a reading context. Its id also identifies public
+/// progress links, independently of the context id.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReadingProgress {
+    pub session_id: String,
     pub id: String,
     pub user_id: String,
     pub file_id: String,

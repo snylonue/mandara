@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, NavLink, Navigate, Route, Routes, useMatch } from "react-router-dom";
 import { useAuth } from "./auth";
+import { ReadingSessionsProvider, SessionControl } from "./readingSessions";
 import {
   IconLogout,
   IconMoon,
@@ -73,114 +74,117 @@ export default function App() {
 
   return (
     <ToastProvider>
-      <div className={`app${reading || sharing ? " app-reader" : ""}`}>
-        <header className={`nav${scrolled ? " scrolled" : ""}`}>
-          <div className="nav-left">
-            <Link to="/" className="brand">
-              <LogoMark className="brand-mark" />
-              Mandara
-            </Link>
-            {user && (
-              <nav className="nav-items">
-                <NavLink to="/" end className="nav-item">
-                  {t("nav.shelf")}
-                </NavLink>
-                {user.role === "admin" && (
-                  <NavLink to="/plugins" className="nav-item">
-                    {t("nav.plugins")}
-                  </NavLink>
-                )}
-              </nav>
-            )}
-          </div>
-          <div className="nav-right">
-            <button
-              className="icon-btn"
-              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-              aria-label={t("nav.toggleTheme")}
-              title={t("nav.toggleTheme")}
-            >
-              {theme === "dark" ? <IconSun size={16} /> : <IconMoon size={16} />}
-            </button>
-            {user ? (
-              <div className="user-menu" ref={menuRef}>
-                <button
-                  className="user-menu-btn"
-                  onClick={() => setMenuOpen((v) => !v)}
-                  aria-expanded={menuOpen}
-                >
-                  {user.username}
-                </button>
-                {menuOpen && (
-                  <div className="popover user-menu-panel">
-                    <button
-                      onClick={() => {
-                        setMenuOpen(false);
-                        logout();
-                      }}
-                    >
-                      <IconLogout size={14} />
-                      {t("nav.logout")}
-                    </button>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <Link className="btn link" to="/login">
-                {t("nav.login")}
+      <ReadingSessionsProvider>
+        <div className={`app${reading || sharing ? " app-reader" : ""}`}>
+          <header className={`nav${scrolled ? " scrolled" : ""}`}>
+            <div className="nav-left">
+              <Link to="/" className="brand">
+                <LogoMark className="brand-mark" />
+                Mandara
               </Link>
-            )}
-          </div>
-        </header>
-        <main className="content">
-          <Routes>
-            <Route path="/login" element={<LoginPage />} />
-            <Route path="/register" element={<RegisterPage />} />
-            <Route
-              path="/"
-              element={
-                <RequireAuth>
-                  <LibraryPage />
-                </RequireAuth>
-              }
-            />
-            <Route
-              path="/book/:id"
-              element={
-                <RequireAuth>
-                  <BookDetailPage />
-                </RequireAuth>
-              }
-            />
-            <Route
-              path="/series/:id"
-              element={
-                <RequireAuth>
-                  <SeriesPage />
-                </RequireAuth>
-              }
-            />
-            <Route
-              path="/read/:id"
-              element={
-                <RequireAuth>
-                  <ReaderPage />
-                </RequireAuth>
-              }
-            />
-            <Route
-              path="/plugins"
-              element={
-                <RequireAuth>
-                  <PluginsPage />
-                </RequireAuth>
-              }
-            />
-            <Route path="/share/:token" element={<SharePage />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </main>
-      </div>
+              {user && (
+                <nav className="nav-items">
+                  <NavLink to="/" end className="nav-item">
+                    {t("nav.shelf")}
+                  </NavLink>
+                  {user.role === "admin" && (
+                    <NavLink to="/plugins" className="nav-item">
+                      {t("nav.plugins")}
+                    </NavLink>
+                  )}
+                </nav>
+              )}
+            </div>
+            <div className="nav-right">
+              {user && !reading && !sharing && <SessionControl />}
+              <button
+                className="icon-btn"
+                onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+                aria-label={t("nav.toggleTheme")}
+                title={t("nav.toggleTheme")}
+              >
+                {theme === "dark" ? <IconSun size={16} /> : <IconMoon size={16} />}
+              </button>
+              {user ? (
+                <div className="user-menu" ref={menuRef}>
+                  <button
+                    className="user-menu-btn"
+                    onClick={() => setMenuOpen((v) => !v)}
+                    aria-expanded={menuOpen}
+                  >
+                    {user.username}
+                  </button>
+                  {menuOpen && (
+                    <div className="popover user-menu-panel">
+                      <button
+                        onClick={() => {
+                          setMenuOpen(false);
+                          logout();
+                        }}
+                      >
+                        <IconLogout size={14} />
+                        {t("nav.logout")}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <Link className="btn link" to="/login">
+                  {t("nav.login")}
+                </Link>
+              )}
+            </div>
+          </header>
+          <main className="content">
+            <Routes>
+              <Route path="/login" element={<LoginPage />} />
+              <Route path="/register" element={<RegisterPage />} />
+              <Route
+                path="/"
+                element={
+                  <RequireAuth>
+                    <LibraryPage />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/book/:id"
+                element={
+                  <RequireAuth>
+                    <BookDetailPage />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/series/:id"
+                element={
+                  <RequireAuth>
+                    <SeriesPage />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/read/:id"
+                element={
+                  <RequireAuth>
+                    <ReaderPage />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/plugins"
+                element={
+                  <RequireAuth>
+                    <PluginsPage />
+                  </RequireAuth>
+                }
+              />
+              <Route path="/share/:token" element={<SharePage />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </main>
+        </div>
+      </ReadingSessionsProvider>
     </ToastProvider>
   );
 }

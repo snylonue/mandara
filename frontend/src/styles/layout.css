@@ -89,6 +89,8 @@
 
 .nav-right {
   min-width: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   display: flex;
   align-items: center;
   gap: var(--space-3);

@@ -1,18 +1,18 @@
-// Reading progress for the shelf: the caller's sessions (`GET /api/sessions`)
+// Reading progress for the shelf in the selected context (`GET /api/sessions/{id}/progress`)
 // resolved against the chapter counts the book lists already carry.
 //
 // A file's progress is `(chapter_idx + in-chapter fraction) / chapter_count`
 // — the same notion the reader saves. Only `fraction` is written by the web
 // reader, so an `offset`-based session (non-web readers) counts as the start
 // of its chapter.
-import type { BookListEntry, ReadingSession, SessionList } from "./types";
+import type { BookListEntry, ReadingProgress, SessionList } from "./types";
 
 /** Fraction of a file from which it counts as read. */
 export const FINISHED_AT = 0.98;
 
 export interface FileProgress {
   fileId: string;
-  session: ReadingSession;
+  session: ReadingProgress;
   /** 0..1 across the file's chapters. */
   percent: number;
 }
@@ -20,7 +20,7 @@ export interface FileProgress {
 /** Anything with a file id and a chapter count (FileMeta). */
 type FileLike = { id: string; chapter_count: number };
 
-export function sessionPercent(session: ReadingSession, chapterCount: number): number {
+export function sessionPercent(session: ReadingProgress, chapterCount: number): number {
   if (chapterCount <= 0) return 0;
   const { chapter_idx, in_chapter } = session.position;
   const frac = "fraction" in in_chapter ? in_chapter.fraction : 0;
@@ -28,7 +28,7 @@ export function sessionPercent(session: ReadingSession, chapterCount: number): n
 }
 
 /**
- * Best (most advanced) session per file. `chapterCountOf` maps a file id to
+ * Per-file progress in the selected context. `chapterCountOf` maps a file id to
  * its chapter count; files the caller cannot see any more return 0 and are
  * therefore dropped unless they carry an explicit chapter index.
  */

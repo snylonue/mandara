@@ -1,80 +1,65 @@
-//! Reading session endpoints: one user, multiple sessions per file
-//! (e.g. one per device), each with independent progress.
+//! User-wide reading contexts with independently writable per-file progress.
 
-use axum::Json;
-use axum::extract::{Path, State};
-use axum::http::StatusCode;
-use axum::response::IntoResponse;
+use axum::{
+    Json,
+    extract::{Path, State},
+    http::StatusCode,
+    response::IntoResponse,
+};
+use diesel::{
+    ExpressionMethods as _, OptionalExtension as _, QueryDsl as _, prelude::SelectableHelper as _,
+};
+use diesel_async::RunQueryDsl as _;
+use mandara_core::model::{InChapter, Position, ReadingProgress, User};
 use serde::{Deserialize, Serialize};
 
-use mandara_core::model::{InChapter, Position, ReadingSession};
-
-use diesel::ExpressionMethods as _;
-use diesel::OptionalExtension as _;
-use diesel::QueryDsl as _;
-use diesel::prelude::SelectableHelper as _;
-use diesel_async::RunQueryDsl as _;
-
-use crate::error::ApiError;
-use crate::extractors::AuthenticatedUser;
-use crate::routes::{St, load_visible_file};
-use crate::rows::SessionRow;
-#[allow(unused_imports)]
-use crate::schema::sessions;
+use crate::{
+    error::ApiError,
+    extractors::AuthenticatedUser,
+    routes::{St, load_visible_file},
+    rows::{ReadingSessionRow, SessionRow},
+    schema::{reading_sessions, sessions},
+};
 
 #[derive(Serialize)]
 pub struct SessionsResponse {
     pub file_id: String,
-    pub sessions: Vec<ReadingSession>,
+    pub sessions: Vec<ReadingProgress>,
 }
 
-// GET /api/sessions ----------------------------------------------------------
+async fn owned_session(st: &St, user: &User, id: &str) -> Result<ReadingSessionRow, ApiError> {
+    let row = reading_sessions::table
+        .find(id)
+        .select(ReadingSessionRow::as_select())
+        .first(&mut st.diesel_db.get().await?)
+        .await
+        .optional()?
+        .ok_or_else(|| ApiError::not_found("session"))?;
+    if row.user_id != user.id {
+        return Err(ApiError::Forbidden);
+    }
+    Ok(row)
+}
 
-/// Every session of the caller across all files, newest first. The shelf
-/// and series pages use it to show per-book/per-volume progress without
-/// one request per file.
 pub async fn list_my_sessions(
     AuthenticatedUser(user): AuthenticatedUser,
     State(st): State<St>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let mut conn = st.diesel_db.get().await?;
-    let rows: Vec<SessionRow> = sessions::table
-        .filter(sessions::user_id.eq(&user.id))
-        .order(sessions::updated_at.desc())
-        .select(SessionRow::as_select())
-        .load(&mut conn)
+    let rows = reading_sessions::table
+        .filter(reading_sessions::user_id.eq(user.id))
+        .order((
+            reading_sessions::created_at.asc(),
+            reading_sessions::id.asc(),
+        ))
+        .select(ReadingSessionRow::as_select())
+        .load(&mut st.diesel_db.get().await?)
         .await?;
-
-    let sessions: Vec<ReadingSession> = rows.into_iter().map(|r| r.into_model()).collect();
-    Ok(Json(sessions))
+    Ok(Json(
+        rows.into_iter()
+            .map(ReadingSessionRow::into_model)
+            .collect::<Vec<_>>(),
+    ))
 }
-
-// GET /api/files/{id}/sessions ------------------------------------------------
-
-pub async fn list_file_sessions(
-    AuthenticatedUser(user): AuthenticatedUser,
-    State(st): State<St>,
-    Path(file_id): Path<String>,
-) -> Result<impl IntoResponse, ApiError> {
-    // `load_visible_file` enforces the caller can view the file; its
-    // return value is otherwise unused here.
-    let _file = load_visible_file(&st, &user, &file_id).await?;
-
-    let mut conn = st.diesel_db.get().await?;
-    let rows: Vec<SessionRow> = sessions::table
-        .filter(sessions::user_id.eq(&user.id))
-        .filter(sessions::file_id.eq(&file_id))
-        .order(sessions::updated_at.desc())
-        .select(SessionRow::as_select())
-        .load(&mut conn)
-        .await?;
-    Ok(Json(SessionsResponse {
-        file_id,
-        sessions: rows.into_iter().map(|r| r.into_model()).collect(),
-    }))
-}
-
-// POST /api/files/{id}/sessions -------------------------------------------------
 
 #[derive(Deserialize)]
 pub struct CreateSession {
@@ -84,132 +69,192 @@ pub struct CreateSession {
 pub async fn create_session(
     AuthenticatedUser(user): AuthenticatedUser,
     State(st): State<St>,
-    Path(file_id): Path<String>,
     Json(req): Json<CreateSession>,
 ) -> Result<impl IntoResponse, ApiError> {
-    load_visible_file(&st, &user, &file_id).await?;
-
-    let label = req
-        .label
-        .filter(|l| !l.trim().is_empty())
-        .unwrap_or_else(|| "default".into());
+    let label = req.label.unwrap_or_else(|| "default".into());
     let label = label.trim();
-    if label.chars().count() > 64 {
-        return Err(ApiError::bad_request("label too long (max 64 chars)"));
+    if label.is_empty() || label.chars().count() > 64 {
+        return Err(ApiError::bad_request("label must contain 1 to 64 chars"));
     }
-
-    let id = uuid::Uuid::new_v4().simple().to_string();
     let mut conn = st.diesel_db.get().await?;
-    diesel::insert_into(sessions::table)
+    diesel::insert_into(reading_sessions::table)
         .values((
-            sessions::id.eq(&id),
-            sessions::user_id.eq(&user.id),
-            sessions::file_id.eq(&file_id),
-            sessions::label.eq(label),
+            reading_sessions::id.eq(uuid::Uuid::new_v4().simple().to_string()),
+            reading_sessions::user_id.eq(&user.id),
+            reading_sessions::label.eq(label),
         ))
-        .on_conflict((sessions::user_id, sessions::file_id, sessions::label))
+        .on_conflict((reading_sessions::user_id, reading_sessions::label))
         .do_nothing()
         .execute(&mut conn)
         .await?;
-
-    let row: SessionRow = sessions::table
-        .filter(sessions::user_id.eq(&user.id))
-        .filter(sessions::file_id.eq(&file_id))
-        .filter(sessions::label.eq(label))
-        .select(SessionRow::as_select())
+    let row = reading_sessions::table
+        .filter(reading_sessions::user_id.eq(&user.id))
+        .filter(reading_sessions::label.eq(label))
+        .select(ReadingSessionRow::as_select())
         .first(&mut conn)
         .await?;
     Ok((StatusCode::CREATED, Json(row.into_model())))
 }
 
-// PUT /api/sessions/{id} --------------------------------------------------------
-
-#[derive(Deserialize)]
-pub struct UpdatePosition {
-    pub chapter_idx: Option<u32>,
-    /// New chapter progress: either a scroll fraction (`{fraction}`) or a
-    /// character offset (`{offset}`). Sending both is rejected at
-    /// deserialization; the two channels are mutually exclusive.
-    pub in_chapter: Option<InChapter>,
-}
-
-pub async fn update_session(
+pub async fn list_file_sessions(
     AuthenticatedUser(user): AuthenticatedUser,
     State(st): State<St>,
-    Path(session_id): Path<String>,
-    Json(req): Json<UpdatePosition>,
+    Path(file_id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let mut conn = st.diesel_db.get().await?;
-    let row: Option<SessionRow> = sessions::table
-        .find(&session_id)
+    load_visible_file(&st, &user, &file_id).await?;
+    let rows = sessions::table
+        .filter(sessions::user_id.eq(&user.id))
+        .filter(sessions::file_id.eq(&file_id))
+        .order(sessions::updated_at.desc())
         .select(SessionRow::as_select())
-        .first(&mut conn)
+        .load(&mut st.diesel_db.get().await?)
+        .await?;
+    Ok(Json(SessionsResponse {
+        file_id,
+        sessions: rows.into_iter().map(SessionRow::into_model).collect(),
+    }))
+}
+
+pub async fn list_progress(
+    AuthenticatedUser(user): AuthenticatedUser,
+    State(st): State<St>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    owned_session(&st, &user, &id).await?;
+    let rows = sessions::table
+        .filter(sessions::reading_session_id.eq(id))
+        .order(sessions::updated_at.desc())
+        .select(SessionRow::as_select())
+        .load(&mut st.diesel_db.get().await?)
+        .await?;
+    Ok(Json(
+        rows.into_iter()
+            .map(SessionRow::into_model)
+            .collect::<Vec<_>>(),
+    ))
+}
+
+async fn load_progress(
+    st: &St,
+    session_id: &str,
+    file_id: &str,
+) -> Result<Option<SessionRow>, ApiError> {
+    Ok(sessions::table
+        .filter(sessions::reading_session_id.eq(session_id))
+        .filter(sessions::file_id.eq(file_id))
+        .select(SessionRow::as_select())
+        .first(&mut st.diesel_db.get().await?)
         .await
-        .optional()?;
-    let Some(row) = row else {
-        return Err(ApiError::not_found("session"));
-    };
-    if row.user_id != user.id && user.role != mandara_core::model::Role::Admin {
-        return Err(ApiError::Forbidden);
-    }
+        .optional()?)
+}
 
-    let chapter_count = st
-        .library
-        .get_file(&row.file_id)
-        .await?
-        .map(|f| f.chapter_count)
-        .unwrap_or(0);
-    let position = Position {
-        chapter_idx: req.chapter_idx.unwrap_or(row.chapter_idx.max(0) as u32),
-        in_chapter: req.in_chapter.unwrap_or(InChapter::Fraction {
-            fraction: row.fraction,
-        }),
-    }
-    .clamped(chapter_count);
-
-    // Timestamp generated on the Rust side in the stored format (the DB
-    // clock is no longer consulted for updates).
+async fn store_progress(
+    st: &St,
+    context: ReadingSessionRow,
+    file_id: &str,
+    position: Position,
+) -> Result<ReadingProgress, ApiError> {
     let now = crate::time::DbTs::now();
-    diesel::update(sessions::table.find(&session_id))
+    let position_kind = match position.in_chapter {
+        InChapter::Fraction { .. } => "fraction",
+        InChapter::CharOffset { .. } => "offset",
+    };
+    let mut conn = st.diesel_db.get().await?;
+    diesel::insert_into(sessions::table)
+        .values((
+            sessions::id.eq(uuid::Uuid::new_v4().simple().to_string()),
+            sessions::user_id.eq(context.user_id),
+            sessions::label.eq(context.label),
+            sessions::reading_session_id.eq(&context.id),
+            sessions::file_id.eq(file_id),
+            sessions::chapter_idx.eq(i64::from(position.chapter_idx)),
+            sessions::offset.eq(i64::from(position.offset())),
+            sessions::fraction.eq(position.fraction()),
+            sessions::position_kind.eq(position_kind),
+            sessions::updated_at.eq(now.as_str()),
+        ))
+        .on_conflict((sessions::reading_session_id, sessions::file_id))
+        .do_update()
         .set((
             sessions::chapter_idx.eq(i64::from(position.chapter_idx)),
             sessions::offset.eq(i64::from(position.offset())),
             sessions::fraction.eq(position.fraction()),
+            sessions::position_kind.eq(position_kind),
             sessions::updated_at.eq(now.as_str()),
         ))
         .execute(&mut conn)
         .await?;
-
-    let updated: SessionRow = sessions::table
-        .find(&session_id)
+    let row = sessions::table
+        .filter(sessions::reading_session_id.eq(context.id))
+        .filter(sessions::file_id.eq(file_id))
         .select(SessionRow::as_select())
         .first(&mut conn)
         .await?;
-    Ok(Json(updated.into_model()))
+    Ok(row.into_model())
 }
 
-// DELETE /api/sessions/{id} ----------------------------------------------------
+#[derive(Deserialize)]
+pub struct UpdatePosition {
+    pub chapter_idx: Option<u32>,
+    pub in_chapter: Option<InChapter>,
+}
+
+pub async fn update_progress(
+    AuthenticatedUser(user): AuthenticatedUser,
+    State(st): State<St>,
+    Path((id, file_id)): Path<(String, String)>,
+    Json(req): Json<UpdatePosition>,
+) -> Result<impl IntoResponse, ApiError> {
+    let context = owned_session(&st, &user, &id).await?;
+    let file = load_visible_file(&st, &user, &file_id).await?;
+    let old = load_progress(&st, &id, &file_id)
+        .await?
+        .map(SessionRow::into_model)
+        .map(|p| p.position)
+        .unwrap_or_default();
+    let position = Position {
+        chapter_idx: req.chapter_idx.unwrap_or(old.chapter_idx),
+        in_chapter: req.in_chapter.unwrap_or(old.in_chapter),
+    }
+    .clamped(file.chapter_count);
+    Ok(Json(
+        store_progress(&st, context, &file_id, position).await?,
+    ))
+}
+
+#[derive(Deserialize)]
+pub struct SyncProgress {
+    pub source_session_id: String,
+}
+
+/// Copy only this file, including backwards moves; never merge by maximum.
+pub async fn sync_progress(
+    AuthenticatedUser(user): AuthenticatedUser,
+    State(st): State<St>,
+    Path((id, file_id)): Path<(String, String)>,
+    Json(req): Json<SyncProgress>,
+) -> Result<impl IntoResponse, ApiError> {
+    let target = owned_session(&st, &user, &id).await?;
+    owned_session(&st, &user, &req.source_session_id).await?;
+    if id == req.source_session_id {
+        return Err(ApiError::bad_request("source and target must differ"));
+    }
+    let file = load_visible_file(&st, &user, &file_id).await?;
+    let source = load_progress(&st, &req.source_session_id, &file_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("source progress"))?;
+    let position = source.into_model().position.clamped(file.chapter_count);
+    Ok(Json(store_progress(&st, target, &file_id, position).await?))
+}
 
 pub async fn delete_session(
     AuthenticatedUser(user): AuthenticatedUser,
     State(st): State<St>,
-    Path(session_id): Path<String>,
+    Path(id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let mut conn = st.diesel_db.get().await?;
-    let owner: Option<String> = sessions::table
-        .find(&session_id)
-        .select(sessions::user_id)
-        .first(&mut conn)
-        .await
-        .optional()?;
-    let Some(owner) = owner else {
-        return Err(ApiError::not_found("session"));
-    };
-    if owner != user.id && user.role != mandara_core::model::Role::Admin {
-        return Err(ApiError::Forbidden);
-    }
-    diesel::delete(sessions::table.find(&session_id))
-        .execute(&mut conn)
+    owned_session(&st, &user, &id).await?;
+    diesel::delete(reading_sessions::table.find(id))
+        .execute(&mut st.diesel_db.get().await?)
         .await?;
     Ok(StatusCode::NO_CONTENT)
 }

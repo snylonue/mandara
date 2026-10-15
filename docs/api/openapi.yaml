@@ -11,8 +11,9 @@ info:
 
     Model overview: `books` are pure metadata entries; `book_files` are the
     actual books (uploads or virtual plugin books). Several files can share
-    one metadata entry. Chapters, reading sessions and shares attach to
-    files. Every file is either `private` (owner + admins only) or `public`
+    one metadata entry. Chapters, reading progress and shares attach to
+    files. Each user-wide reading session holds independent progress for
+    every file. Every file is either `private` (owner + admins only) or `public`
     (all logged-in users).
 
     Protected endpoints authenticate requests before parsing path, query,
@@ -33,7 +34,7 @@ tags:
   - name: files
     description: Book files (uploads & plugin books), chapters, reading
   - name: sessions
-    description: Reading sessions (per-user, per-file)
+    description: User-wide reading contexts and per-file progress
   - name: shares
     description: Public share links (anonymous read / progress follow)
   - name: plugins
@@ -1241,18 +1242,14 @@ paths:
   /api/sessions:
     get:
       tags: [sessions]
-      summary: Every reading session of the caller, newest first
-      description: |
-        Progress of one user across all files, in a single request — the
-        shelf and series pages derive per-book/per-volume progress from
-        it (only sessions on files the caller may still view are usable
-        by the client, which maps `file_id` through its book list).
+      summary: List user-wide reading contexts (oldest first)
       operationId: listAllSessions
       security:
         - bearerAuth: []
+      description: Account creation creates one ordinary context. All contexts are deletable; listing an empty collection does not create a replacement. New contexts start empty.
       responses:
         "200":
-          description: Sessions of the caller, ordered by `updated_at` desc
+          description: Reading contexts
           content:
             application/json:
               schema:
@@ -1261,35 +1258,16 @@ paths:
                   $ref: "#/components/schemas/ReadingSession"
         "401":
           $ref: "#/components/responses/Unauthorized"
-
-  /api/files/{id}/sessions:
-    get:
-      tags: [sessions]
-      summary: Current user's reading sessions for a file
-      operationId: listSessions
-      security:
-        - bearerAuth: []
-      parameters:
-        - $ref: "#/components/parameters/FileId"
-      responses:
-        "200":
-          description: Sessions of the caller for this file
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/SessionsResponse"
         "403":
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
     post:
       tags: [sessions]
-      summary: Create a session (reuses an existing one with the same label)
+      summary: Create a context or reuse the same label
       operationId: createSession
       security:
         - bearerAuth: []
-      parameters:
-        - $ref: "#/components/parameters/FileId"
       requestBody:
         required: true
         content:
@@ -1298,50 +1276,47 @@ paths:
               $ref: "#/components/schemas/CreateSession"
       responses:
         "201":
-          description: Created (or the existing session with that label)
+          description: Created or existing context
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ReadingSession"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-
-  /api/sessions/{id}:
-    put:
-      tags: [sessions]
-      summary: Update session progress (all fields optional; clamped)
-      operationId: updateSession
-      security:
-        - bearerAuth: []
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-          description: Session id
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/UpdatePosition"
-      responses:
-        "200":
-          description: Updated session
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ReadingSession"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/files/{id}/sessions:
+    get:
+      tags: [sessions]
+      summary: List existing per-file progress across contexts
+      operationId: listSessions
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/FileId"
+      responses:
+        "200":
+          description: Per-file progress; untouched contexts are omitted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/sessions/{id}:
     delete:
       tags: [sessions]
-      summary: Delete a session (owner or admin)
+      summary: Delete an owned context and all its progress
       operationId: deleteSession
       security:
         - bearerAuth: []
@@ -1358,6 +1333,118 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+
+  /api/sessions/{id}/progress:
+    get:
+      tags: [sessions]
+      summary: List all file progress in a context owned by the caller
+      operationId: listProgress
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      description: Map file ids through visible book lists before displaying progress.
+      responses:
+        "200":
+          description: Progress in this context
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ReadingProgress"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/sessions/{id}/files/{file_id}/progress:
+    put:
+      tags: [sessions]
+      summary: Create or update only this file progress (clamped)
+      operationId: updateProgress
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: file_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdatePosition"
+      description: Omitted fields retain the current position, or zero for an untouched file. Only the owner can write; file visibility is enforced.
+      responses:
+        "200":
+          description: Saved progress
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadingProgress"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/sessions/{id}/files/{file_id}/sync:
+    post:
+      tags: [sessions]
+      summary: Copy this file progress from another owned context
+      operationId: syncProgress
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: file_id
+          in: path
+          required: true
+          schema:
+            type: string
+      description: Explicitly overwrite the target position, including backwards moves. No other file or source progress changes. A missing source progress returns 404; copying to the same context returns 400.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SyncProgress"
+      responses:
+        "200":
+          description: Copied progress
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadingProgress"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "400":
+          $ref: "#/components/responses/BadRequest"
 
   /api/files/{id}/shares:
     post:
@@ -2047,10 +2134,28 @@ components:
 
     ReadingSession:
       type: object
-      required: [id, user_id, file_id, label, position, updated_at]
+      required: [id, user_id, label, created_at]
       properties:
         id:
           type: string
+        user_id:
+          type: string
+        label:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    ReadingProgress:
+      type: object
+      required: [id, session_id, user_id, file_id, label, position, updated_at]
+      properties:
+        id:
+          type: string
+          description: Stable per-file progress id, also used by legacy progress shares.
+        session_id:
+          type: string
+          description: User-wide reading context id.
         user_id:
           type: string
         file_id:
@@ -2072,15 +2177,23 @@ components:
         sessions:
           type: array
           items:
-            $ref: "#/components/schemas/ReadingSession"
+            $ref: "#/components/schemas/ReadingProgress"
 
     CreateSession:
       type: object
       properties:
         label:
           type: string
+          minLength: 1
           maxLength: 64
-          description: Defaults to "default"
+          description: Trimmed label. Defaults to "default"; reuses the same label for this user.
+
+    SyncProgress:
+      type: object
+      required: [source_session_id]
+      properties:
+        source_session_id:
+          type: string
 
     UpdatePosition:
       type: object
@@ -2118,7 +2231,7 @@ components:
           $ref: "#/components/schemas/ShareKind"
         session_id:
           type: string
-          description: Required when kind is "session"
+          description: Per-file ReadingProgress.id (not the context id), required when kind is "session"
         expires_days:
           type: integer
           minimum: 1

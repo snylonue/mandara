@@ -421,8 +421,8 @@ impl PluginRuntime {
     /// than [`MAX_DECLARE_BOOKS`] books / [`MAX_DECLARE_CHAPTERS`]
     /// chapters (warns beyond 90% of the cap).
     pub fn declare(&self, instance: &PluginInstance) -> Result<Option<Vec<DeclaredBook>>> {
-        let declared = self
-            .invoke_with_config(instance, |store, b, config| b.call_declare(store, config))?;
+        let declared =
+            self.invoke_with_config(instance, |store, b, config| b.call_declare(store, config))?;
         if let Some(books) = &declared {
             let chapters = books
                 .iter()
