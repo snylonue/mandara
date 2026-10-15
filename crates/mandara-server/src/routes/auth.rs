@@ -63,7 +63,7 @@ pub async fn register(
     let first = users::table.count().get_result::<i64>(&mut conn).await? == 0;
     let role = if first { Role::Admin } else { Role::User };
     let created_at = chrono::Utc::now();
-    let result = diesel::insert_into(users::table)
+    match diesel::insert_into(users::table)
         .values((
             users::id.eq(&id),
             users::username.eq(username.as_ref()),
@@ -72,17 +72,15 @@ pub async fn register(
             users::created_at.eq(created_at),
         ))
         .execute(&mut conn)
-        .await;
-    if matches!(
-        &result,
+        .await
+    {
         Err(diesel::result::Error::DatabaseError(
             diesel::result::DatabaseErrorKind::UniqueViolation,
-            _
-        ))
-    ) {
-        return Err(ApiError::Conflict("username already taken".into()));
-    }
-    result?;
+            _,
+        )) => return Err(ApiError::Conflict("username already taken".into())),
+        Err(e) => return Err(e.into()),
+        Ok(_) => {}
+    };
 
     let user = User {
         id,
