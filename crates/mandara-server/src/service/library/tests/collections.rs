@@ -469,8 +469,27 @@ async fn search_annotations_batch_matches_and_preserve_mixed_result_order() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+#[test]
+fn image_ids_borrow_html_and_preserve_reference_order_and_duplicates() {
+    let html = String::from(
+        r#"正文<img src="/api/images/甲"><img src="https://example.com/remote"><img src="/api/images/b"><img src="/api/images/甲"><img src="/api/images/unfinished"#,
+    );
+    let ids: Vec<&str> = image_ids_in_html(&html).collect();
+    assert_eq!(ids, ["甲", "b", "甲"]);
+    for id in ids {
+        assert!(html.as_bytes().as_ptr_range().contains(&id.as_ptr()));
+    }
+    assert!(image_ids_in_html("").next().is_none());
+    assert!(image_ids_in_html("<p>正文</p>").next().is_none());
+    assert!(
+        image_ids_in_html(r#"<img src="/api/images/unfinished"#)
+            .next()
+            .is_none()
+    );
+}
+
 #[tokio::test]
-async fn image_dimensions_stream_queries_lazily_and_deduplicates_across_batches() {
+async fn image_dimensions_stream_queries_lazily_without_cross_batch_deduplication() {
     let (library, _, dir) = download_fixture().await;
     library
         .diesel_db
@@ -487,12 +506,10 @@ async fn image_dimensions_stream_queries_lazily_and_deduplicates_across_batches(
     let queries = count_selects(&library.diesel_db).await;
     let consumed = Arc::new(AtomicUsize::new(0));
     let observed = consumed.clone();
-    let ids = (0..=500)
-        .chain([0])
-        .inspect(move |_| {
-            observed.fetch_add(1, Ordering::SeqCst);
-        })
-        .map(|i| format!("{i:064x}"));
+    let source_ids: Vec<_> = (0..=500).chain([0]).map(|i| format!("{i:064x}")).collect();
+    let ids = source_ids.iter().map(String::as_str).inspect(move |_| {
+        observed.fetch_add(1, Ordering::SeqCst);
+    });
     let dimensions = {
         let mut dimensions = std::pin::pin!(stored_image_dimensions(&library.diesel_db, ids));
         assert_eq!(queries.as_ref().load(Ordering::SeqCst), 0);
@@ -500,15 +517,36 @@ async fn image_dimensions_stream_queries_lazily_and_deduplicates_across_batches(
         let first = dimensions.try_next().await.unwrap().unwrap();
         assert_eq!(queries.as_ref().load(Ordering::SeqCst), 1);
         assert_eq!(consumed.as_ref().load(Ordering::SeqCst), QUERY_BATCH_SIZE);
-        let mut dimensions = dimensions.try_collect::<HashMap<_, _>>().await.unwrap();
-        dimensions.insert(first.0, first.1);
+        let mut dimensions = dimensions.try_collect::<Vec<_>>().await.unwrap();
+        dimensions.insert(0, first);
         dimensions
     };
+    assert_eq!(
+        dimensions.len(),
+        502,
+        "the query layer must not deduplicate across batches"
+    );
+    let dimensions: HashMap<_, _> = dimensions.into_iter().collect();
     assert_eq!(dimensions.len(), 501);
     assert_eq!(dimensions[&format!("{:064x}", 0)], (1, 2));
     assert_eq!(dimensions[&format!("{:064x}", 500)], (501, 502));
     assert_eq!(queries.swap(0, Ordering::SeqCst), 2);
     assert_eq!(consumed.as_ref().load(Ordering::SeqCst), 502);
+    let html = format!(r#"<img src="/api/images/{:064x}">"#, 0).repeat(QUERY_BATCH_SIZE * 2 + 1);
+    let annotated = with_stored_dims(&library.diesel_db, &html).await;
+    assert_eq!(
+        queries.swap(0, Ordering::SeqCst),
+        1,
+        "the caller deduplicates references before querying"
+    );
+    assert_eq!(
+        annotated.matches("width=\"1\" height=\"2\"").count(),
+        QUERY_BATCH_SIZE * 2 + 1
+    );
+    assert_eq!(
+        with_stored_dims(&library.diesel_db, "<p>正文</p>").await,
+        "<p>正文</p>"
+    );
     let mut empty = std::pin::pin!(stored_image_dimensions(&library.diesel_db, []));
     assert!(empty.try_next().await.unwrap().is_none());
     assert_eq!(queries.as_ref().load(Ordering::SeqCst), 0);

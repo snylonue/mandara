@@ -2698,24 +2698,16 @@ pub async fn ingest_parsed_book(
     Ok(())
 }
 
-/// The `/api/images/{id}` references contained in `html`, in order of
-/// first appearance (duplicates removed).
-fn image_ids_in_html(html: &str) -> Vec<String> {
+/// Iterate over borrowed image reference IDs in HTML order, preserving duplicates.
+fn image_ids_in_html(html: &str) -> impl Iterator<Item = &str> {
     const NEEDLE: &str = "src=\"/api/images/";
-    let mut ids = Vec::new();
     let mut rest = html;
-    while let Some(pos) = rest.find(NEEDLE) {
-        let after_id = &rest[pos + NEEDLE.len()..];
-        let Some(id_len) = after_id.find('"') else {
-            break;
-        };
-        let id = &after_id[..id_len];
-        if !ids.iter().any(|seen: &String| seen == id) {
-            ids.push(id.to_string());
-        }
-        rest = &after_id[id_len..];
-    }
-    ids
+    std::iter::from_fn(move || {
+        let pos = rest.find(NEEDLE)?;
+        let (id, after) = rest[pos + NEEDLE.len()..].split_once('"')?;
+        rest = after;
+        Some(id)
+    })
 }
 
 /// Add `width`/`height` attributes to `/api/images/{id}` `<img>` tags that
@@ -2764,7 +2756,7 @@ pub fn annotate_image_dimensions(html: &str, dims_by_id: &HashMap<String, (i64, 
 /// wrapper around the pure [`annotate_image_dimensions`] (covered by the
 /// tests directly).
 async fn with_stored_dims(db: &DieselDb, html: &str) -> String {
-    let ids = image_ids_in_html(html);
+    let ids: HashSet<_> = image_ids_in_html(html).collect();
     let dims = stored_image_dimensions(db, ids)
         .try_collect::<HashMap<_, _>>()
         .await
@@ -2774,9 +2766,10 @@ async fn with_stored_dims(db: &DieselDb, html: &str) -> String {
 
 /// Resolve shared image references once and annotate chapters in place.
 async fn with_stored_dims_many(db: &DieselDb, chapters: &mut [Chapter]) {
-    let ids = chapters
+    let ids: HashSet<_> = chapters
         .iter()
-        .flat_map(|chapter| image_ids_in_html(&chapter.content));
+        .flat_map(|chapter| image_ids_in_html(&chapter.content))
+        .collect();
     let dims = stored_image_dimensions(db, ids)
         .try_collect::<HashMap<_, _>>()
         .await
@@ -2786,13 +2779,11 @@ async fn with_stored_dims_many(db: &DieselDb, chapters: &mut [Chapter]) {
     }
 }
 
-/// Stream stored image dimensions, resolving each distinct image at most once.
+/// Stream stored image dimensions in batches; callers decide whether to deduplicate IDs.
 fn stored_image_dimensions<'a>(
     db: &'a DieselDb,
-    ids: impl IntoIterator<Item = String, IntoIter: Send> + 'a,
+    ids: impl IntoIterator<Item = &'a str, IntoIter: Send> + 'a,
 ) -> impl Stream<Item = Result<(String, (i64, i64)), ApiError>> + Send + 'a {
-    let mut seen = HashSet::new();
-    let ids = ids.into_iter().filter(move |id| seen.insert(id.clone()));
     stream::iter(ids)
         .chunks(QUERY_BATCH_SIZE)
         .then(move |batch| async move {
