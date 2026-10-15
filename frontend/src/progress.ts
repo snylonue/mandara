@@ -5,7 +5,7 @@
 // — the same notion the reader saves. Only `fraction` is written by the web
 // reader, so an `offset`-based session (non-web readers) counts as the start
 // of its chapter.
-import type { BookListEntry, ReadingProgress, SessionList } from "./types";
+import type { BookEntry, ReadingProgress, SessionList } from "./types";
 
 /** Fraction of a file from which it counts as read. */
 export const FINISHED_AT = 0.98;
@@ -51,11 +51,11 @@ export function progressByFile(
 export type WithProgress<T> = T & { progress: FileProgress | null };
 
 /** A shelf entry: a book list entry plus the caller's progress in it. */
-export type ShelfEntry = WithProgress<BookListEntry>;
+export type ShelfEntry = WithProgress<BookEntry>;
 
 /**
  * Attach per-book progress to a book list (keeps the list order). Generic
- * over the entry shape so `BookDetail` rows work too.
+ * over the entry shape so `BookEntry` rows work too.
  */
 export function attachProgress<T extends { files: FileLike[] }>(
   entries: T[],

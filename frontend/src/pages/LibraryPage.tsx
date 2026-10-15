@@ -22,7 +22,7 @@ import { useToast } from "../components/toast";
 import { usePluginInstances } from "../components/SourceSearch";
 import { IconBook, IconGrid, IconGridCompact, IconList } from "../components/icons";
 import { attachProgress, progressByFile, type ShelfEntry } from "../progress";
-import type { BookListEntry } from "../types";
+import type { BookEntry } from "../types";
 
 type SortKey = "default" | "title" | "recent";
 type GroupKey = "series" | "flat" | "author";
@@ -94,7 +94,7 @@ export function LibraryPage() {
     }
     setParams(p, { replace: true });
   };
-  const [entries, setEntries] = useState<BookListEntry[] | null>(null);
+  const [entries, setEntries] = useState<BookEntry[] | null>(null);
   const syncedSearch = useRef<string | null>(null);
   const adopted = useRef(false);
   const sessions = useSelectedProgress();
@@ -111,7 +111,7 @@ export function LibraryPage() {
     async (query: string) => {
       const mySeq = ++searchSeq.current;
       try {
-        const list = await api<BookListEntry[]>(`/books?q=${encodeURIComponent(query)}`);
+        const list = await api<BookEntry[]>(`/books?q=${encodeURIComponent(query)}`);
         if (searchSeq.current === mySeq) setEntries(list);
       } catch (err) {
         if (searchSeq.current !== mySeq) return;

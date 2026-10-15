@@ -16,7 +16,7 @@ use mandara_core::{SeriesExt, SeriesStatus};
 use crate::error::ApiError;
 use crate::extractors::AuthenticatedUser;
 use crate::routes::St;
-use crate::routes::books::BookDetail;
+use crate::service::library::BookEntry;
 
 /// A series as seen by the API: metadata + its member count.
 #[derive(Serialize)]
@@ -67,7 +67,7 @@ impl SeriesBrief {
 #[derive(Serialize)]
 pub struct SeriesDetail {
     pub series: SeriesBrief,
-    pub books: Vec<BookDetail>,
+    pub books: Vec<BookEntry>,
 }
 
 // GET /api/series -----------------------------------------------------------
@@ -77,10 +77,10 @@ pub async fn list_series(
     State(st): State<St>,
 ) -> Result<impl IntoResponse, ApiError> {
     let series_list = st.library.list_series(&user).await?;
-    let mut out = Vec::with_capacity(series_list.len());
-    for (series, count) in series_list {
-        out.push(SeriesBrief::project(series, count));
-    }
+    let out: Vec<_> = series_list
+        .into_iter()
+        .map(|(series, count)| SeriesBrief::project(series, count))
+        .collect();
     Ok(Json(out))
 }
 
@@ -137,16 +137,7 @@ async fn load_series_detail(
         .await?
         .ok_or_else(|| ApiError::not_found("series"))?;
     let volume_count = st.library.series_volume_count(id).await?;
-    let member_books = st.library.series_member_books(id).await?;
-    let mut books = Vec::with_capacity(member_books.len());
-    for book in member_books {
-        let files = st.library.files_of_book(&book.id, user).await?;
-        books.push(BookDetail {
-            series: Some(series.clone()),
-            book,
-            files,
-        });
-    }
+    let books = st.library.list_series_books(&series, user).await?;
     Ok(SeriesDetail {
         series: SeriesBrief::project(series, volume_count),
         books,

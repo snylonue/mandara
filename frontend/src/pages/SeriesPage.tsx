@@ -30,8 +30,7 @@ import {
   type WithProgress,
 } from "../progress";
 import type {
-  BookDetail,
-  BookListEntry,
+  BookEntry,
   SeriesBrief,
   SeriesDetail,
 } from "../types";
@@ -49,7 +48,7 @@ function VolumeCard({
   onMove,
   onRemove,
 }: {
-  entry: WithProgress<BookDetail>;
+  entry: WithProgress<BookEntry>;
   seriesTitle: string;
   canManage: boolean;
   orderIndex: number;
@@ -130,10 +129,10 @@ export function SeriesPage() {
   const [order, setOrder] = useState<string[] | null>(null);
   const [editOpen, setEditOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
-  const [batchDraft, setBatchDraft] = useState<{ seriesId: string; books: BookDetail[] } | null>(null);
+  const [batchDraft, setBatchDraft] = useState<{ seriesId: string; books: BookEntry[] } | null>(null);
   useEffect(() => { setBatchDraft(null); }, [id]);
   const [pick, setPick] = useState<Set<string>>(new Set());
-  const [unassigned, setUnassigned] = useState<BookListEntry[]>([]);
+  const [unassigned, setUnassigned] = useState<BookEntry[]>([]);
 
   const load = useCallback(async () => {
     if (currentId.current !== id) return;
@@ -166,7 +165,7 @@ export function SeriesPage() {
   const memberIds = order ?? detail?.books.map((b) => b.book.id) ?? [];
   const membersByOrder = useMemo(() => {
     const byId = new Map(detail?.books.map((b) => [b.book.id, b]) ?? []);
-    return memberIds.map((mid) => byId.get(mid)).filter((b): b is BookDetail => !!b);
+    return memberIds.map((mid) => byId.get(mid)).filter((b): b is BookEntry => !!b);
   }, [detail, memberIds]);
 
   // Progress in the selected context, by file and then by volume.
@@ -206,7 +205,7 @@ export function SeriesPage() {
 
   async function openAddDialog() {
     try {
-      const list = await api<BookListEntry[]>("/books");
+      const list = await api<BookEntry[]>("/books");
       // Only books the caller may manage (server checks it too).
       const managed = list.filter(
         (e) =>
@@ -515,7 +514,7 @@ function AddMembersDialog({
   open: boolean;
   seriesId: string;
   members: string[];
-  unassigned: BookListEntry[];
+  unassigned: BookEntry[];
   pick: Set<string>;
   setPick: (p: Set<string>) => void;
   onClose: () => void;

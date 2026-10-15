@@ -22,7 +22,7 @@ import {
 } from "../components/SourceSearch";
 import type {
   AcquireResult,
-  BookDetail,
+  BookEntry,
   BookMeta,
   FileMeta,
   ReadingProgress,
@@ -224,7 +224,7 @@ export function BookDetailPage() {
   const { user } = useAuth();
   const toast = useToast();
   const instances = usePluginInstances();
-  const [detail, setDetail] = useState<BookDetail | null>(null);
+  const [detail, setDetail] = useState<BookEntry | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [share, setShare] = useState<ShareInfo | null>(null);
   const [attachLabel, setAttachLabel] = useState("");
@@ -246,7 +246,7 @@ export function BookDetailPage() {
 
   const load = useCallback(async () => {
     try {
-      const d = await api<BookDetail>(`/books/${id}`);
+      const d = await api<BookEntry>(`/books/${id}`);
       setDetail(d);
       setLoadError(null);
     } catch (err) {

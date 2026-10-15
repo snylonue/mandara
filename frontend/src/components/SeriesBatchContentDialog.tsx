@@ -3,21 +3,21 @@ import { useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { useAuth } from "../auth";
-import type { AcquireResult, BookDetail, SeriesBrief, User } from "../types";
+import type { AcquireResult, BookEntry, SeriesBrief, User } from "../types";
 import { Modal } from "./Modal";
 import { SeriesContentMatch, type SeriesContentPlan } from "./SeriesContentMatch";
 import { usePluginInstances } from "./SourceSearch";
 import { useToast } from "./toast";
 
 /** Attachment requires a visible book, not permission to edit its metadata. */
-export function canAttachVolume(entry: BookDetail, user: User | null): boolean {
+export function canAttachVolume(entry: BookEntry, user: User | null): boolean {
   return Boolean(user && (user.role === "admin" || entry.book.created_by === user.id || entry.files.length > 0));
 }
 
 /** Mounted once per draft, using a snapshot of the saved series order. */
 export function SeriesBatchContentDialog({ series, books, onClose, onChanged }: {
   series: SeriesBrief;
-  books: BookDetail[];
+  books: BookEntry[];
   onClose: () => void;
   onChanged: () => Promise<void>;
 }) {

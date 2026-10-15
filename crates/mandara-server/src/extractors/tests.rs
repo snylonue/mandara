@@ -168,6 +168,104 @@ async fn response_json(response: Response) -> Value {
 }
 
 #[tokio::test]
+async fn book_list_attaches_series_without_dropping_standalone_books() {
+    let fixture = Fixture::new().await;
+    fixture
+        .sql(
+            "INSERT INTO series (id, title) VALUES ('a', '甲系列'), ('b', '乙系列');
+         INSERT INTO books (id, title, created_by, series_id, volume_no) VALUES
+         ('a-first', '甲系列第一卷', 'user', 'a', 1),
+         ('a-second', '甲系列第二卷', 'user', 'a', 2),
+         ('b-only', '乙系列第一卷', 'user', 'b', 1),
+         ('standalone', '独立书籍', 'user', NULL, 0);",
+        )
+        .await;
+    let token = fixture.token("user", Role::User);
+    let response = request(fixture.app(), "GET", "/api/books", Some(&token), "").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    let entries = body.as_array().unwrap();
+    let expected = [
+        ("a-first", Some("a")),
+        ("a-second", Some("a")),
+        ("b-only", Some("b")),
+        ("standalone", None),
+    ];
+    assert_eq!(entries.len(), expected.len());
+    for (entry, (book_id, series_id)) in entries.iter().zip(expected) {
+        assert_eq!(entry["book"]["id"], book_id);
+        assert_eq!(entry["series"]["id"].as_str(), series_id);
+        if series_id.is_none() {
+            assert!(entry["series"].is_null());
+        }
+    }
+    fixture.sql("DELETE FROM series;").await;
+    let response = request(fixture.app(), "GET", "/api/books", Some(&token), "").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    let entries = body.as_array().unwrap();
+    assert_eq!(entries.len(), expected.len());
+    assert!(entries.iter().all(|entry| entry["series"].is_null()));
+}
+
+#[tokio::test]
+async fn book_and_series_responses_keep_streamed_groups_aligned_across_batches() {
+    let fixture = Fixture::new().await;
+    fixture
+        .sql(
+            "INSERT INTO series (id, title, created_by) VALUES ('a', '甲系列', 'user');
+         WITH RECURSIVE n(i) AS (VALUES(0) UNION ALL SELECT i + 1 FROM n WHERE i < 500)
+         INSERT INTO books (id, title, created_by, series_id, volume_no)
+         SELECT printf('book-%04d', i), '系列分卷', 'user', 'a', i FROM n;
+         INSERT INTO books (id, title, created_by) VALUES ('standalone', '独立书籍', 'user');
+         INSERT INTO book_files (id, book_id, source, external_id, visibility, created_at)
+         SELECT 'file-' || id, id, 'local', 'file-' || id, 'public', '2024-01-01T00:00:00Z'
+         FROM books WHERE id LIKE 'book-%' AND id != 'book-0250';
+         INSERT INTO book_files (id, book_id, source, external_id, visibility, created_at)
+         VALUES ('newer', 'book-0500', 'local', 'newer', 'public', '2025-01-01T00:00:00Z'),
+                ('hidden', 'book-0000', 'local', 'hidden', 'private', '2025-01-01T00:00:00Z');",
+        )
+        .await;
+    let token = fixture.token("user", Role::User);
+    let response = request(fixture.app(), "GET", "/api/books", Some(&token), "").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    let entries = body.as_array().unwrap();
+    assert_eq!(entries.len(), 502);
+    for (index, entry) in entries[..501].iter().enumerate() {
+        let id = format!("book-{index:04}");
+        assert_eq!(entry["book"]["id"], id);
+        assert_eq!(entry["series"]["id"], "a");
+        let files = entry["files"].as_array().unwrap();
+        assert_eq!(
+            files.len(),
+            match index {
+                250 => 0,
+                500 => 2,
+                _ => 1,
+            }
+        );
+        assert!(files.iter().all(|file| file["book_id"] == id));
+        assert!(files.iter().all(|file| file["id"] != "hidden"));
+    }
+    assert_eq!(entries[500]["files"][0]["id"], "newer");
+    assert_eq!(entries[501]["book"]["id"], "standalone");
+    assert!(entries[501]["series"].is_null());
+    assert!(entries[501]["files"].as_array().unwrap().is_empty());
+
+    let response = request(fixture.app(), "GET", "/api/series/a", Some(&token), "").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let detail = response_json(response).await;
+    let members = detail["books"].as_array().unwrap();
+    assert_eq!(members.len(), 501);
+    for (member, entry) in members.iter().zip(entries) {
+        assert_eq!(member["book"], entry["book"]);
+        assert_eq!(member["files"], entry["files"]);
+        assert_eq!(member["series"]["id"], "a");
+    }
+}
+
+#[tokio::test]
 async fn bearer_and_cookie_resolve_the_database_user() {
     let fixture = Fixture::new().await;
     let token = fixture.token("user", Role::User);

@@ -574,7 +574,7 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: "#/components/schemas/BookListEntry"
+                  $ref: "#/components/schemas/BookEntry"
         "401":
           $ref: "#/components/responses/Unauthorized"
     post:
@@ -721,7 +721,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/BookDetail"
+                $ref: "#/components/schemas/BookEntry"
         "403":
           $ref: "#/components/responses/Forbidden"
         "404":
@@ -2037,7 +2037,7 @@ components:
           description: Member books in volume order, files filtered by visibility
           type: array
           items:
-            $ref: "#/components/schemas/BookDetail"
+            $ref: "#/components/schemas/BookEntry"
 
     AcquireResult:
       type: object
@@ -2052,9 +2052,9 @@ components:
         books:
           type: array
           items:
-            $ref: "#/components/schemas/BookDetail"
+            $ref: "#/components/schemas/BookEntry"
 
-    BookDetail:
+    BookEntry:
       type: object
       required: [book, files, series]
       properties:
@@ -2062,21 +2062,6 @@ components:
           $ref: "#/components/schemas/BookMeta"
         files:
           description: Files of this book visible to the caller (empty for a metadata-only entry)
-          type: array
-          items:
-            $ref: "#/components/schemas/FileMeta"
-        series:
-          $ref: "#/components/schemas/SeriesBrief"
-          nullable: true
-
-    BookListEntry:
-      type: object
-      required: [book, files, series]
-      properties:
-        book:
-          $ref: "#/components/schemas/BookMeta"
-        files:
-          description: Files of this book visible to the caller
           type: array
           items:
             $ref: "#/components/schemas/FileMeta"

@@ -5,7 +5,7 @@ import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import { api } from "../src/api";
 import { SeriesBatchContentDialog } from "../src/components/SeriesBatchContentDialog";
 import { SeriesPage } from "../src/pages/SeriesPage";
-import type { BookDetail, FileMeta, PluginInstance, SeriesBrief, User } from "../src/types";
+import type { BookEntry, FileMeta, PluginInstance, SeriesBrief, User } from "../src/types";
 
 vi.mock("../src/api", async (importOriginal) => ({ ...await importOriginal<typeof import("../src/api")>(), api: vi.fn() }));
 vi.mock("../src/auth", () => ({ useAuth: () => ({ user: viewer }) }));
@@ -20,7 +20,7 @@ function file(bookId: string): FileMeta {
     format: "txt", label: "已有版本", visibility: "private", owner_id: "reader", chapter_count: 1,
     content_mode: "file", created_at: date };
 }
-let books: BookDetail[];
+let books: BookEntry[];
 let submitted: FormData[];
 let handler: (path: string, init?: RequestInit) => Promise<unknown>;
 const onClose = vi.fn();

@@ -49,6 +49,7 @@ tower-http = { version = "0.7", features = ["cors", "trace", "fs", "limit"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 async-trait = "0.1"
+futures-util = "0.3"
 
 # note: sqlx is used ONLY as the migration runner (sqlx::migrate!);
 # all queries are Diesel DSL against a committed schema.rs (just schema).

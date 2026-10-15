@@ -16,11 +16,12 @@
 //! Visibility is per file: `private` = owner + admins only, `public` =
 //! visible to every logged-in user.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Context as _;
+use futures_util::{Stream, StreamExt as _, TryStreamExt as _, stream};
 use tracing::{info, warn};
 
 use mandara_core::model::{
@@ -33,6 +34,17 @@ use mandara_core::source::{
 use mandara_core::{BookExt, SeriesExt};
 
 use mandara_formats::ParsedBook;
+
+// Leave room for fixed predicates even on SQLite builds with a 999-variable limit.
+const QUERY_BATCH_SIZE: usize = 500;
+
+/// A book response with the files visible to the caller and its parent series.
+#[derive(serde::Serialize)]
+pub struct BookEntry {
+    pub book: BookMeta,
+    pub files: Vec<FileMeta>,
+    pub series: Option<SeriesMeta>,
+}
 
 // `COALESCE(?, col)` for optional string updates: `None` keeps the
 // stored value (nullable target column).
@@ -350,34 +362,61 @@ impl Library {
             .plugins
             .search_books(instance, query, offset, limit)
             .await?;
-        let mut items = Vec::with_capacity(result.items.len());
-        {
-            let mut conn = self.diesel_db.get().await?;
-            for entry in result.items {
-                let book = match &entry {
+        let items = self.annotate_search_items(instance, result.items).await?;
+        Ok((result.total, items))
+    }
+
+    async fn annotate_search_items(
+        &self,
+        instance: &str,
+        entries: Vec<mandara_plugin::CatalogEntry>,
+    ) -> Result<Vec<(mandara_plugin::CatalogEntry, Option<String>)>, ApiError> {
+        let entries: Vec<_> = entries
+            .into_iter()
+            .map(|entry| {
+                let external_id = match &entry {
                     mandara_plugin::CatalogEntry::Single(book) => {
-                        SourceBook::try_from(book.clone())?
+                        Some(SourceBook::try_from(book.clone())?.id)
                     }
                     mandara_plugin::CatalogEntry::Series(series) => {
                         SourceSeries::try_from(series.clone())?;
-                        items.push((entry, None));
-                        continue;
+                        None
                     }
                 };
-                let book_id: Option<String> = schema::books::table
-                    .filter(
-                        schema::books::meta_source
-                            .eq(instance)
-                            .and(schema::books::meta_external_id.eq(&book.id)),
-                    )
-                    .select(schema::books::id)
-                    .first(&mut conn)
-                    .await
-                    .optional()?;
-                items.push((entry, book_id));
+                Ok((entry, external_id))
+            })
+            .collect::<Result<_, ApiError>>()?;
+        let mut seen = HashSet::new();
+        let ids: Vec<_> = entries
+            .iter()
+            .filter_map(|(_, id)| id.as_deref())
+            .filter(|id| seen.insert(*id))
+            .collect();
+        let mut book_ids = HashMap::new();
+        if !ids.is_empty() {
+            let mut conn = self.diesel_db.get().await?;
+            for batch in ids.chunks(QUERY_BATCH_SIZE) {
+                let rows: Vec<(Option<String>, String)> = schema::books::table
+                    .filter(schema::books::meta_source.eq(instance))
+                    .filter(schema::books::meta_external_id.eq_any(batch.iter().copied()))
+                    .select((schema::books::meta_external_id, schema::books::id))
+                    .load(&mut conn)
+                    .await?;
+                for (external_id, id) in rows {
+                    if let Some(external_id) = external_id {
+                        // Keep the first match, as the former per-entry lookup did.
+                        book_ids.entry(external_id).or_insert(id);
+                    }
+                }
             }
         }
-        Ok((result.total, items))
+        Ok(entries
+            .into_iter()
+            .map(|(entry, external_id)| {
+                let id = external_id.and_then(|id| book_ids.get(&id).cloned());
+                (entry, id)
+            })
+            .collect())
     }
 
     /// Materialize exactly one book of a plugin source into the library
@@ -389,7 +428,7 @@ impl Library {
         user: &User,
         instance: &str,
         book_id_in_source: &str,
-    ) -> Result<(BookMeta, FileMeta), ApiError> {
+    ) -> Result<BookEntry, ApiError> {
         let outcome = self
             .acquire_book(
                 user,
@@ -405,9 +444,13 @@ impl Library {
             )
             .await?;
         let (book, file, _rest) = outcome.into_parts();
-        let file = file
-            .ok_or_else(|| ApiError::bad_request("metadata-only acquisition produced no file"))?;
-        Ok((book, file))
+        file.ok_or_else(|| ApiError::bad_request("metadata-only acquisition produced no file"))?;
+        let files = self.files_of_book(&book.id, user).await?;
+        Ok(BookEntry {
+            book,
+            files,
+            series: None,
+        })
     }
 
     /// Store parsed plugin content using the same original/cache path for
@@ -511,27 +554,34 @@ impl Library {
         let members: std::collections::HashSet<_> =
             result.books.iter().map(|b| b.id.as_str()).collect();
         let mut selected = std::collections::HashSet::new();
-        let mut books = Vec::with_capacity(book_ids.len());
-        // Validate membership and resolve full book metadata before writing anything.
-        for id in book_ids {
-            if !members.contains(id.as_str()) || !selected.insert(id) {
-                return Err(ApiError::bad_request(
-                    "book IDs must be distinct members of the selected series",
-                ));
-            }
-            let book = self
-                .plugins
-                .get_book(source, id)
-                .await?
-                .ok_or_else(|| ApiError::not_found("plugin member book"))?;
-            let book = SourceBook::try_from(book)?;
-            if book.id != *id || book.series.as_ref().map(|s| &s.id) != Some(&series.id) {
-                return Err(ApiError::bad_request(
-                    "member book does not belong to the selected series",
-                ));
-            }
-            books.push(book);
-        }
+        // Resolve metadata in request order before writing anything. Plugin calls
+        // may update plugin state, so do not speculatively execute later members.
+        let books: Vec<_> = stream::iter(book_ids)
+            .then(|id| {
+                let valid = members.contains(id.as_str()) && selected.insert(id);
+                let series_id = &series.id;
+                async move {
+                    if !valid {
+                        return Err(ApiError::bad_request(
+                            "book IDs must be distinct members of the selected series",
+                        ));
+                    }
+                    let book = self
+                        .plugins
+                        .get_book(source, id)
+                        .await?
+                        .ok_or_else(|| ApiError::not_found("plugin member book"))?;
+                    let book = SourceBook::try_from(book)?;
+                    if book.id != *id || book.series.as_ref().map(|s| &s.id) != Some(series_id) {
+                        return Err(ApiError::bad_request(
+                            "member book does not belong to the selected series",
+                        ));
+                    }
+                    Ok(book)
+                }
+            })
+            .try_collect()
+            .await?;
         for book in books {
             self.resolve_plugin_metadata(source, Some(&user.id), &book)
                 .await?;
@@ -1355,7 +1405,7 @@ impl Library {
         query: Option<&str>,
         source: Option<&str>,
         user: &User,
-    ) -> Result<Vec<(BookMeta, Vec<FileMeta>)>, ApiError> {
+    ) -> Result<Vec<BookEntry>, ApiError> {
         let pattern = format!("%{}%", query.unwrap_or("").trim());
         let is_admin = user.role == mandara_core::model::Role::Admin;
         let mut conn = self.diesel_db.get().await?;
@@ -1427,40 +1477,30 @@ impl Library {
             .load(&mut conn)
             .await?;
 
-        // Batch-load the visible files of all listed books in one query
-        // (fixes the per-book N+1 of the sqlx version). Source filtering
-        // only decides which books are listed; every file of a listed
-        // book is shown, like the old files_of_book loop.
-        let ids: Vec<String> = rows.iter().map(|b| b.id.clone()).collect();
-        let mut file_q = schema::book_files::table
-            .filter(schema::book_files::book_id.eq_any(ids))
-            .order(schema::book_files::created_at.desc())
-            .select(file_columns())
-            .into_boxed();
-        if !is_admin {
-            file_q = file_q.filter(
-                schema::book_files::visibility
-                    .eq(mandara_core::Visibility::Public)
-                    .or(schema::book_files::owner_id.eq(&user.id)),
-            );
-        }
-        let file_rows: Vec<FileMeta> = file_q.load(&mut conn).await?;
+        // Source filtering chooses books, not which of their visible files to attach.
         drop(conn);
-
-        let mut by_book: std::collections::HashMap<String, Vec<FileMeta>> =
-            std::collections::HashMap::new();
-        for meta in file_rows {
-            by_book.entry(meta.book_id.clone()).or_default().push(meta);
-        }
-
-        let mut books = Vec::new();
-        for book in rows {
-            let files = by_book.remove(&book.id).unwrap_or_default();
-            // Metadata-only entries (no visible files) belong to the
-            // caller and were already admitted by the join filter above.
-            books.push((book, files));
-        }
-        Ok(books)
+        let files = self
+            .files_of_books(rows.iter().map(|book| book.id.as_str()), user)
+            .try_collect::<Vec<_>>()
+            .await?;
+        let series = self
+            .series_by_ids(rows.iter().filter_map(|book| book.series_id.as_deref()))
+            .try_collect::<Vec<_>>()
+            .await?;
+        let mut books = rows.into_iter().zip(files);
+        let mut series = series.into_iter();
+        Ok(std::iter::from_fn(|| {
+            let (book, files) = books.next()?;
+            Some(BookEntry {
+                series: book
+                    .series_id
+                    .as_ref()
+                    .and_then(|_| series.next().flatten()),
+                book,
+                files,
+            })
+        })
+        .collect())
     }
 
     pub async fn get_book(&self, id: &str) -> Result<Option<BookMeta>, ApiError> {
@@ -1471,6 +1511,30 @@ impl Library {
             .await
             .optional()?;
         Ok(row)
+    }
+
+    /// Load a complete book entry with visible files and metadata-owner access.
+    pub async fn get_book_entry(&self, id: &str, user: &User) -> Result<BookEntry, ApiError> {
+        let book = self
+            .get_book(id)
+            .await?
+            .ok_or_else(|| ApiError::not_found("book"))?;
+        let files = self.files_of_book(id, user).await?;
+        if files.is_empty()
+            && user.role != Role::Admin
+            && book.created_by.as_deref() != Some(user.id.as_str())
+        {
+            return Err(ApiError::not_found("book"));
+        }
+        let series = match book.series_id.as_deref() {
+            Some(id) => self.get_series(id).await?,
+            None => None,
+        };
+        Ok(BookEntry {
+            book,
+            files,
+            series,
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1701,17 +1765,31 @@ impl Library {
 
     // ---- series -----------------------------------------------------------
 
-    /// Member books of a series in volume order (all members — file
-    /// visibility is applied per book by the caller; the series itself
-    /// is already visibility-checked).
-    pub async fn series_member_books(&self, id: &str) -> Result<Vec<BookMeta>, ApiError> {
+    /// Complete member entries in volume order, using the already visibility-checked series.
+    pub async fn list_series_books(
+        &self,
+        series: &SeriesMeta,
+        user: &User,
+    ) -> Result<Vec<BookEntry>, ApiError> {
         let rows: Vec<BookMeta> = schema::books::table
-            .filter(schema::books::series_id.eq(id))
+            .filter(schema::books::series_id.eq(&series.id))
             .order(schema::books::volume_no.asc())
             .select(BOOK_COLUMNS)
             .load(&mut self.diesel_db.get().await?)
             .await?;
-        Ok(rows)
+        let files = self
+            .files_of_books(rows.iter().map(|book| book.id.as_str()), user)
+            .try_collect::<Vec<_>>()
+            .await?;
+        Ok(rows
+            .into_iter()
+            .zip(files)
+            .map(|(book, files)| BookEntry {
+                book,
+                files,
+                series: Some(series.clone()),
+            })
+            .collect())
     }
 
     /// Is the series visible to the caller (creator, admin, or ≥1 member
@@ -1746,13 +1824,31 @@ impl Library {
     }
 
     pub async fn get_series(&self, id: &str) -> Result<Option<SeriesMeta>, ApiError> {
-        let row: Option<SeriesMeta> = schema::series::table
-            .find(id)
-            .select(SERIES_COLUMNS)
-            .first(&mut self.diesel_db.get().await?)
-            .await
-            .optional()?;
-        Ok(row)
+        let mut series = std::pin::pin!(self.series_by_ids([id]));
+        Ok(series.try_next().await?.flatten())
+    }
+
+    /// Stream series in input order, preserving duplicates and missing ids as `None`.
+    /// Each batch is queried only when polled, without retaining a connection between batches.
+    pub fn series_by_ids<'a>(
+        &'a self,
+        ids: impl IntoIterator<Item = &'a str, IntoIter: Send> + 'a,
+    ) -> impl Stream<Item = Result<Option<SeriesMeta>, ApiError>> + Send + 'a {
+        stream::iter(ids)
+            .chunks(QUERY_BATCH_SIZE)
+            .then(move |batch| async move {
+                let rows: Vec<SeriesMeta> = schema::series::table
+                    .filter(schema::series::id.eq_any(batch.iter().copied()))
+                    .select(SERIES_COLUMNS)
+                    .load(&mut self.diesel_db.get().await?)
+                    .await?;
+                let by_id: HashMap<_, _> =
+                    rows.into_iter().map(|row| (row.id.clone(), row)).collect();
+                Ok::<_, ApiError>(stream::iter(
+                    batch.into_iter().map(move |id| Ok(by_id.get(id).cloned())),
+                ))
+            })
+            .try_flatten()
     }
 
     /// Number of member books of a series (any visibility).
@@ -2093,21 +2189,44 @@ impl Library {
         book_id: &str,
         user: &User,
     ) -> Result<Vec<FileMeta>, ApiError> {
-        let is_admin = user.role == mandara_core::model::Role::Admin;
-        let mut q = schema::book_files::table
-            .filter(schema::book_files::book_id.eq(book_id))
-            .order(schema::book_files::created_at.desc())
-            .select(file_columns())
-            .into_boxed();
-        if !is_admin {
-            q = q.filter(
-                schema::book_files::visibility
-                    .eq(mandara_core::Visibility::Public)
-                    .or(schema::book_files::owner_id.eq(&user.id)),
-            );
-        }
-        let rows: Vec<FileMeta> = q.load(&mut self.diesel_db.get().await?).await?;
-        Ok(rows)
+        let mut files = std::pin::pin!(self.files_of_books([book_id], user));
+        Ok(files.try_next().await?.unwrap_or_default())
+    }
+
+    /// Stream visible files grouped in input order, preserving duplicates and empty groups.
+    /// Files within each group are newest first.
+    pub fn files_of_books<'a>(
+        &'a self,
+        book_ids: impl IntoIterator<Item = &'a str, IntoIter: Send> + 'a,
+        user: &'a User,
+    ) -> impl Stream<Item = Result<Vec<FileMeta>, ApiError>> + Send + 'a {
+        stream::iter(book_ids)
+            .chunks(QUERY_BATCH_SIZE)
+            .then(move |batch| async move {
+                let mut q = schema::book_files::table
+                    .filter(schema::book_files::book_id.eq_any(batch.iter().copied()))
+                    .order(schema::book_files::created_at.desc())
+                    .select(file_columns())
+                    .into_boxed();
+                if user.role != Role::Admin {
+                    q = q.filter(
+                        schema::book_files::visibility
+                            .eq(Visibility::Public)
+                            .or(schema::book_files::owner_id.eq(&user.id)),
+                    );
+                }
+                let rows: Vec<FileMeta> = q.load(&mut self.diesel_db.get().await?).await?;
+                let mut by_book: HashMap<String, Vec<FileMeta>> = HashMap::new();
+                for file in rows {
+                    by_book.entry(file.book_id.clone()).or_default().push(file);
+                }
+                Ok::<_, ApiError>(stream::iter(
+                    batch
+                        .into_iter()
+                        .map(move |id| Ok(by_book.get(id).cloned().unwrap_or_default())),
+                ))
+            })
+            .try_flatten()
     }
 
     pub async fn get_file(&self, id: &str) -> Result<Option<FileMeta>, ApiError> {
@@ -2334,7 +2453,7 @@ impl Library {
         use super::downloads::DownloadedContent;
         let id = &file.id;
         // A writer may have completed between the caller's cache miss and registration.
-        let cached = schema::chapters::table
+        let mut cached = schema::chapters::table
             .filter(schema::chapters::file_id.eq(id))
             .order(schema::chapters::idx.asc())
             .select((
@@ -2348,12 +2467,8 @@ impl Library {
             .filter_map(Option::<Chapter>::from)
             .collect::<Vec<_>>();
         if file.chapter_count != 0 && cached.len() == file.chapter_count as usize {
-            let mut chapters = Vec::with_capacity(cached.len());
-            for mut chapter in cached {
-                chapter.content = with_stored_dims(&self.diesel_db, &chapter.content).await;
-                chapters.push(chapter);
-            }
-            return Ok(DownloadedContent::Book(chapters.into()));
+            with_stored_dims_many(&self.diesel_db, &mut cached).await;
+            return Ok(DownloadedContent::Book(cached.into()));
         }
         let book_file = self.source_book_file(file).await?;
         let parsed = match mandara_formats::parse(&book_file.bytes, &book_file.filename) {
@@ -2705,32 +2820,54 @@ pub fn annotate_image_dimensions(html: &str, dims_by_id: &HashMap<String, (i64, 
 /// wrapper around the pure [`annotate_image_dimensions`] (covered by the
 /// tests directly).
 async fn with_stored_dims(db: &DieselDb, html: &str) -> String {
-    const NEEDLE: &str = "src=\"/api/images/";
-    if !html.contains(NEEDLE) {
-        return html.to_string();
-    }
     let ids = image_ids_in_html(html);
-    if ids.is_empty() {
-        return html.to_string();
+    let dims = stored_image_dimensions(db, ids)
+        .try_collect::<HashMap<_, _>>()
+        .await
+        .unwrap_or_default();
+    annotate_image_dimensions(html, &dims)
+}
+
+/// Resolve shared image references once and annotate chapters in place.
+async fn with_stored_dims_many(db: &DieselDb, chapters: &mut [Chapter]) {
+    let ids = chapters
+        .iter()
+        .flat_map(|chapter| image_ids_in_html(&chapter.content));
+    let dims = stored_image_dimensions(db, ids)
+        .try_collect::<HashMap<_, _>>()
+        .await
+        .unwrap_or_default();
+    for chapter in chapters {
+        chapter.content = annotate_image_dimensions(&chapter.content, &dims);
     }
-    let rows: Vec<(String, Option<i64>, Option<i64>)> = match db.get().await {
-        Ok(mut conn) => schema::images::table
-            .filter(schema::images::id.eq_any(ids))
-            .select((
-                schema::images::id,
-                schema::images::width,
-                schema::images::height,
+}
+
+/// Stream stored image dimensions, resolving each distinct image at most once.
+fn stored_image_dimensions<'a>(
+    db: &'a DieselDb,
+    ids: impl IntoIterator<Item = String, IntoIter: Send> + 'a,
+) -> impl Stream<Item = Result<(String, (i64, i64)), ApiError>> + Send + 'a {
+    let mut seen = HashSet::new();
+    let ids = ids.into_iter().filter(move |id| seen.insert(id.clone()));
+    stream::iter(ids)
+        .chunks(QUERY_BATCH_SIZE)
+        .then(move |batch| async move {
+            let rows: Vec<(String, Option<i64>, Option<i64>)> = schema::images::table
+                .filter(schema::images::id.eq_any(batch))
+                .select((
+                    schema::images::id,
+                    schema::images::width,
+                    schema::images::height,
+                ))
+                .load(&mut db.get().await?)
+                .await?;
+            Ok::<_, ApiError>(stream::iter(
+                rows.into_iter()
+                    .filter_map(|(id, w, h)| w.zip(h).map(|dims| (id, dims)))
+                    .map(Ok),
             ))
-            .load(&mut conn)
-            .await
-            .unwrap_or_default(),
-        Err(_) => return html.to_string(),
-    };
-    let dims_by_id: HashMap<String, (i64, i64)> = rows
-        .into_iter()
-        .filter_map(|(id, w, h)| w.zip(h).map(|(w, h)| (id, (w, h))))
-        .collect();
-    annotate_image_dimensions(html, &dims_by_id)
+        })
+        .try_flatten()
 }
 
 /// One-shot upgrade migration (`--reparse-originals`, owner decision:
@@ -2830,6 +2967,8 @@ fn sha256_hex(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use mandara_formats::ParsedImage;
+
+    mod collections;
 
     async fn download_fixture() -> (Library, FileMeta, PathBuf) {
         let dir = std::env::temp_dir().join(format!("mandara-download-{}", uuid::Uuid::new_v4()));

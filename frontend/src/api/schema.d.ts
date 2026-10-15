@@ -1098,7 +1098,7 @@ export interface components {
         SeriesDetail: {
             series: components["schemas"]["SeriesBrief"];
             /** @description Member books in volume order, files filtered by visibility */
-            books: components["schemas"]["BookDetail"][];
+            books: components["schemas"]["BookEntry"][];
         };
         /**
          * @description Result of one acquisition (`POST /api/books`). Exactly one volume
@@ -1106,17 +1106,11 @@ export interface components {
          */
         AcquireResult: {
             series: components["schemas"]["SeriesBrief"];
-            books: components["schemas"]["BookDetail"][];
+            books: components["schemas"]["BookEntry"][];
         };
-        BookDetail: {
+        BookEntry: {
             book: components["schemas"]["BookMeta"];
             /** @description Files of this book visible to the caller (empty for a metadata-only entry) */
-            files: components["schemas"]["FileMeta"][];
-            series: components["schemas"]["SeriesBrief"];
-        };
-        BookListEntry: {
-            book: components["schemas"]["BookMeta"];
-            /** @description Files of this book visible to the caller */
             files: components["schemas"]["FileMeta"][];
             /** @description Series this book belongs to (null = standalone) */
             series: components["schemas"]["SeriesBrief"];
@@ -1938,7 +1932,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["BookListEntry"][];
+                    "application/json": components["schemas"]["BookEntry"][];
                 };
             };
             401: components["responses"]["Unauthorized"];
@@ -2066,7 +2060,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["BookDetail"];
+                    "application/json": components["schemas"]["BookEntry"];
                 };
             };
             403: components["responses"]["Forbidden"];

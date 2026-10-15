@@ -9,38 +9,20 @@ use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 
 use mandara_core::BookExt;
-use mandara_core::model::{BookMeta, FileMeta, SeriesMeta, Visibility};
+use mandara_core::model::{BookMeta, Visibility};
 
 use crate::error::ApiError;
 use crate::extractors::AuthenticatedUser;
 use crate::routes::series::SeriesBrief;
 use crate::routes::{ListParams, St};
-use crate::service::library::{AcquireContent, AcquireMetadata, MetadataOverrides};
-
-#[derive(Serialize)]
-pub struct BookDetail {
-    pub book: BookMeta,
-    /// Files of this book visible to the current user.
-    pub files: Vec<FileMeta>,
-    /// The series this book is a volume of (`null` = standalone).
-    pub series: Option<SeriesMeta>,
-}
-
-/// One library entry: metadata plus its visible files (and the series it
-/// belongs to, when any — so the UI groups without extra round trips).
-#[derive(Serialize)]
-pub struct BookListEntry {
-    pub book: BookMeta,
-    pub files: Vec<FileMeta>,
-    pub series: Option<SeriesMeta>,
-}
+use crate::service::library::{AcquireContent, AcquireMetadata, BookEntry, MetadataOverrides};
 
 /// Response of acquiring one volume book (`POST /api/books`), including
 /// its parent series when present. `books` contains exactly one entry.
 #[derive(Serialize)]
 pub struct AcquireResult {
     pub series: Option<SeriesBrief>,
-    pub books: Vec<BookDetail>,
+    pub books: Vec<BookEntry>,
 }
 
 fn parse_visibility(value: Option<&str>, default: Visibility) -> Result<Visibility, ApiError> {
@@ -313,27 +295,7 @@ pub async fn list_books(
         .library
         .list_books(params.q.as_deref(), params.source.as_deref(), &user)
         .await?;
-    // Attach the series of every entry (deduplicated lookups — library
-    // sizes are small, so an N+1 fetch per series id is fine).
-    let mut series_cache: std::collections::HashMap<String, SeriesMeta> = Default::default();
-    let mut out = Vec::with_capacity(entries.len());
-    for (book, files) in entries {
-        if let Some(id) = &book.series_id
-            && !series_cache.contains_key(id)
-            && let Some(s) = st.library.get_series(id).await?
-        {
-            series_cache.insert(id.clone(), s);
-        }
-        out.push(BookListEntry {
-            series: book
-                .series_id
-                .as_ref()
-                .and_then(|id| series_cache.get(id).cloned()),
-            book,
-            files,
-        });
-    }
-    Ok(Json(out))
+    Ok(Json(entries))
 }
 
 // POST /api/books (multipart) ------------------------------------------------
@@ -375,7 +337,7 @@ pub async fn upload_book(
             books: outcome
                 .books
                 .into_iter()
-                .map(|(book, file)| BookDetail {
+                .map(|(book, file)| BookEntry {
                     series: None,
                     book,
                     files: file.into_iter().collect(),
@@ -435,26 +397,7 @@ pub async fn get_book(
     State(st): State<St>,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let book = st
-        .library
-        .get_book(&id)
-        .await?
-        .ok_or_else(|| ApiError::not_found("book"))?;
-    let files = st.library.files_of_book(&book.id, &user).await?;
-    // A metadata-only entry has no files yet; it is still visible to its
-    // owner and admins (who may attach content to it later).
-    if files.is_empty() && !can_manage_metadata(&user, &book) {
-        return Err(ApiError::not_found("book"));
-    }
-    let series = match &book.series_id {
-        Some(sid) => st.library.get_series(sid).await?,
-        None => None,
-    };
-    Ok(Json(BookDetail {
-        book,
-        files,
-        series,
-    }))
+    Ok(Json(st.library.get_book_entry(&id, &user).await?))
 }
 
 /// Check the caller may manage the book's metadata (its creator or admin).

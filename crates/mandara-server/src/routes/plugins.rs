@@ -258,19 +258,11 @@ pub async fn materialize_book(
 ) -> Result<impl IntoResponse, ApiError> {
     // Legacy endpoint (superseded by the unified acquisition endpoint);
     // each plugin book is one independently addressable volume.
-    let (book, _file) = st
+    let entry = st
         .library
         .materialize_plugin_book(&user, &id, &req.book_id)
         .await?;
-    let files = st.library.files_of_book(&book.id, &user).await?;
-    Ok((
-        axum::http::StatusCode::CREATED,
-        Json(crate::routes::books::BookDetail {
-            series: None,
-            book,
-            files,
-        }),
-    ))
+    Ok((axum::http::StatusCode::CREATED, Json(entry)))
 }
 fn search_item(entry: mandara_plugin::CatalogEntry, book_id: Option<String>) -> SearchItem {
     match entry {

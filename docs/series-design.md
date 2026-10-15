@@ -171,7 +171,7 @@ New path, active when: content = plugin chapter-mode, **metadata is
      `volume_no = v`, `volume_offset = slice_start`, `chapter_count =
      slice.len()`, public, owner = caller), insert placeholder titles
      (*sliced*) via the existing `upsert_placeholder_titles`.
-5. Response: `AcquireResult { series, books: [BookDetail, ...] }`.
+5. Response: `AcquireResult { series, books: [BookEntry, ...] }`.
 
 Conflict rule update (one source book = one series): the existing
 "plugin book already under metadata X" 409 check becomes volume-aware —
@@ -206,11 +206,10 @@ single-book behavior (an uploaded file is one edition), documented.
 - `FileMeta` += `volume_no: integer` (0 = whole book) and
   `volume_offset: integer` (persisted flat start — needed to map lazy
   chapter pulls; harmless to expose).
-- `BookDetail` += `series: SeriesBrief|null`.
-- `BookListEntry` += `series: SeriesBrief|null` — the library groups
+- `BookEntry` += `series: SeriesBrief|null` — the library groups
   client-side without extra round trips.
 - `POST /api/books` 201 body becomes
-  `AcquireResult { series: SeriesBrief|null, books: [BookDetail] }`
+  `AcquireResult { series: SeriesBrief|null, books: [BookEntry] }`
   (`books` always non-empty; 1 element unless the acquisition split).
   Frontend regenerates `src/api/schema.d.ts` with `npm run api-types`.
 
@@ -220,7 +219,7 @@ New series endpoints:
   (creator, or ≥1 visible member book; admins see all).
 - `POST /api/series` `{title, authors?, description?}` → 201 `SeriesBrief`
   (any logged-in user; the creator manages it).
-- `GET  /api/series/{id}` → `SeriesDetail { series, books: [BookDetail] }`
+- `GET  /api/series/{id}` → `SeriesDetail { series, books: [BookEntry] }`
   — member books ordered by `volume_no`, files filtered by visibility
   (empty `files` = no visible file).
 - `PATCH /api/series/{id}` `{title?, authors?, description?}` →
