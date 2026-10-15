@@ -135,11 +135,41 @@ it("clears an explicit chapter override when switching contexts", async () => {
 it("refreshes sync sources without moving the current reading position", async () => {
   saved = [progress("default", position(4, 0.4))]; reader();
   await screen.findByTestId("position");
-  expect((screen.getByLabelText("选择同步来源") as HTMLSelectElement).disabled).toBe(true);
+  expect((screen.getByLabelText("选择同步来源") as HTMLSelectElement).disabled).toBe(false);
+  expect((screen.getByRole("option", { name: "手机 · 本书暂无进度" }) as HTMLOptionElement).disabled).toBe(true);
+  expect(screen.getByText(/其他档案尚无当前书籍文件/).id).toBe(screen.getByLabelText("选择同步来源").getAttribute("aria-describedby"));
+  expect((screen.getByText("同步本书进度") as HTMLButtonElement).disabled).toBe(true);
   saved = [...saved, progress("phone", position(1, 0.1))];
   fireEvent.click(screen.getByText("刷新同步来源"));
-  await waitFor(() => expect((screen.getByLabelText("选择同步来源") as HTMLSelectElement).disabled).toBe(false));
+  await waitFor(() => expect((screen.getByRole("option", { name: "手机 · 第 2 章" }) as HTMLOptionElement).disabled).toBe(false));
+  expect(screen.queryByText(/其他档案尚无当前书籍文件/)).toBeNull();
+  fireEvent.change(screen.getByLabelText("选择同步来源"), { target: { value: "phone" } });
+  expect((screen.getByText("同步本书进度") as HTMLButtonElement).disabled).toBe(false);
   expect(shown()).toEqual(position(4, 0.4));
+});
+
+it("explains when no other sessions exist without disabling the source selector", async () => {
+  available = [contexts[0]]; saved = [saved[0]]; reader();
+  await screen.findByTestId("position");
+  const select = screen.getByLabelText("选择同步来源") as HTMLSelectElement;
+  expect(select.disabled).toBe(false);
+  expect(select.options).toHaveLength(1);
+  expect(select.options[0].textContent).toBe("暂无其他阅读档案");
+  expect(screen.getByText(/请先新建其他阅读档案/).id).toBe(select.getAttribute("aria-describedby"));
+  expect((screen.getByText("同步本书进度") as HTMLButtonElement).disabled).toBe(true);
+  expect(events).toEqual([]);
+});
+
+it("includes a newly available source even if the global session list is stale", async () => {
+  available = [contexts[0]]; saved = [saved[0]]; reader();
+  await screen.findByTestId("position");
+  saved = [...saved, progress("tablet", position(1, 0.1))];
+  fireEvent.click(screen.getByText("刷新同步来源"));
+  await screen.findByRole("option", { name: "tablet · 第 2 章" });
+  fireEvent.change(screen.getByLabelText("选择同步来源"), { target: { value: "tablet" } });
+  fireEvent.click(screen.getByText("同步本书进度"));
+  await waitFor(() => expect(shown()).toEqual(position(1, 0.1)));
+  expect(events).toEqual(["sync"]);
 });
 
 it("starts an untouched context at zero without borrowing another context's progress", async () => {

@@ -123,20 +123,33 @@ export function ReaderPage() {
   if (!loaded || loaded.key !== key || requestedSession || syncing) return <div className="page-loading">{t("common.loading")}</div>;
   const { detail } = loaded;
   const initialPosition: Position = chapterIdx === null ? loaded.position : { chapter_idx: Number(chapterIdx) || 0, in_chapter: { fraction: 0 } };
-  const sources = loaded.progress.filter(p => p.session_id !== selectedId);
+  const sources = new Map<string, { label: string; progress?: ReadingProgress }>();
+  for (const session of sessions) {
+    if (session.id !== selectedId) sources.set(session.id, { label: session.label });
+  }
+  for (const progress of loaded.progress) {
+    if (progress.session_id !== selectedId) sources.set(progress.session_id, {
+      label: sources.get(progress.session_id)?.label ?? progress.label, progress,
+    });
+  }
+  const hasSyncSources = [...sources.values()].some(s => s.progress);
+  const canSync = !!sources.get(source)?.progress;
   return <div className="reader-page">
     <Reader key={key + ":" + (chapterIdx ?? "resume")}
       sessionControls={<div className="reader-session-controls">
         <SessionControl />
-        <select aria-label={t("reader.syncSource")} value={source} onChange={e => setSource(e.target.value)} disabled={!sources.length}>
-          <option value="">{t("reader.syncSource")}</option>
-          {sources.map(p => <option key={p.session_id} value={p.session_id}>
-            {p.label}
-            {t("reader.syncPosition", { chapter: p.position.chapter_idx + 1 })}
+        <select aria-label={t("reader.syncSource")} aria-describedby={!hasSyncSources ? "sync-source-help" : undefined} value={source} onChange={e => setSource(e.target.value)}>
+          <option value="" disabled>{t(sources.size ? "reader.syncSource" : "reader.noOtherSyncSessions")}</option>
+          {[...sources].map(([id, entry]) => <option key={id} value={id} disabled={!entry.progress}>
+            {entry.label}
+            {entry.progress ? t("reader.syncPosition", { chapter: entry.progress.position.chapter_idx + 1 }) : t("reader.syncSourceNoProgress")}
           </option>)}
         </select>
+        {!hasSyncSources && <small id="sync-source-help" role="status">
+          {t(sources.size ? "reader.syncSourceHelp" : "reader.noOtherSyncSessionsHelp")}
+        </small>}
         <button className="btn sm" onClick={() => void refreshSources()}>{t("reader.refreshSources")}</button>
-        <button className="btn sm" disabled={!source} onClick={() => void sync()}>{t("reader.syncProgress")}</button>
+        <button className="btn sm" disabled={!canSync} onClick={() => void sync()}>{t("reader.syncProgress")}</button>
       </div>}
       title={detail.book.title} chapters={detail.chapters} toc={detail.toc}
       backHref={"/book/" + detail.book.id}

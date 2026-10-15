@@ -20,6 +20,9 @@ An explicit reader session query adopts that session as the browser selection.
 Shelf and series progress use only this selected context.
 
 In reader settings, choose a source context and confirm the per-book sync.
+Other contexts without progress for this file remain visible but unavailable,
+with an explanation. The selector itself remains usable even when no source
+is available.
 Only the currently opened file is copied, including its chapter and in-chapter
 position. This is an explicit overwrite, even if the source is further behind.
 Other books and the source context remain unchanged. Refresh the source list
