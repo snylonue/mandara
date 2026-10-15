@@ -23,7 +23,6 @@ use crate::error::ApiError;
 use crate::extractors::AuthenticatedUser;
 use crate::routes::{St, can_manage_file, load_visible_file};
 use crate::rows::SHARE_COLUMNS;
-#[allow(unused_imports)]
 use crate::schema::{sessions, shares, users};
 
 #[derive(Serialize)]

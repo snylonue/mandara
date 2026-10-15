@@ -14,7 +14,6 @@ use mandara_core::model::{Role, User};
 use crate::db::DieselDb;
 use crate::error::ApiError;
 use crate::rows::USER_COLUMNS;
-#[allow(unused_imports)]
 use crate::schema::users;
 use diesel::QueryDsl as _;
 use diesel_async::RunQueryDsl as _;

@@ -8,7 +8,6 @@ mod extractors;
 mod routes;
 mod rows;
 /// Diesel schema (generated from the migrations; see `just schema`).
-#[allow(dead_code, unused_imports)]
 mod schema;
 mod service;
 mod state;

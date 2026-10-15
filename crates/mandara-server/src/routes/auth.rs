@@ -19,7 +19,6 @@ use crate::error::ApiError;
 use crate::extractors::AuthenticatedUser;
 use crate::routes::St;
 use crate::rows::USER_COLUMNS;
-#[allow(unused_imports)]
 use crate::schema::users;
 
 #[derive(Deserialize)]
