@@ -30,6 +30,9 @@ Add a single column instead of one column per field:
 ALTER TABLE books ADD COLUMN ext_meta TEXT NOT NULL DEFAULT '{}';
 ```
 
+Migration 0024 renames the book and series JSON columns to `ext`, matching
+the Rust model and HTTP field name.
+
 with one typed struct in `mandara-core` that owns the well-known keys
 and passes everything else through verbatim:
 
@@ -58,7 +61,7 @@ pub struct BookExt {
 ```
 
 `BookMeta` gains `pub ext: BookExt`, stored serialized in
-`books.ext_meta` (`'{}'` when empty).
+`books.ext` (`'{}'` when empty).
 
 ### ISBN normalization
 
@@ -77,7 +80,7 @@ as supplied.
 
 ### Series extension fields
 
-Series carry their own ext object (same mechanism: `series.ext_meta`
+Series carry their own ext object (same mechanism: `series.ext`
 JSON column, `SeriesExt` struct with flatten passthrough) because a
 series has edition-independent facts that neither belong on one volume
 nor duplicate well onto every 卷 row:
@@ -115,7 +118,7 @@ acquire-time series creation takes `ext` from the plugin entry.
 Metadata here is display-shaped, not query-shaped: no current endpoint
 filters by publisher or ISBN. When that changes, a single field can be
 *promoted* to a real column by one migration copying
-`json_extract(ext_meta, '$.isbn')` — the upgrade path stays open, which
+`json_extract(ext, '$.isbn')` — the upgrade path stays open, which
 is exactly what "consider future additions" requires.
 
 Normalization rules stay simple and live in one place (`BookExt::sanitize`,

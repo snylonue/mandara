@@ -39,7 +39,7 @@ diesel::table! {
         cover_mime -> Nullable<Text>,
         series_id -> Nullable<Text>,
         volume_no -> BigInt,
-        ext_meta -> Text,
+        ext -> Text,
         meta_source -> Nullable<Text>,
         meta_external_id -> Nullable<Text>,
     }
@@ -51,7 +51,7 @@ diesel::table! {
         idx -> BigInt,
         title -> Text,
         content -> Nullable<Text>,
-        linear -> BigInt,
+        linear -> Bool,
     }
 }
 
@@ -102,7 +102,7 @@ diesel::table! {
         cover_url -> Nullable<Text>,
         created_by -> Nullable<Text>,
         created_at -> diesel::sql_types::TimestamptzSqlite,
-        ext_meta -> Text,
+        ext -> Text,
         meta_source -> Nullable<Text>,
         meta_external_id -> Nullable<Text>,
     }
@@ -121,7 +121,7 @@ diesel::table! {
         fraction -> Double,
         updated_at -> diesel::sql_types::TimestamptzSqlite,
         reading_session_id -> Nullable<Text>,
-        position_kind -> Text,
+        position_kind -> mandara_core::model::PositionKindMapping,
     }
 }
 

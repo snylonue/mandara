@@ -10,14 +10,16 @@ use diesel::{
     ExpressionMethods as _, OptionalExtension as _, QueryDsl as _, prelude::SelectableHelper as _,
 };
 use diesel_async::RunQueryDsl as _;
-use mandara_core::model::{InChapter, Position, ReadingProgress, User};
+use mandara_core::model::{
+    InChapter, Position, PositionKind, ReadingProgress, ReadingSession, User,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::{
     error::ApiError,
     extractors::AuthenticatedUser,
     routes::{St, load_visible_file},
-    rows::{ReadingSessionRow, SessionRow},
+    rows::{READING_SESSION_COLUMNS, SessionRow},
     schema::{reading_sessions, sessions},
 };
 
@@ -27,10 +29,10 @@ pub struct SessionsResponse {
     pub sessions: Vec<ReadingProgress>,
 }
 
-async fn owned_session(st: &St, user: &User, id: &str) -> Result<ReadingSessionRow, ApiError> {
-    let row = reading_sessions::table
+async fn owned_session(st: &St, user: &User, id: &str) -> Result<ReadingSession, ApiError> {
+    let row: ReadingSession = reading_sessions::table
         .find(id)
-        .select(ReadingSessionRow::as_select())
+        .select(READING_SESSION_COLUMNS)
         .first(&mut st.diesel_db.get().await?)
         .await
         .optional()?
@@ -45,20 +47,16 @@ pub async fn list_my_sessions(
     AuthenticatedUser(user): AuthenticatedUser,
     State(st): State<St>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let rows = reading_sessions::table
+    let rows: Vec<ReadingSession> = reading_sessions::table
         .filter(reading_sessions::user_id.eq(user.id))
         .order((
             reading_sessions::created_at.asc(),
             reading_sessions::id.asc(),
         ))
-        .select(ReadingSessionRow::as_select())
+        .select(READING_SESSION_COLUMNS)
         .load(&mut st.diesel_db.get().await?)
         .await?;
-    Ok(Json(
-        rows.into_iter()
-            .map(ReadingSessionRow::into_model)
-            .collect::<Vec<_>>(),
-    ))
+    Ok(Json(rows))
 }
 
 #[derive(Deserialize)]
@@ -88,13 +86,13 @@ pub async fn create_session(
         .do_nothing()
         .execute(&mut conn)
         .await?;
-    let row = reading_sessions::table
+    let row: ReadingSession = reading_sessions::table
         .filter(reading_sessions::user_id.eq(&user.id))
         .filter(reading_sessions::label.eq(label))
-        .select(ReadingSessionRow::as_select())
+        .select(READING_SESSION_COLUMNS)
         .first(&mut conn)
         .await?;
-    Ok((StatusCode::CREATED, Json(row.into_model())))
+    Ok((StatusCode::CREATED, Json(row)))
 }
 
 pub async fn list_file_sessions(
@@ -112,7 +110,10 @@ pub async fn list_file_sessions(
         .await?;
     Ok(Json(SessionsResponse {
         file_id,
-        sessions: rows.into_iter().map(SessionRow::into_model).collect(),
+        sessions: rows
+            .into_iter()
+            .map(ReadingProgress::try_from)
+            .collect::<Result<_, _>>()?,
     }))
 }
 
@@ -130,8 +131,8 @@ pub async fn list_progress(
         .await?;
     Ok(Json(
         rows.into_iter()
-            .map(SessionRow::into_model)
-            .collect::<Vec<_>>(),
+            .map(ReadingProgress::try_from)
+            .collect::<Result<Vec<_>, _>>()?,
     ))
 }
 
@@ -151,14 +152,14 @@ async fn load_progress(
 
 async fn store_progress(
     st: &St,
-    context: ReadingSessionRow,
+    context: ReadingSession,
     file_id: &str,
     position: Position,
 ) -> Result<ReadingProgress, ApiError> {
     let now = chrono::Utc::now();
     let position_kind = match position.in_chapter {
-        InChapter::Fraction { .. } => "fraction",
-        InChapter::CharOffset { .. } => "offset",
+        InChapter::Fraction { .. } => PositionKind::Fraction,
+        InChapter::CharOffset { .. } => PositionKind::Offset,
     };
     let mut conn = st.diesel_db.get().await?;
     diesel::insert_into(sessions::table)
@@ -191,7 +192,7 @@ async fn store_progress(
         .select(SessionRow::as_select())
         .first(&mut conn)
         .await?;
-    Ok(row.into_model())
+    Ok(ReadingProgress::try_from(row)?)
 }
 
 #[derive(Deserialize)]
@@ -210,7 +211,8 @@ pub async fn update_progress(
     let file = load_visible_file(&st, &user, &file_id).await?;
     let old = load_progress(&st, &id, &file_id)
         .await?
-        .map(SessionRow::into_model)
+        .map(ReadingProgress::try_from)
+        .transpose()?
         .map(|p| p.position)
         .unwrap_or_default();
     let position = Position {
@@ -244,7 +246,9 @@ pub async fn sync_progress(
     let source = load_progress(&st, &req.source_session_id, &file_id)
         .await?
         .ok_or_else(|| ApiError::not_found("source progress"))?;
-    let position = source.into_model().position.clamped(file.chapter_count);
+    let position = ReadingProgress::try_from(source)?
+        .position
+        .clamped(file.chapter_count);
     Ok(Json(store_progress(&st, target, &file_id, position).await?))
 }
 

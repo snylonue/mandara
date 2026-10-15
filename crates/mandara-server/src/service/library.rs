@@ -105,7 +105,7 @@ use diesel::prelude::SelectableHelper as _;
 use diesel_async::RunQueryDsl as _;
 
 use crate::error::ApiError;
-use crate::rows::{BookRow, ChapterRow, ChapterTitleRow, FileRow, SeriesRow};
+use crate::rows::{BookRow, ChapterRow, ChapterTitleRow, FileRow, SERIES_COLUMNS};
 use crate::service::plugins::{DeclaredCatalog, PluginService};
 
 /// Where the *content* of a library addition comes from. Every addition
@@ -453,7 +453,7 @@ impl Library {
                         schema::chapters::idx.eq(idx as i64),
                         schema::chapters::title.eq(&chapter.title),
                         schema::chapters::content.eq(&chapter.content),
-                        schema::chapters::linear.eq(i64::from(chapter.linear)),
+                        schema::chapters::linear.eq(chapter.linear),
                     ))
                     .execute(&mut conn)
                     .await?;
@@ -570,7 +570,7 @@ impl Library {
                 schema::series::authors.eq(&authors),
                 schema::series::description.eq(&series.description),
                 schema::series::cover_url.eq(&series.cover_url),
-                schema::series::ext_meta.eq(&ext),
+                schema::series::ext.eq(&ext),
                 schema::series::created_by.eq(owner),
                 schema::series::meta_source.eq(source),
                 schema::series::meta_external_id.eq(&series.id),
@@ -585,7 +585,7 @@ impl Library {
                 schema::series::authors.eq(&authors),
                 schema::series::description.eq(&series.description),
                 schema::series::cover_url.eq(&series.cover_url),
-                schema::series::ext_meta.eq(&ext),
+                schema::series::ext.eq(&ext),
             ))
             .execute(&mut self.diesel_db.get().await?)
             .await?;
@@ -637,7 +637,7 @@ impl Library {
                         schema::books::authors.eq(&authors),
                         schema::books::description.eq(&book.description),
                         schema::books::cover_url.eq(&book.cover_url),
-                        schema::books::ext_meta.eq(&ext_value),
+                        schema::books::ext.eq(&ext_value),
                         // The metadata source is this plugin itself.
                         schema::books::meta_source.eq(source),
                         schema::books::meta_external_id.eq(&book.id),
@@ -662,7 +662,7 @@ impl Library {
                 schema::books::cover_url.eq(&book.cover_url),
                 // Refresh replaces the extended metadata wholesale (same
                 // overwrite rule as title/description/cover).
-                schema::books::ext_meta.eq(&ext_value),
+                schema::books::ext.eq(&ext_value),
                 schema::books::series_id.eq(&series_id),
                 schema::books::volume_no.eq(book.volume_no as i64),
             ))
@@ -763,7 +763,7 @@ impl Library {
             .await
             .optional()?;
         drop(conn);
-        Ok(row.map(FileRow::into_model))
+        Ok(row.map(FileMeta::try_from).transpose()?)
     }
 
     /// Insert a bare metadata entry (no files yet) — a book added on its
@@ -794,7 +794,7 @@ impl Library {
                 schema::books::authors.eq(authors),
                 schema::books::description.eq(description.map(str::to_string)),
                 schema::books::cover_url.eq(cover_url.map(str::to_string)),
-                schema::books::ext_meta.eq(&ext),
+                schema::books::ext.eq(&ext),
                 schema::books::meta_source.eq(meta_source),
                 schema::books::meta_external_id.eq(meta_external_id),
                 schema::books::created_by.eq(owner_id),
@@ -1185,7 +1185,7 @@ impl Library {
                     .or_else(|| parsed.cover_url.clone())),
                 schema::books::cover.eq(parsed.cover.as_ref().map(|c| c.bytes.clone())),
                 schema::books::cover_mime.eq(parsed.cover.as_ref().map(|c| c.mime.clone())),
-                schema::books::ext_meta.eq(&ext),
+                schema::books::ext.eq(&ext),
                 schema::books::created_by.eq(owner_id),
             ))
             .execute(&mut self.diesel_db.get().await?)
@@ -1323,7 +1323,7 @@ impl Library {
                     schema::chapters::idx.eq(idx as i64),
                     schema::chapters::title.eq(&chapter.title),
                     schema::chapters::content.eq(&chapter.content),
-                    schema::chapters::linear.eq(i64::from(chapter.linear)),
+                    schema::chapters::linear.eq(chapter.linear),
                 ))
                 .execute(&mut tx)
                 .await?;
@@ -1438,13 +1438,13 @@ impl Library {
         let mut by_book: std::collections::HashMap<String, Vec<FileMeta>> =
             std::collections::HashMap::new();
         for row in file_rows {
-            let meta = row.into_model();
+            let meta = FileMeta::try_from(row)?;
             by_book.entry(meta.book_id.clone()).or_default().push(meta);
         }
 
         let mut books = Vec::new();
         for row in rows {
-            let book = row.into_model();
+            let book = BookMeta::try_from(row)?;
             let files = by_book.remove(&book.id).unwrap_or_default();
             // Metadata-only entries (no visible files) belong to the
             // caller and were already admitted by the join filter above.
@@ -1460,7 +1460,7 @@ impl Library {
             .first(&mut self.diesel_db.get().await?)
             .await
             .optional()?;
-        Ok(row.map(BookRow::into_model))
+        Ok(row.map(BookMeta::try_from).transpose()?)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1480,7 +1480,7 @@ impl Library {
         // as a 500 from the ext read).
         let stored_ext: Option<BookExt> = schema::books::table
             .find(id)
-            .select(schema::books::ext_meta)
+            .select(schema::books::ext)
             .first(&mut conn)
             .await
             .optional()?;
@@ -1524,7 +1524,7 @@ impl Library {
                     cover_url.map(str::to_string),
                     schema::books::cover_url,
                 )),
-                schema::books::ext_meta.eq(coalesce_opt_nn(ext_value, schema::books::ext_meta)),
+                schema::books::ext.eq(coalesce_opt_nn(ext_value, schema::books::ext)),
             ))
             .execute(&mut conn)
             .await?;
@@ -1547,7 +1547,7 @@ impl Library {
         };
         let stored: Option<BookExt> = schema::books::table
             .find(id)
-            .select(schema::books::ext_meta)
+            .select(schema::books::ext)
             .first(&mut self.diesel_db.get().await?)
             .await
             .optional()?;
@@ -1566,7 +1566,7 @@ impl Library {
         }
         let ext = BookExt::from_value(serde_json::Value::Object(map))?;
         diesel::update(schema::books::table.find(id))
-            .set(schema::books::ext_meta.eq(&ext))
+            .set(schema::books::ext.eq(&ext))
             .execute(&mut self.diesel_db.get().await?)
             .await?;
         Ok(())
@@ -1602,12 +1602,13 @@ impl Library {
         // (migration 0013), independent of the files' content sources —
         // one metadata entry can hold files from many plugins, and
         // refreshing must never overwrite A's metadata with B's.
-        let row: BookRow = schema::books::table
-            .find(book_id)
-            .select(BookRow::as_select())
-            .first(&mut self.diesel_db.get().await?)
-            .await?;
-        let meta_keys = row.meta_source.zip(row.meta_external_id);
+        let (meta_source, meta_external_id): (Option<String>, Option<String>) =
+            schema::books::table
+                .find(book_id)
+                .select((schema::books::meta_source, schema::books::meta_external_id))
+                .first(&mut self.diesel_db.get().await?)
+                .await?;
+        let meta_keys = meta_source.zip(meta_external_id);
         if plugin_files.is_empty() && meta_keys.is_none() {
             return Err(ApiError::bad_request(
                 "book has no plugin source to refresh from",
@@ -1639,7 +1640,7 @@ impl Library {
                     schema::books::description.eq(&entry.description),
                     schema::books::cover_url.eq(&entry.cover_url),
                     // Refresh replaces the extended metadata wholesale.
-                    schema::books::ext_meta.eq(ext_value),
+                    schema::books::ext.eq(ext_value),
                     schema::books::series_id.eq(&series_id),
                     schema::books::volume_no.eq(entry.volume_no as i64),
                 ))
@@ -1652,7 +1653,7 @@ impl Library {
         //    each file's own (content) source. Book metadata is untouched
         //    here — a file's plugin never overwrites it.
         for row in plugin_files {
-            let mut file = row.into_model();
+            let mut file = FileMeta::try_from(row)?;
             if !file.content_mode.has_chapters() {
                 continue;
             }
@@ -1699,7 +1700,10 @@ impl Library {
             .select(BookRow::as_select())
             .load(&mut self.diesel_db.get().await?)
             .await?;
-        Ok(rows.into_iter().map(BookRow::into_model).collect())
+        Ok(rows
+            .into_iter()
+            .map(BookMeta::try_from)
+            .collect::<Result<_, _>>()?)
     }
 
     /// Is the series visible to the caller (creator, admin, or ≥1 member
@@ -1734,13 +1738,13 @@ impl Library {
     }
 
     pub async fn get_series(&self, id: &str) -> Result<Option<SeriesMeta>, ApiError> {
-        let row: Option<SeriesRow> = schema::series::table
+        let row: Option<SeriesMeta> = schema::series::table
             .find(id)
-            .select(SeriesRow::as_select())
+            .select(SERIES_COLUMNS)
             .first(&mut self.diesel_db.get().await?)
             .await
             .optional()?;
-        Ok(row.map(SeriesRow::into_model))
+        Ok(row)
     }
 
     /// Number of member books of a series (any visibility).
@@ -1757,7 +1761,7 @@ impl Library {
     /// file; admins see all), each with its member count.
     pub async fn list_series(&self, user: &User) -> Result<Vec<(SeriesMeta, u32)>, ApiError> {
         let mut rows_q = schema::series::table
-            .select(SeriesRow::as_select())
+            .select(SERIES_COLUMNS)
             .order(schema::series::created_at.desc())
             .into_boxed();
         if user.role != Role::Admin {
@@ -1779,7 +1783,7 @@ impl Library {
                     )),
             );
         }
-        let rows: Vec<SeriesRow> = rows_q.load(&mut self.diesel_db.get().await?).await?;
+        let rows: Vec<SeriesMeta> = rows_q.load(&mut self.diesel_db.get().await?).await?;
 
         // Member counts in one grouped query (fixes the per-series COUNT
         // N+1 of the sqlx version).
@@ -1799,7 +1803,7 @@ impl Library {
             .into_iter()
             .map(|row| {
                 let count = by_series.remove(&row.id).unwrap_or(0);
-                (row.into_model(), count.max(0) as u32)
+                (row, count.max(0) as u32)
             })
             .collect())
     }
@@ -1823,7 +1827,7 @@ impl Library {
                 schema::series::authors.eq(authors_value.unwrap_or_default()),
                 schema::series::description.eq(description),
                 schema::series::cover_url.eq(Option::<String>::None),
-                schema::series::ext_meta.eq(ext.unwrap_or_default()),
+                schema::series::ext.eq(ext.unwrap_or_default()),
                 schema::series::created_by.eq(&user.id),
             ))
             .execute(&mut self.diesel_db.get().await?)
@@ -1869,7 +1873,7 @@ impl Library {
             }
             let ext = SeriesExt::from_value(serde_json::Value::Object(map))?;
             diesel::update(schema::series::table.find(id))
-                .set(schema::series::ext_meta.eq(&ext))
+                .set(schema::series::ext.eq(&ext))
                 .execute(&mut self.diesel_db.get().await?)
                 .await?;
         }
@@ -2090,7 +2094,10 @@ impl Library {
             );
         }
         let rows: Vec<FileRow> = q.load(&mut self.diesel_db.get().await?).await?;
-        Ok(rows.into_iter().map(FileRow::into_model).collect())
+        Ok(rows
+            .into_iter()
+            .map(FileMeta::try_from)
+            .collect::<Result<_, _>>()?)
     }
 
     pub async fn get_file(&self, id: &str) -> Result<Option<FileMeta>, ApiError> {
@@ -2100,7 +2107,7 @@ impl Library {
             .first(&mut self.diesel_db.get().await?)
             .await
             .optional()?;
-        Ok(row.map(FileRow::into_model))
+        Ok(row.map(FileMeta::try_from).transpose()?)
     }
 
     pub async fn update_file(
@@ -2190,7 +2197,10 @@ impl Library {
             ))
             .load(&mut self.diesel_db.get().await?)
             .await?;
-        Ok(rows.into_iter().map(|r| r.into_model()).collect())
+        Ok(rows
+            .into_iter()
+            .map(ChapterMeta::try_from)
+            .collect::<Result<_, _>>()?)
     }
 
     /// The file's hierarchical TOC. Files stored without one (plugin
@@ -2207,21 +2217,13 @@ impl Library {
         {
             return Ok(toc);
         }
-        let rows: Vec<ChapterTitleRow> = schema::chapters::table
-            .filter(schema::chapters::file_id.eq(file_id))
-            .order(schema::chapters::idx.asc())
-            .select((
-                schema::chapters::idx,
-                schema::chapters::title,
-                schema::chapters::linear,
-            ))
-            .load(&mut self.diesel_db.get().await?)
-            .await?;
-        Ok(rows
+        Ok(self
+            .chapter_titles(file_id)
+            .await?
             .into_iter()
-            .map(|r| TocNode {
-                title: r.title,
-                idx: Some(r.idx.max(0) as u32),
+            .map(|chapter| TocNode {
+                title: chapter.title,
+                idx: Some(chapter.idx),
                 frag: None,
                 children: Vec::new(),
             })
@@ -2340,8 +2342,8 @@ impl Library {
             .load::<ChapterRow>(&mut self.diesel_db.get().await?)
             .await?
             .into_iter()
-            .filter_map(ChapterRow::into_model)
-            .collect::<Vec<_>>();
+            .filter_map(|row| Option::<Chapter>::try_from(row).transpose())
+            .collect::<Result<Vec<_>, _>>()?;
         if file.chapter_count != 0 && cached.len() == file.chapter_count as usize {
             let mut chapters = Vec::with_capacity(cached.len());
             for mut chapter in cached {
@@ -2373,7 +2375,7 @@ impl Library {
             .await
             .optional()?;
 
-        if let Some(mut model) = row.and_then(ChapterRow::into_model) {
+        if let Some(mut model) = row.map(Option::<Chapter>::try_from).transpose()?.flatten() {
             // Best-effort width/height on stored img tags (chapters
             // materialized before the dimensions existed lack them;
             // without them every image load re-anchors the view).
@@ -2779,7 +2781,7 @@ pub async fn reparse_originals(db: &DieselDb, files_dir: &Path) -> anyhow::Resul
                     schema::chapters::idx.eq(idx as i64),
                     schema::chapters::title.eq(&chapter.title),
                     schema::chapters::content.eq(&chapter.content),
-                    schema::chapters::linear.eq(i64::from(chapter.linear)),
+                    schema::chapters::linear.eq(chapter.linear),
                 ))
                 .execute(&mut conn)
                 .await?;
@@ -3502,7 +3504,7 @@ mod tests {
                 schema::chapters::idx.eq(1_i64),
                 schema::chapters::title.eq("注释"),
                 schema::chapters::content.eq("<p>注释</p>"),
-                schema::chapters::linear.eq(0_i64),
+                schema::chapters::linear.eq(false),
             ))
             .execute(&mut conn)
             .await
@@ -3513,7 +3515,11 @@ mod tests {
             .load(&mut conn)
             .await
             .unwrap();
-        let metas: Vec<_> = rows.into_iter().map(ChapterTitleRow::into_model).collect();
+        let metas: Vec<_> = rows
+            .into_iter()
+            .map(ChapterMeta::try_from)
+            .collect::<Result<_, _>>()
+            .unwrap();
         assert!(metas[0].linear);
         assert!(!metas[1].linear);
         assert_eq!(metas[0].title, "正文");

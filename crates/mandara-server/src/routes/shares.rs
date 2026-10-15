@@ -15,12 +15,14 @@ use diesel::expression_methods::NullableExpressionMethods as _;
 use diesel::prelude::SelectableHelper as _;
 use diesel_async::RunQueryDsl as _;
 
-use mandara_core::model::{ChapterMeta, Position, Share, ShareKind, TocNode, Visibility};
+use mandara_core::model::{
+    ChapterMeta, Position, ReadingProgress, Share, ShareKind, TocNode, Visibility,
+};
 
 use crate::error::ApiError;
 use crate::extractors::AuthenticatedUser;
 use crate::routes::{St, can_manage_file, load_visible_file};
-use crate::rows::ShareRow;
+use crate::rows::SHARE_COLUMNS;
 #[allow(unused_imports)]
 use crate::schema::{sessions, shares, users};
 
@@ -35,8 +37,8 @@ pub struct ShareResponse {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
-impl ShareResponse {
-    fn from_share(share: Share) -> Self {
+impl From<Share> for ShareResponse {
+    fn from(share: Share) -> Self {
         ShareResponse {
             url: format!("/share/{}", share.token),
             token: share.token,
@@ -49,11 +51,11 @@ impl ShareResponse {
     }
 }
 
-async fn load_share(st: &St, token: &str) -> Result<ShareRow, ApiError> {
+async fn load_share(st: &St, token: &str) -> Result<Share, ApiError> {
     let mut conn = st.diesel_db.get().await?;
-    let row: Option<ShareRow> = shares::table
+    let row: Option<Share> = shares::table
         .find(token)
-        .select(ShareRow::as_select())
+        .select(SHARE_COLUMNS)
         .first(&mut conn)
         .await
         .optional()?;
@@ -146,15 +148,12 @@ pub async fn create_share(
         .execute(&mut conn)
         .await?;
 
-    let row: ShareRow = shares::table
+    let row: Share = shares::table
         .find(&token)
-        .select(ShareRow::as_select())
+        .select(SHARE_COLUMNS)
         .first(&mut conn)
         .await?;
-    Ok((
-        StatusCode::CREATED,
-        Json(ShareResponse::from_share(row.into_model())),
-    ))
+    Ok((StatusCode::CREATED, Json(ShareResponse::from(row))))
 }
 
 // Public share views (no auth) ------------------------------------------------
@@ -201,8 +200,7 @@ pub async fn get_share(
     State(st): State<St>,
     Path(token): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let row = load_share(&st, &token).await?;
-    let share = row.into_model();
+    let share = load_share(&st, &token).await?;
 
     let file = st
         .library
@@ -233,7 +231,7 @@ pub async fn get_share(
         let Some((progress, owner)) = srow else {
             return Err(ApiError::not_found("share"));
         };
-        let progress = progress.into_model();
+        let progress = ReadingProgress::try_from(progress)?;
         let position = progress.position;
         session = Some(ShareSessionView {
             id: sid.clone(),

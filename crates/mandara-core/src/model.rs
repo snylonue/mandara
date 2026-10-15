@@ -125,7 +125,7 @@ impl std::str::FromStr for Visibility {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, diesel::Queryable)]
 pub struct User {
     pub id: String,
     pub username: String,
@@ -136,7 +136,7 @@ pub struct User {
 /// A series: metadata grouping for the volumes of one publication family
 /// (e.g. a light-novel series split from a multi-volume source). Member
 /// books carry `series_id` + `volume_no` (1-based order).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, diesel::Queryable)]
 pub struct SeriesMeta {
     pub id: String,
     pub title: String,
@@ -583,12 +583,19 @@ impl Position {
 }
 
 /// A user-owned reading context containing independent progress for every file.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, diesel::Queryable)]
 pub struct ReadingSession {
     pub id: String,
     pub user_id: String,
     pub label: String,
     pub created_at: DateTime<Utc>,
+}
+
+/// Discriminator for the persisted columns backing an in-chapter position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, diesel_derive_enum::DbEnum)]
+pub enum PositionKind {
+    Fraction,
+    Offset,
 }
 
 /// Progress for one file in a reading context. Its id also identifies public
@@ -615,7 +622,7 @@ pub enum ShareKind {
     Session,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, diesel::Queryable)]
 pub struct Share {
     pub token: String,
     pub kind: ShareKind,

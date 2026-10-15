@@ -108,22 +108,22 @@ mod tests {
                 crate::schema::chapters::content,
                 crate::schema::chapters::linear,
             ))
-            .load::<(String, i64, String, Option<String>, i64)>(&mut conn)
+            .load::<(String, i64, String, Option<String>, bool)>(&mut conn)
             .await
             .unwrap();
         assert_eq!(
             rows,
             vec![
-                ("local".into(), 0, "空章".into(), Some("".into()), 0),
+                ("local".into(), 0, "空章".into(), Some("".into()), false),
                 (
                     "remote".into(),
                     0,
                     "正文".into(),
                     Some("<p>正文</p>".into()),
-                    1
+                    true
                 ),
-                ("remote".into(), 1, "占位".into(), None, 1),
-                ("remote".into(), 2, "空白".into(), Some("   ".into()), 0),
+                ("remote".into(), 1, "占位".into(), None, true),
+                ("remote".into(), 2, "空白".into(), Some("   ".into()), false),
             ]
         );
         assert_eq!(

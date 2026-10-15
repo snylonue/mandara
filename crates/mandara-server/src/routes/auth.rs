@@ -9,7 +9,6 @@ use serde::{Deserialize, Serialize};
 
 use diesel::ExpressionMethods as _;
 use diesel::QueryDsl as _;
-use diesel::SelectableHelper as _;
 use diesel_async::RunQueryDsl as _;
 
 use mandara_core::model::{Role, User};
@@ -19,7 +18,7 @@ use diesel::OptionalExtension as _;
 use crate::error::ApiError;
 use crate::extractors::AuthenticatedUser;
 use crate::routes::St;
-use crate::rows::UserRow;
+use crate::rows::USER_COLUMNS;
 #[allow(unused_imports)]
 use crate::schema::users;
 
@@ -101,9 +100,9 @@ pub async fn login(
     Json(req): Json<Credentials>,
 ) -> Result<impl IntoResponse, ApiError> {
     let mut conn = st.diesel_db.get().await?;
-    let row: Option<(UserRow, String)> = users::table
+    let row: Option<(User, String)> = users::table
         .filter(users::username.eq(&req.username))
-        .select((UserRow::as_select(), users::password_hash))
+        .select((USER_COLUMNS, users::password_hash))
         .first(&mut conn)
         .await
         .optional()?;
@@ -113,7 +112,7 @@ pub async fn login(
     if !st.auth.verify_password(&req.password, &password_hash) {
         return Err(ApiError::Unauthorized);
     }
-    let user = row.into_model();
+    let user = row;
     let token = st.auth.issue_token(&user)?;
     Ok(AuthResponse { token, user }.with_cookie(&st))
 }

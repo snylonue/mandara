@@ -13,11 +13,10 @@ use mandara_core::model::{Role, User};
 
 use crate::db::DieselDb;
 use crate::error::ApiError;
-use crate::rows::UserRow;
+use crate::rows::USER_COLUMNS;
 #[allow(unused_imports)]
 use crate::schema::users;
 use diesel::QueryDsl as _;
-use diesel::prelude::SelectableHelper as _;
 use diesel_async::RunQueryDsl as _;
 
 #[derive(Debug, thiserror::Error)]
@@ -140,11 +139,11 @@ impl AuthService {
         let mut conn = db.get().await?;
         let row = users::table
             .find(&data.claims.sub)
-            .select(UserRow::as_select())
-            .first::<UserRow>(&mut conn)
+            .select(USER_COLUMNS)
+            .first::<User>(&mut conn)
             .await
             .optional()?;
-        Ok(row.ok_or(ApiError::Unauthorized)?.into_model())
+        row.ok_or(ApiError::Unauthorized)
     }
 
     pub fn require_admin(user: &User) -> Result<(), ApiError> {

@@ -4,8 +4,8 @@ Domain values implement their SQLite mappings in mandara-core. Queries bind
 and load the same values used by the application, rather than parsing strings
 in route handlers or row-to-model conversions.
 
-- Role, Visibility, FileFormat, ContentMode, and ShareKind derive DbEnum from
-  diesel-derive-enum. Their generated SQL mapping types keep enum columns
+- Role, Visibility, FileFormat, ContentMode, ShareKind, and PositionKind derive
+  DbEnum from diesel-derive-enum. Their generated SQL mapping types keep enum columns
   distinct even though SQLite stores their values as text.
 - Authors is a serde-transparent newtype around Vec<String>. Authors, BookExt,
   and SeriesExt derive Diesel's AsExpression and FromSqlRow and implement
@@ -18,8 +18,16 @@ in route handlers or row-to-model conversions.
   their precision. The initial reading context copies its account's timestamp.
   API timestamps are still serialized by chrono/serde as RFC 3339. There is
   no application-level legacy timestamp parser or fallback to the Unix epoch.
-- Numeric SQLite fields remain signed integers in persistence rows. Converting
-  counts and assembling multi-column structures remain explicit model logic.
+- Metadata JSON columns and model fields are both named ext. Chapter linear
+  flags use Diesel's native Bool mapping.
+- User, SeriesMeta, ReadingSession, and Share derive Queryable and are loaded
+  directly through server-side column projections; there are no duplicate rows.
+- Rows remain only for signed-to-unsigned integer conversions and shapes that
+  differ from the domain model. Standard TryFrom implementations reject invalid
+  stored numbers, missing reading contexts, and incomplete original-file data
+  instead of clamping, truncating, or silently substituting another value.
+  OriginalInfo and Position are assembled from multiple columns. NULL chapter
+  content means uncached, while an empty string is valid cached content.
 
 ## Schema generation
 

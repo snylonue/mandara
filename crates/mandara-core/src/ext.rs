@@ -1,6 +1,6 @@
 //! Extended metadata for books and series (bangumi/douban-style fields).
 //!
-//! One JSON object column per table (`books.ext_meta`, `series.ext_meta`)
+//! One JSON object column per table (`books.ext`, `series.ext`)
 //! holds a [`BookExt`] / [`SeriesExt`] object: every field is optional,
 //! unknown keys round-trip verbatim through the `extra` passthrough map,
 //! so adding future fields is a Rust-only change (no migration).

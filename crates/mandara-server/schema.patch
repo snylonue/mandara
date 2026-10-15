@@ -45,7 +45,7 @@
          series_id -> Nullable<Text>,
 -        volume_no -> Integer,
 +        volume_no -> BigInt,
-         ext_meta -> Text,
+         ext -> Text,
          meta_source -> Nullable<Text>,
          meta_external_id -> Nullable<Text>,
 @@ -42,10 +48,10 @@
@@ -57,7 +57,7 @@
          title -> Text,
          content -> Nullable<Text>,
 -        linear -> Integer,
-+        linear -> BigInt,
++        linear -> Bool,
      }
  }
  
@@ -102,10 +102,10 @@
          created_by -> Nullable<Text>,
 -        created_at -> Text,
 +        created_at -> diesel::sql_types::TimestamptzSqlite,
-         ext_meta -> Text,
+         ext -> Text,
          meta_source -> Nullable<Text>,
          meta_external_id -> Nullable<Text>,
-@@ -108,10 +114,12 @@
+@@ -108,11 +114,13 @@
          user_id -> Text,
          file_id -> Text,
          label -> Text,
@@ -120,8 +120,10 @@
 +        fraction -> Double,
 +        updated_at -> diesel::sql_types::TimestamptzSqlite,
          reading_session_id -> Nullable<Text>,
-         position_kind -> Text,
+-        position_kind -> Text,
++        position_kind -> mandara_core::model::PositionKindMapping,
      }
+ }
 @@ -120,12 +128,12 @@
  diesel::table! {
      shares (token) {
