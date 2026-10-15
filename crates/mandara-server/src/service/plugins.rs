@@ -20,6 +20,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use futures_util::{StreamExt as _, TryStreamExt as _, stream};
 use serde::Serialize;
 
 use mandara_core::source::{SourceBook, SourceBookFile, SourceChapter, SourceDeclaredContent};
@@ -287,11 +288,11 @@ impl PluginService {
 
     /// All instances in creation order.
     pub async fn infos(&self) -> Result<Vec<InstanceInfo>, ApiError> {
-        let mut out = Vec::new();
-        for row in self.rows().await? {
-            out.push(self.info(&row).await);
-        }
-        Ok(out)
+        Ok(stream::iter(self.rows().await?)
+            .map(|row| async move { self.info(&row).await })
+            .buffered(8)
+            .collect()
+            .await)
     }
 
     // ---- instance management (admin) -------------------------------------
@@ -507,78 +508,48 @@ impl PluginService {
     /// Declared catalogs of every enabled `declare`-capable instance
     /// (startup sync / `POST /api/plugins/sync`).
     pub async fn declared_catalogs(&self) -> Result<Vec<DeclaredCatalog>, ApiError> {
-        let mut out = Vec::new();
-        for row in self.rows().await? {
-            if !row.enabled {
-                continue;
-            }
-            let Some(_) = self.wasm(&row.wasm_file) else {
-                continue;
-            };
-            let wasm = self.plugin_info(&row).await?;
-            if !wasm.capabilities.iter().any(|c| c == "declare") {
-                continue;
-            }
-            self.requires_cap(&wasm, "declare")?;
-            let declared =
-                run_instance(self.runtime.clone(), wasm.instance, |runtime, instance| {
-                    runtime.declare(&instance)
-                })
-                .await?
-                .unwrap_or_default();
-            out.push(DeclaredCatalog {
-                instance: row.id,
-                books: declared
-                    .into_iter()
-                    .map(|b| -> Result<_, ApiError> {
-                        let book = SourceBook::try_from(b.book)?;
-                        Ok(DeclaredCatalogBook {
-                            book,
-                            content: b.content.map(Into::into),
-                        })
-                    })
-                    .collect::<Result<Vec<_>, _>>()?,
-            });
-        }
-        Ok(out)
+        stream::iter(self.rows().await?)
+            .then(|row| async move { self.catalog_for_row(row).await })
+            .try_filter_map(|catalog| async move { Ok(catalog) })
+            .try_collect()
+            .await
     }
 
     /// Declared catalog of one instance (`None` when it has no `declare`
     /// capability or is disabled).
     pub async fn declared_catalog(&self, id: &str) -> Result<Option<DeclaredCatalog>, ApiError> {
-        for row in self.rows().await? {
-            if row.id != id || !row.enabled {
-                continue;
-            }
-            let Some(_) = self.wasm(&row.wasm_file) else {
-                return Ok(None);
-            };
-            let wasm = self.plugin_info(&row).await?;
-            if !wasm.capabilities.iter().any(|c| c == "declare") {
-                return Ok(None);
-            }
-            self.requires_cap(&wasm, "declare")?;
-            let declared =
-                run_instance(self.runtime.clone(), wasm.instance, |runtime, instance| {
-                    runtime.declare(&instance)
-                })
-                .await?
-                .unwrap_or_default();
-            return Ok(Some(DeclaredCatalog {
-                instance: row.id,
-                books: declared
-                    .into_iter()
-                    .map(|b| -> Result<_, ApiError> {
-                        let book = SourceBook::try_from(b.book)?;
-                        Ok(DeclaredCatalogBook {
-                            book,
-                            content: b.content.map(Into::into),
-                        })
-                    })
-                    .collect::<Result<Vec<_>, _>>()?,
-            }));
+        match self.row(id).await? {
+            Some(row) => self.catalog_for_row(row).await,
+            None => Ok(None),
         }
-        Ok(None)
+    }
+
+    async fn catalog_for_row(&self, row: InstanceRow) -> Result<Option<DeclaredCatalog>, ApiError> {
+        if !row.enabled || self.wasm(&row.wasm_file).is_none() {
+            return Ok(None);
+        }
+        let wasm = self.plugin_info(&row).await?;
+        if !wasm.capabilities.iter().any(|c| c == "declare") {
+            return Ok(None);
+        }
+        self.requires_cap(&wasm, "declare")?;
+        let declared = run_instance(self.runtime.clone(), wasm.instance, |runtime, instance| {
+            runtime.declare(&instance)
+        })
+        .await?
+        .unwrap_or_default();
+        Ok(Some(DeclaredCatalog {
+            instance: row.id,
+            books: declared
+                .into_iter()
+                .map(|b| -> Result<_, ApiError> {
+                    Ok(DeclaredCatalogBook {
+                        book: SourceBook::try_from(b.book)?,
+                        content: b.content.map(Into::into),
+                    })
+                })
+                .collect::<Result<_, _>>()?,
+        }))
     }
 
     /// Paginated catalog search (requires the `search` capability).
