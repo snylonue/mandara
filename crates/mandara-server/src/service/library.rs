@@ -120,7 +120,9 @@ use crate::rows::{
     BOOK_COLUMNS, CHAPTER_META_COLUMNS, ChapterRow, SERIES_COLUMNS, SeriesCount, U32Value,
     file_columns,
 };
-use crate::service::plugins::{DeclaredCatalog, PluginService};
+use crate::service::plugins::{
+    DeclaredCatalog, PluginService, SearchItem, SearchItemKind, SearchResponse,
+};
 use crate::writes::{BookVolume, ChapterIndex, FileChapterCount, ImageDimensions};
 
 /// Where the *content* of a library addition comes from. Every addition
@@ -320,75 +322,71 @@ impl Library {
 
     // ---- plugin catalog / materialization ----------------------------------
 
-    /// Search one instance's catalog (design R4: paginated, never fully
-    /// enumerated server-side). Each entry is annotated with the library
-    /// metadata entry it is already synced into (when it is).
+    /// Search one instance's catalog and attach matching library book IDs.
     pub async fn search_plugin(
         &self,
         instance: &str,
         query: &str,
         offset: u32,
         limit: u32,
-    ) -> Result<(u64, Vec<(mandara_plugin::CatalogEntry, Option<String>)>), ApiError> {
-        let result = self
+    ) -> Result<SearchResponse, ApiError> {
+        let mut result = self
             .plugins
             .search_books(instance, query, offset, limit)
             .await?;
-        let items = self.annotate_search_items(instance, result.items).await?;
-        Ok((result.total, items))
+        self.annotate_search_items(instance, &mut result.items)
+            .await?;
+        Ok(result)
     }
 
+    /// Complete the final search read model without rebuilding its entries.
     async fn annotate_search_items(
         &self,
         instance: &str,
-        entries: Vec<mandara_plugin::CatalogEntry>,
-    ) -> Result<Vec<(mandara_plugin::CatalogEntry, Option<String>)>, ApiError> {
-        let entries: Vec<_> = entries
-            .into_iter()
-            .map(|entry| {
-                let external_id = match &entry {
-                    mandara_plugin::CatalogEntry::Single(book) => {
-                        Some(SourceBook::try_from(book.clone())?.id)
-                    }
-                    mandara_plugin::CatalogEntry::Series(series) => {
-                        SourceSeries::try_from(series.clone())?;
-                        None
-                    }
-                };
-                Ok((entry, external_id))
-            })
-            .collect::<Result<_, ApiError>>()?;
-        let mut seen = HashSet::new();
-        let ids: Vec<_> = entries
+        items: &mut [SearchItem],
+    ) -> Result<(), ApiError> {
+        let ids: HashSet<_> = items
             .iter()
-            .filter_map(|(_, id)| id.as_deref())
-            .filter(|id| seen.insert(*id))
+            .filter(|item| matches!(item.kind, SearchItemKind::Book))
+            .map(|item| item.id.as_str())
             .collect();
-        let mut book_ids = HashMap::new();
-        if !ids.is_empty() {
-            let mut conn = self.diesel_db.get().await?;
-            for batch in ids.chunks(QUERY_BATCH_SIZE) {
+        let book_ids = self
+            .book_ids_by_source_ids(instance, ids)
+            .try_fold(HashMap::new(), |mut by_id, (external_id, id)| async move {
+                by_id.entry(external_id).or_insert(id);
+                Ok(by_id)
+            })
+            .await?;
+        for item in items {
+            item.book_id = match item.kind {
+                SearchItemKind::Book => book_ids.get(&item.id).cloned(),
+                SearchItemKind::Series => None,
+            };
+        }
+        Ok(())
+    }
+
+    /// Lazily query matching metadata identities in batches.
+    /// Only ID pairs leave the query layer; missing IDs produce no rows.
+    fn book_ids_by_source_ids<'a>(
+        &'a self,
+        instance: &'a str,
+        ids: impl IntoIterator<Item = &'a str, IntoIter: Send> + 'a,
+    ) -> impl Stream<Item = Result<(String, String), ApiError>> + Send + 'a {
+        stream::iter(ids)
+            .chunks(QUERY_BATCH_SIZE)
+            .then(move |batch| async move {
                 let rows: Vec<(Option<String>, String)> = schema::books::table
                     .filter(schema::books::meta_source.eq(instance))
                     .filter(schema::books::meta_external_id.eq_any(batch.iter().copied()))
                     .select((schema::books::meta_external_id, schema::books::id))
-                    .load(&mut conn)
+                    .load(&mut self.diesel_db.get().await?)
                     .await?;
-                for (external_id, id) in rows {
-                    if let Some(external_id) = external_id {
-                        // Keep the first match, as the former per-entry lookup did.
-                        book_ids.entry(external_id).or_insert(id);
-                    }
-                }
-            }
-        }
-        Ok(entries
-            .into_iter()
-            .map(|(entry, external_id)| {
-                let id = external_id.and_then(|id| book_ids.get(&id).cloned());
-                (entry, id)
+                Ok::<_, ApiError>(stream::iter(rows.into_iter().filter_map(
+                    |(external_id, id)| external_id.map(|external_id| Ok((external_id, id))),
+                )))
             })
-            .collect())
+            .try_flatten()
     }
 
     /// Materialize exactly one book of a plugin source into the library

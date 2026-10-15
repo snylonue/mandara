@@ -370,7 +370,7 @@ async fn search_annotations_batch_matches_and_preserve_mixed_result_order() {
     entries.insert(
         1,
         CatalogEntry::Series(SeriesEntry {
-            id: "series".into(),
+            id: "external-0500".into(),
             title: "系列".into(),
             authors: vec![],
             description: None,
@@ -380,46 +380,91 @@ async fn search_annotations_batch_matches_and_preserve_mixed_result_order() {
     );
     entries.push(book("missing"));
     entries.push(book("external-0500"));
+    let mut items: Vec<_> = entries
+        .into_iter()
+        .map(SearchItem::try_from)
+        .collect::<Result<_, _>>()
+        .unwrap();
     let queries = count_selects(&library.diesel_db).await;
-    let items = library
-        .annotate_search_items("source-a", entries)
+    let consumed = Arc::new(AtomicUsize::new(0));
+    let observed = consumed.clone();
+    {
+        let ids = items
+            .iter()
+            .filter(|item| matches!(item.kind, SearchItemKind::Book))
+            .map(|item| item.id.as_str())
+            .inspect(move |_| {
+                observed.fetch_add(1, Ordering::SeqCst);
+            });
+        let mut matches = std::pin::pin!(library.book_ids_by_source_ids("source-a", ids));
+        assert_eq!(queries.as_ref().load(Ordering::SeqCst), 0);
+        assert_eq!(consumed.as_ref().load(Ordering::SeqCst), 0);
+        assert!(matches.try_next().await.unwrap().is_some());
+        assert_eq!(queries.as_ref().load(Ordering::SeqCst), 1);
+        assert_eq!(consumed.as_ref().load(Ordering::SeqCst), QUERY_BATCH_SIZE);
+        let connection =
+            tokio::time::timeout(std::time::Duration::from_secs(1), library.diesel_db.get())
+                .await
+                .unwrap()
+                .unwrap();
+        drop(connection);
+    }
+    assert_eq!(queries.swap(0, Ordering::SeqCst), 1);
+    let matching_rows = library
+        .book_ids_by_source_ids(
+            "source-a",
+            items
+                .iter()
+                .filter(|item| matches!(item.kind, SearchItemKind::Book))
+                .map(|item| item.id.as_str()),
+        )
+        .try_fold(0, |count, _| async move { Ok(count + 1) })
+        .await
+        .unwrap();
+    assert_eq!(
+        matching_rows, 502,
+        "the query layer must not deduplicate IDs across batches"
+    );
+    assert_eq!(queries.swap(0, Ordering::SeqCst), 2);
+    library
+        .annotate_search_items("source-a", &mut items)
         .await
         .unwrap();
     assert_eq!(queries.swap(0, Ordering::SeqCst), 2);
     assert_eq!(items.len(), 504);
-    assert!(matches!(&items[0].0, CatalogEntry::Single(b) if b.id == "external-0500"));
-    assert_eq!(items[0].1.as_deref(), Some("local-0500"));
-    assert!(matches!(&items[1].0, CatalogEntry::Series(s) if s.id == "series"));
-    assert_eq!(items[1].1, None);
-    assert_eq!(items[2].1.as_deref(), Some("local-0499"));
-    assert_eq!(items[502].1, None);
-    assert_eq!(items[503].1.as_deref(), Some("local-0500"));
+    assert!(matches!(items[0].kind, SearchItemKind::Book));
+    assert_eq!(items[0].id, "external-0500");
+    assert_eq!(items[0].book_id.as_deref(), Some("local-0500"));
+    assert!(matches!(items[1].kind, SearchItemKind::Series));
+    assert_eq!(items[1].book_id, None);
+    assert_eq!(items[2].book_id.as_deref(), Some("local-0499"));
+    assert_eq!(items[502].book_id, None);
+    assert_eq!(items[503].book_id.as_deref(), Some("local-0500"));
+    let mut repeated: Vec<_> = (0..=QUERY_BATCH_SIZE * 2)
+        .map(|_| SearchItem::try_from(book("external-0500")).unwrap())
+        .collect();
+    library
+        .annotate_search_items("source-a", &mut repeated)
+        .await
+        .unwrap();
+    assert_eq!(queries.swap(0, Ordering::SeqCst), 1);
+    assert_eq!(repeated.len(), QUERY_BATCH_SIZE * 2 + 1);
     assert!(
-        library
-            .annotate_search_items("source-a", vec![])
-            .await
-            .unwrap()
-            .is_empty()
+        repeated
+            .iter()
+            .all(|item| item.book_id.as_deref() == Some("local-0500"))
     );
-    assert_eq!(queries.as_ref().load(Ordering::SeqCst), 0);
-    let mut invalid = match book("") {
-        CatalogEntry::Single(b) => b,
-        _ => unreachable!(),
-    };
-    assert!(
-        library
-            .annotate_search_items("source-a", vec![CatalogEntry::Single(invalid.clone())])
-            .await
-            .is_err()
-    );
-    invalid.id = "valid".into();
-    invalid.extra = Some("[]".into());
-    assert!(
-        library
-            .annotate_search_items("source-a", vec![CatalogEntry::Single(invalid)])
-            .await
-            .is_err()
-    );
+    library
+        .annotate_search_items("source-a", &mut [])
+        .await
+        .unwrap();
+    items.retain(|item| matches!(item.kind, SearchItemKind::Series));
+    items[0].book_id = Some("stale".into());
+    library
+        .annotate_search_items("source-a", &mut items)
+        .await
+        .unwrap();
+    assert_eq!(items[0].book_id, None);
     assert_eq!(queries.as_ref().load(Ordering::SeqCst), 0);
     std::fs::remove_dir_all(dir).unwrap();
 }

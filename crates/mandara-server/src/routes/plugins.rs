@@ -11,6 +11,7 @@ use mandara_plugin::{MAX_SEARCH_LIMIT, MAX_SEARCH_OFFSET};
 use crate::error::ApiError;
 use crate::extractors::{AdminUser, AuthenticatedUser};
 use crate::routes::St;
+use crate::service::plugins::{SearchItem, SearchResponse};
 
 // GET /api/plugins ------------------------------------------------------------
 
@@ -179,32 +180,6 @@ fn default_search_limit() -> u32 {
     20
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SearchItemKind {
-    Book,
-    Series,
-}
-
-/// One search hit, annotated with the library metadata entry it is
-/// already synced into (when it is).
-#[derive(Serialize)]
-pub struct SearchItem {
-    pub kind: SearchItemKind,
-    pub id: String,
-    pub title: String,
-    pub authors: Vec<String>,
-    pub description: Option<String>,
-    pub cover_url: Option<String>,
-    pub book_id: Option<String>,
-}
-
-#[derive(Serialize)]
-pub struct SearchResponse {
-    pub total: u64,
-    pub items: Vec<SearchItem>,
-}
-
 pub async fn search_plugins(
     AuthenticatedUser(_user): AuthenticatedUser,
     State(st): State<St>,
@@ -223,7 +198,7 @@ pub async fn search_plugins(
             "offset must be <= {MAX_SEARCH_OFFSET}"
         )));
     }
-    let (total, items) = st
+    let result = st
         .library
         .search_plugin(
             &id,
@@ -232,11 +207,7 @@ pub async fn search_plugins(
             params.limit,
         )
         .await?;
-    let items: Vec<SearchItem> = items
-        .into_iter()
-        .map(|(entry, book_id)| search_item(entry, book_id))
-        .collect();
-    Ok(Json(SearchResponse { total, items }))
+    Ok(Json(result))
 }
 
 // POST /api/plugins/{id}/books ---------------------------------------------------------
@@ -264,28 +235,6 @@ pub async fn materialize_book(
         .await?;
     Ok((axum::http::StatusCode::CREATED, Json(entry)))
 }
-fn search_item(entry: mandara_plugin::CatalogEntry, book_id: Option<String>) -> SearchItem {
-    match entry {
-        mandara_plugin::CatalogEntry::Single(b) => SearchItem {
-            kind: SearchItemKind::Book,
-            id: b.id,
-            title: b.title,
-            authors: b.authors,
-            description: b.description,
-            cover_url: b.cover_url,
-            book_id,
-        },
-        mandara_plugin::CatalogEntry::Series(s) => SearchItem {
-            kind: SearchItemKind::Series,
-            id: s.id,
-            title: s.title,
-            authors: s.authors,
-            description: s.description,
-            cover_url: s.cover_url,
-            book_id: None,
-        },
-    }
-}
 
 #[derive(Serialize)]
 pub struct SeriesLookupResponse {
@@ -309,12 +258,12 @@ pub async fn lookup_series(
         .await?
         .ok_or_else(|| ApiError::not_found("plugin series"))?;
     Ok(Json(SeriesLookupResponse {
-        series: search_item(mandara_plugin::CatalogEntry::Series(result.series), None),
+        series: SearchItem::try_from(mandara_plugin::CatalogEntry::Series(result.series))?,
         books: result
             .books
             .into_iter()
-            .map(|book| search_item(mandara_plugin::CatalogEntry::Single(book), None))
-            .collect(),
+            .map(|book| SearchItem::try_from(mandara_plugin::CatalogEntry::Single(book)))
+            .collect::<Result<_, _>>()?,
     }))
 }
 
@@ -399,14 +348,10 @@ pub async fn lookup_plugin(
     } else {
         return Err(ApiError::not_found("plugin book or series"));
     };
-    let mut items = Vec::with_capacity(books.len());
-    for book in books {
-        mandara_core::source::SourceBook::try_from(book.clone())?;
-        items.push(search_item(
-            mandara_plugin::CatalogEntry::Single(book),
-            None,
-        ));
-    }
+    let items: Vec<_> = books
+        .into_iter()
+        .map(|book| SearchItem::try_from(mandara_plugin::CatalogEntry::Single(book)))
+        .collect::<Result<_, _>>()?;
     Ok(Json(SearchResponse {
         total: items.len() as u64,
         items,

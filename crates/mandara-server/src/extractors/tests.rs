@@ -168,6 +168,32 @@ async fn response_json(response: Response) -> Value {
 }
 
 #[tokio::test]
+async fn plugin_search_serializes_the_service_read_model() {
+    let fixture = Fixture::with_plugin(true).await;
+    fixture
+        .state
+        .library
+        .plugins()
+        .set_config("fixture", json!({"site-name": "示例"}))
+        .await
+        .unwrap();
+    let token = fixture.token("user", Role::User);
+    let response = request(
+        fixture.app(),
+        "GET",
+        "/api/plugins/fixture/search?q=hello",
+        Some(&token),
+        "",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response_json(response).await,
+        json!({"total": 0, "items": []})
+    );
+}
+
+#[tokio::test]
 async fn book_list_attaches_series_without_dropping_standalone_books() {
     let fixture = Fixture::new().await;
     fixture

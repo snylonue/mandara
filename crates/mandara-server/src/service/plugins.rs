@@ -23,14 +23,90 @@ use std::sync::Arc;
 use futures_util::{StreamExt as _, TryStreamExt as _, stream};
 use serde::Serialize;
 
-use mandara_core::source::{SourceBook, SourceBookFile, SourceChapter, SourceDeclaredContent};
+use mandara_core::source::{
+    SourceBook, SourceBookFile, SourceChapter, SourceDeclaredContent, SourceSeries,
+};
 use mandara_plugin::error::Error as PluginError;
 use mandara_plugin::{
     BookEntry, CompiledPlugin, ConfigErrors, ConfigField, ConfigKind, PluginInstance,
-    PluginRuntime, SearchResult, SourceInfo, validate_config,
+    PluginRuntime, SourceInfo, validate_config,
 };
 
 use crate::error::ApiError;
+
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchItemKind {
+    Book,
+    Series,
+}
+
+/// One search hit, annotated with the library metadata entry it is
+/// already synced into (when it is).
+#[derive(Serialize)]
+pub struct SearchItem {
+    pub kind: SearchItemKind,
+    pub id: String,
+    pub title: String,
+    pub authors: Vec<String>,
+    pub description: Option<String>,
+    pub cover_url: Option<String>,
+    pub book_id: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct SearchResponse {
+    pub total: u64,
+    pub items: Vec<SearchItem>,
+}
+
+impl TryFrom<mandara_plugin::CatalogEntry> for SearchItem {
+    type Error = ApiError;
+
+    fn try_from(entry: mandara_plugin::CatalogEntry) -> Result<Self, Self::Error> {
+        match entry {
+            mandara_plugin::CatalogEntry::Single(book) => {
+                let book = SourceBook::try_from(book)?;
+                Ok(Self {
+                    kind: SearchItemKind::Book,
+                    id: book.id,
+                    title: book.title,
+                    authors: book.authors,
+                    description: book.description,
+                    cover_url: book.cover_url,
+                    book_id: None,
+                })
+            }
+            mandara_plugin::CatalogEntry::Series(series) => {
+                let series = SourceSeries::try_from(series)?;
+                Ok(Self {
+                    kind: SearchItemKind::Series,
+                    id: series.id,
+                    title: series.title,
+                    authors: series.authors,
+                    description: series.description,
+                    cover_url: series.cover_url,
+                    book_id: None,
+                })
+            }
+        }
+    }
+}
+
+impl TryFrom<mandara_plugin::SearchResult> for SearchResponse {
+    type Error = ApiError;
+
+    fn try_from(result: mandara_plugin::SearchResult) -> Result<Self, Self::Error> {
+        Ok(Self {
+            total: result.total,
+            items: result
+                .items
+                .into_iter()
+                .map(SearchItem::try_from)
+                .collect::<Result<_, _>>()?,
+        })
+    }
+}
 
 /// Plugin information read in a registered instance context.
 struct PluginInfo {
@@ -552,19 +628,21 @@ impl PluginService {
         }))
     }
 
-    /// Paginated catalog search (requires the `search` capability).
+    /// Paginated catalog search, validated and projected before leaving the plugin boundary.
     pub async fn search_books(
         &self,
         id: &str,
         query: &str,
         offset: u32,
         limit: u32,
-    ) -> Result<SearchResult, ApiError> {
+    ) -> Result<SearchResponse, ApiError> {
         let query = query.to_string();
-        self.call(id, true, move |runtime, instance| {
-            runtime.search_books(&instance, &query, offset, limit)
-        })
-        .await
+        let result = self
+            .call(id, true, move |runtime, instance| {
+                runtime.search_books(&instance, &query, offset, limit)
+            })
+            .await?;
+        result.try_into()
     }
 
     /// Single book by id (requires `lookup`).
@@ -680,4 +758,97 @@ async fn run_instance<T: Send + 'static>(
     f: impl FnOnce(Arc<PluginRuntime>, PluginInstance) -> Result<T, PluginError> + Send + 'static,
 ) -> Result<T, ApiError> {
     Ok(tokio::task::spawn_blocking(move || f(runtime, instance)).await??)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mandara_plugin::{CatalogEntry, SeriesEntry};
+
+    fn book() -> BookEntry {
+        BookEntry {
+            id: "external".into(),
+            title: "书籍".into(),
+            authors: vec!["作者".into()],
+            description: Some("简介".into()),
+            cover_url: None,
+            extra: None,
+            series: None,
+            volume_no: 0,
+        }
+    }
+
+    fn series() -> SeriesEntry {
+        SeriesEntry {
+            id: "series".into(),
+            title: "系列".into(),
+            authors: vec![],
+            description: None,
+            cover_url: None,
+            extra: None,
+        }
+    }
+
+    #[test]
+    fn search_boundary_returns_the_final_read_model_in_catalog_order() {
+        let result = SearchResponse::try_from(mandara_plugin::SearchResult {
+            total: 100,
+            items: vec![
+                CatalogEntry::Single(book()),
+                CatalogEntry::Series(series()),
+                CatalogEntry::Single(book()),
+            ],
+        })
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(result).unwrap(),
+            serde_json::json!({
+                "total": 100,
+                "items": [
+                    {"kind": "book", "id": "external", "title": "书籍", "authors": ["作者"], "description": "简介", "cover_url": null, "book_id": null},
+                    {"kind": "series", "id": "series", "title": "系列", "authors": [], "description": null, "cover_url": null, "book_id": null},
+                    {"kind": "book", "id": "external", "title": "书籍", "authors": ["作者"], "description": "简介", "cover_url": null, "book_id": null}
+                ]
+            })
+        );
+        let empty = SearchResponse::try_from(mandara_plugin::SearchResult {
+            total: 100,
+            items: vec![],
+        })
+        .unwrap();
+        assert_eq!(empty.total, 100);
+        assert!(empty.items.is_empty());
+    }
+
+    #[test]
+    fn search_boundary_rejects_invalid_entries_before_library_annotation() {
+        let mut empty_book = book();
+        empty_book.id.clear();
+        let mut bad_volume = book();
+        bad_volume.volume_no = 1;
+        let mut bad_extra = book();
+        bad_extra.extra = Some("[]".into());
+        let mut bad_parent = book();
+        bad_parent.series = Some(series());
+        let mut empty_series = series();
+        empty_series.id.clear();
+        let mut bad_series_extra = series();
+        bad_series_extra.extra = Some("[]".into());
+        for invalid in [
+            CatalogEntry::Single(empty_book),
+            CatalogEntry::Single(bad_volume),
+            CatalogEntry::Single(bad_extra),
+            CatalogEntry::Single(bad_parent),
+            CatalogEntry::Series(empty_series),
+            CatalogEntry::Series(bad_series_extra),
+        ] {
+            assert!(
+                SearchResponse::try_from(mandara_plugin::SearchResult {
+                    total: 2,
+                    items: vec![CatalogEntry::Single(book()), invalid],
+                })
+                .is_err()
+            );
+        }
+    }
 }
