@@ -2,7 +2,10 @@ use super::*;
 use diesel::connection::SimpleConnection;
 use diesel::prelude::*;
 use diesel::result::Error::DeserializationError;
-use mandara_core::{Role, SeriesExt, SeriesMeta, Share, ShareKind, User};
+use mandara_core::{
+    Authors, BookExt, BookMeta, ChapterMeta, ContentMode, FileFormat, FileMeta, Role, SeriesExt,
+    SeriesMeta, Share, ShareKind, User, Visibility,
+};
 
 fn connection() -> SqliteConnection {
     let mut conn = SqliteConnection::establish(":memory:").unwrap();
@@ -54,10 +57,8 @@ fn reads_domain_values_without_field_adapters() {
         "2026-08-26T12:34:56.789+00:00"
     );
     let book: BookMeta = books::table
-        .select(BookRow::as_select())
-        .first(conn)
-        .unwrap()
-        .try_into()
+        .select(BOOK_COLUMNS)
+        .first::<BookMeta>(conn)
         .unwrap();
     assert_eq!(book.authors.0, ["作者"]);
     assert_eq!(
@@ -68,10 +69,8 @@ fn reads_domain_values_without_field_adapters() {
     assert_eq!(book.ext.publisher.as_deref(), Some("出版社"));
     assert_eq!(book.ext.extra["future"]["nested"], true);
     let file: FileMeta = book_files::table
-        .select(FileRow::as_select())
-        .first(conn)
-        .unwrap()
-        .try_into()
+        .select(FILE_COLUMNS)
+        .first::<FileMeta>(conn)
         .unwrap();
     assert_eq!(file.format, FileFormat::Epub);
     assert_eq!(file.visibility, Visibility::Private);
@@ -80,13 +79,8 @@ fn reads_domain_values_without_field_adapters() {
     assert_eq!(file.original.unwrap().size, 42);
     let titles = chapters::table
         .order(chapters::idx)
-        .select(ChapterTitleRow::as_select())
-        .load::<ChapterTitleRow>(conn)
-        .unwrap();
-    let titles: Vec<_> = titles
-        .into_iter()
-        .map(ChapterMeta::try_from)
-        .collect::<Result<Vec<_>, _>>()
+        .select(CHAPTER_META_COLUMNS)
+        .load::<ChapterMeta>(conn)
         .unwrap();
     assert!(titles[0].linear);
     assert!(!titles[1].linear);
@@ -97,17 +91,12 @@ fn reads_domain_values_without_field_adapters() {
         .unwrap();
     let mut chapters = chapters.into_iter();
     assert_eq!(
-        Option::<Chapter>::try_from(chapters.next().unwrap())
-            .unwrap()
+        Option::<Chapter>::from(chapters.next().unwrap())
             .unwrap()
             .content,
         ""
     );
-    assert!(
-        Option::<Chapter>::try_from(chapters.next().unwrap())
-            .unwrap()
-            .is_none()
-    );
+    assert!(Option::<Chapter>::from(chapters.next().unwrap()).is_none());
     let share = shares::table
         .select(SHARE_COLUMNS)
         .first::<Share>(conn)
@@ -130,8 +119,8 @@ fn writes_and_filters_with_domain_values() {
         .execute(conn)
         .unwrap();
     let book = books::table
-        .select(BookRow::as_select())
-        .first(conn)
+        .select(BOOK_COLUMNS)
+        .first::<BookMeta>(conn)
         .unwrap();
     assert_eq!(book.authors, authors);
     assert_eq!(book.ext, ext);
@@ -318,8 +307,8 @@ fn rejects_invalid_json_timestamps_and_enum_values() {
         conn.batch_execute(sql).unwrap();
         assert!(matches!(
             book_files::table
-                .select(FileRow::as_select())
-                .first::<FileRow>(conn),
+                .select(FILE_COLUMNS)
+                .first::<FileMeta>(conn),
             Err(DeserializationError(_))
         ));
     }
@@ -351,53 +340,75 @@ fn metadata_column_rename_preserves_values() {
 }
 
 #[test]
-fn rejects_invalid_integer_ranges_and_incomplete_originals() {
-    use crate::schema::{book_files, books};
+fn orm_rejects_invalid_integer_ranges_and_incomplete_originals() {
+    use crate::schema::{book_files, books, chapters};
     let conn = &mut connection();
     for volume in [-1, i64::from(u32::MAX) + 1] {
         diesel::update(books::table)
             .set(books::volume_no.eq(volume))
             .execute(conn)
             .unwrap();
-        let row = books::table
-            .select(BookRow::as_select())
-            .first(conn)
-            .unwrap();
-        assert!(BookMeta::try_from(row).is_err());
+        assert!(matches!(
+            books::table.select(BOOK_COLUMNS).first::<BookMeta>(conn),
+            Err(DeserializationError(_))
+        ));
+        assert!(matches!(
+            books::table
+                .select((books::volume_no,))
+                .first::<U32Value>(conn),
+            Err(DeserializationError(_))
+        ));
+        assert!(matches!(
+            books::table
+                .select((books::series_id, books::volume_no))
+                .first::<SeriesCount>(conn),
+            Err(DeserializationError(_))
+        ));
     }
     for sql in [
         "UPDATE book_files SET chapter_count=-1",
         "UPDATE book_files SET chapter_count=4294967296",
         "UPDATE book_files SET chapter_count=3, orig_size=-1",
         "UPDATE book_files SET orig_size=NULL",
+        "UPDATE book_files SET orig_ext=NULL",
+        "UPDATE book_files SET orig_sha256=NULL",
     ] {
+        conn.batch_execute("UPDATE book_files SET chapter_count=3, orig_ext='epub', orig_sha256='sha', orig_size=42").unwrap();
         conn.batch_execute(sql).unwrap();
-        let row = book_files::table
-            .select(FileRow::as_select())
-            .first(conn)
-            .unwrap();
-        assert!(FileMeta::try_from(row).is_err());
+        assert!(matches!(
+            book_files::table
+                .select(FILE_COLUMNS)
+                .first::<FileMeta>(conn),
+            Err(DeserializationError(_))
+        ));
     }
     conn.batch_execute("UPDATE book_files SET orig_ext=NULL, orig_sha256=NULL, orig_size=NULL")
         .unwrap();
-    let row = book_files::table
-        .select(FileRow::as_select())
-        .first(conn)
-        .unwrap();
-    assert!(FileMeta::try_from(row).unwrap().original.is_none());
+    assert!(
+        book_files::table
+            .select(FILE_COLUMNS)
+            .first::<FileMeta>(conn)
+            .unwrap()
+            .original
+            .is_none()
+    );
     for idx in [-1, i64::from(u32::MAX) + 1] {
-        let chapter = ChapterRow {
-            idx,
-            title: "正文".into(),
-            content: Some(String::new()),
-        };
-        assert!(Option::<Chapter>::try_from(chapter).is_err());
-        let title = ChapterTitleRow {
-            idx,
-            title: "正文".into(),
-            linear: true,
-        };
-        assert!(ChapterMeta::try_from(title).is_err());
+        diesel::update(chapters::table)
+            .set(chapters::idx.eq(idx))
+            .execute(conn)
+            .unwrap();
+        assert!(matches!(
+            chapters::table
+                .select(ChapterRow::as_select())
+                .first::<ChapterRow>(conn),
+            Err(DeserializationError(_))
+        ));
+        assert!(matches!(
+            chapters::table
+                .select(CHAPTER_META_COLUMNS)
+                .first::<ChapterMeta>(conn),
+            Err(DeserializationError(_))
+        ));
     }
 }
 
@@ -434,17 +445,36 @@ fn position_discriminator_round_trips_and_rejects_unknown_values() {
 }
 
 #[test]
-fn invalid_progress_returns_errors_instead_of_clamping_or_panicking() {
+fn orm_rejects_invalid_progress_integers() {
     use crate::schema::sessions;
     let conn = &mut connection();
     for sql in [
         "UPDATE sessions SET chapter_idx=-1",
         "UPDATE sessions SET chapter_idx=4294967296",
-        "UPDATE sessions SET chapter_idx=1, reading_session_id=NULL",
+        "UPDATE sessions SET chapter_idx=1, offset=-1",
+        "UPDATE sessions SET offset=4294967296",
+    ] {
+        conn.batch_execute(sql).unwrap();
+        assert!(
+            matches!(
+                sessions::table
+                    .select(SessionRow::as_select())
+                    .first::<SessionRow>(conn),
+                Err(DeserializationError(_))
+            ),
+            "{sql}"
+        );
+    }
+}
+
+#[test]
+fn progress_conversion_validates_context_and_fraction() {
+    use crate::schema::sessions;
+    let conn = &mut connection();
+    for sql in [
+        "UPDATE sessions SET reading_session_id=NULL",
         "UPDATE sessions SET reading_session_id='context', fraction=-0.1",
         "UPDATE sessions SET fraction=1.1",
-        "UPDATE sessions SET position_kind='offset', offset=-1",
-        "UPDATE sessions SET offset=4294967296",
     ] {
         conn.batch_execute(sql).unwrap();
         let row = sessions::table
@@ -452,5 +482,74 @@ fn invalid_progress_returns_errors_instead_of_clamping_or_panicking() {
             .first(conn)
             .unwrap();
         assert!(ReadingProgress::try_from(row).is_err(), "{sql}");
+    }
+}
+
+#[test]
+fn unsigned_boundaries_round_trip_through_orm() {
+    use crate::schema::{book_files, books, chapters, sessions};
+    let conn = &mut connection();
+    for value in [0_u32, u32::MAX] {
+        diesel::update(books::table)
+            .set(books::volume_no.eq(i64::from(value)))
+            .execute(conn)
+            .unwrap();
+        assert_eq!(
+            books::table
+                .select(BOOK_COLUMNS)
+                .first::<BookMeta>(conn)
+                .unwrap()
+                .volume_no,
+            value
+        );
+        diesel::update(book_files::table)
+            .set(book_files::chapter_count.eq(i64::from(value)))
+            .execute(conn)
+            .unwrap();
+        assert_eq!(
+            book_files::table
+                .select(FILE_COLUMNS)
+                .first::<FileMeta>(conn)
+                .unwrap()
+                .chapter_count,
+            value
+        );
+        diesel::update(chapters::table)
+            .set(chapters::idx.eq(i64::from(value)))
+            .execute(conn)
+            .unwrap();
+        assert_eq!(
+            chapters::table
+                .select(CHAPTER_META_COLUMNS)
+                .first::<ChapterMeta>(conn)
+                .unwrap()
+                .idx,
+            value
+        );
+        diesel::update(sessions::table)
+            .set((
+                sessions::chapter_idx.eq(i64::from(value)),
+                sessions::offset.eq(i64::from(value)),
+            ))
+            .execute(conn)
+            .unwrap();
+        let row = sessions::table
+            .select(SessionRow::as_select())
+            .first::<SessionRow>(conn)
+            .unwrap();
+        assert_eq!((row.chapter_idx, row.offset), (value, value));
+    }
+    for size in [0_i64, i64::MAX] {
+        diesel::update(book_files::table)
+            .set(book_files::orig_size.eq(size))
+            .execute(conn)
+            .unwrap();
+        let original = book_files::table
+            .select(FILE_COLUMNS)
+            .first::<FileMeta>(conn)
+            .unwrap()
+            .original
+            .unwrap();
+        assert_eq!(original.size, u64::try_from(size).unwrap());
     }
 }

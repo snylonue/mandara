@@ -378,7 +378,7 @@ impl PluginService {
 
         let mut conn = self.db.get().await?;
         let result = diesel::update(crate::schema::plugin_instances::table.find(id))
-            .set(crate::schema::plugin_instances::enabled.eq(enabled as i64))
+            .set(crate::schema::plugin_instances::enabled.eq(i64::from(enabled)))
             .execute(&mut conn)
             .await?;
         if result == 0 {

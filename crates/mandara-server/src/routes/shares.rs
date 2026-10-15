@@ -131,7 +131,8 @@ pub async fn create_share(
     // years is far beyond any practical share lifetime.
     const MAX_EXPIRY_DAYS: u32 = 3650;
     let expires_days = req.expires_days.unwrap_or(0).min(MAX_EXPIRY_DAYS);
-    let expires_at = (expires_days > 0).then(|| Utc::now() + Duration::days(expires_days as i64));
+    let expires_at =
+        (expires_days > 0).then(|| Utc::now() + Duration::days(i64::from(expires_days)));
 
     let mut conn = st.diesel_db.get().await?;
     diesel::insert_into(shares::table)

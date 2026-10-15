@@ -20,6 +20,7 @@ use crate::config::Config;
 use crate::service::{Library, plugins::PluginService};
 use crate::state::{AppState, St};
 
+mod numbers;
 mod sessions;
 
 const SECRET: &str = "extractor-tests-only";

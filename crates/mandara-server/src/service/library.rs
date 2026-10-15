@@ -24,8 +24,8 @@ use anyhow::Context as _;
 use tracing::{info, warn};
 
 use mandara_core::model::{
-    Authors, BookMeta, Chapter, ChapterMeta, ContentMode, FileFormat, FileMeta, ImageId, Role,
-    SeriesMeta, TocNode, User, Visibility,
+    Authors, BookMeta, Chapter, ChapterMeta, ContentMode, FileFormat, FileMeta, ImageId,
+    OriginalInfo, Role, SeriesMeta, TocNode, User, Visibility,
 };
 use mandara_core::source::{
     SourceBook, SourceBookFile, SourceDeclaredChapter, SourceDeclaredContent, SourceSeries,
@@ -101,11 +101,13 @@ use diesel::OptionalExtension as _;
 use diesel::QueryDsl as _;
 use diesel::expression_methods::NullableExpressionMethods as _;
 use diesel::expression_methods::TextExpressionMethods as _;
-use diesel::prelude::SelectableHelper as _;
 use diesel_async::RunQueryDsl as _;
 
 use crate::error::ApiError;
-use crate::rows::{BookRow, ChapterRow, ChapterTitleRow, FileRow, SERIES_COLUMNS};
+use crate::rows::{
+    BOOK_COLUMNS, CHAPTER_META_COLUMNS, ChapterRow, FILE_COLUMNS, SERIES_COLUMNS, SeriesCount,
+    U32Value,
+};
 use crate::service::plugins::{DeclaredCatalog, PluginService};
 
 /// Where the *content* of a library addition comes from. Every addition
@@ -317,8 +319,7 @@ impl Library {
                         &book_id,
                     )
                     .await?;
-                self.upsert_chapters(&file.id, &content.chapters).await?;
-                file.chapter_count = content.chapters.len() as u32;
+                file.chapter_count = self.upsert_chapters(&file.id, &content.chapters).await?;
                 diesel::update(schema::book_files::table.find(&file.id))
                     .set(schema::book_files::chapter_count.eq(i64::from(file.chapter_count)))
                     .execute(&mut self.diesel_db.get().await?)
@@ -414,6 +415,8 @@ impl Library {
         book_file: &SourceBookFile,
         mut parsed: mandara_formats::ParsedBook,
     ) -> Result<(FileMeta, Vec<Chapter>), ApiError> {
+        let chapter_count =
+            u32::try_from(parsed.chapters.len()).context("too many parsed chapters")?;
         ingest_parsed_book(&self.diesel_db, &self.files_dir, &mut parsed).await?;
         let file_id = &file.id;
         let source = &file.source;
@@ -423,7 +426,7 @@ impl Library {
         let label = format!("{source} 下载");
         // Cache the fetched bytes as the file's original: the source may
         // disappear later; download/reparse should not depend on it.
-        let (orig_ext, orig_sha256, orig_size) = self
+        let original = self
             .store_original(file_id, format.as_ref(), &book_file.bytes)
             .await?;
 
@@ -434,10 +437,11 @@ impl Library {
                 schema::book_files::format.eq(format),
                 schema::book_files::label.eq(&label),
                 schema::book_files::toc.eq(toc_json),
-                schema::book_files::chapter_count.eq(parsed.chapters.len() as i64),
-                schema::book_files::orig_ext.eq(&orig_ext),
-                schema::book_files::orig_sha256.eq(&orig_sha256),
-                schema::book_files::orig_size.eq(orig_size),
+                schema::book_files::chapter_count.eq(i64::from(chapter_count)),
+                schema::book_files::orig_ext.eq(&original.ext),
+                schema::book_files::orig_sha256.eq(&original.sha256),
+                schema::book_files::orig_size.eq(i64::try_from(original.size)
+                    .context("original size exceeds SQLite integer range")?),
             ))
             .execute(&mut self.diesel_db.get().await?)
             .await?;
@@ -446,11 +450,11 @@ impl Library {
             .await?;
         {
             let mut conn = self.diesel_db.get().await?;
-            for (idx, chapter) in parsed.chapters.iter().enumerate() {
+            for (idx, chapter) in (0..chapter_count).zip(&parsed.chapters) {
                 diesel::insert_into(schema::chapters::table)
                     .values((
                         schema::chapters::file_id.eq(file_id),
-                        schema::chapters::idx.eq(idx as i64),
+                        schema::chapters::idx.eq(i64::from(idx)),
                         schema::chapters::title.eq(&chapter.title),
                         schema::chapters::content.eq(&chapter.content),
                         schema::chapters::linear.eq(chapter.linear),
@@ -471,18 +475,12 @@ impl Library {
         let mut file = file.clone();
         file.format = format;
         file.label = label;
-        file.chapter_count = parsed.chapters.len() as u32;
-        file.original = Some(mandara_core::model::OriginalInfo {
-            ext: orig_ext,
-            sha256: orig_sha256,
-            size: orig_size as u64,
-        });
-        let chapters = parsed
-            .chapters
-            .into_iter()
-            .enumerate()
+        file.chapter_count = chapter_count;
+        file.original = Some(original);
+        let chapters = (0..chapter_count)
+            .zip(parsed.chapters)
             .map(|(idx, chapter)| Chapter {
-                idx: idx as u32,
+                idx,
                 title: chapter.title,
                 content: chapter.content,
             })
@@ -664,7 +662,7 @@ impl Library {
                 // overwrite rule as title/description/cover).
                 schema::books::ext.eq(&ext_value),
                 schema::books::series_id.eq(&series_id),
-                schema::books::volume_no.eq(book.volume_no as i64),
+                schema::books::volume_no.eq(i64::from(book.volume_no)),
             ))
             .execute(&mut self.diesel_db.get().await?)
             .await?;
@@ -704,9 +702,10 @@ impl Library {
         &self,
         file_id: &str,
         chapters: &[SourceDeclaredChapter],
-    ) -> Result<(), ApiError> {
+    ) -> Result<u32, ApiError> {
+        let count = u32::try_from(chapters.len()).context("too many declared chapters")?;
         let mut conn = self.diesel_db.get().await?;
-        for (idx, chapter) in chapters.iter().enumerate() {
+        for (idx, chapter) in (0..count).zip(chapters) {
             let content = if let Some(body) = &chapter.content {
                 Some(
                     with_stored_dims(
@@ -723,7 +722,7 @@ impl Library {
             diesel::insert_into(schema::chapters::table)
                 .values((
                     schema::chapters::file_id.eq(file_id),
-                    schema::chapters::idx.eq(idx as i64),
+                    schema::chapters::idx.eq(i64::from(idx)),
                     schema::chapters::title.eq(chapter.title.trim()),
                     schema::chapters::content.eq(&content),
                 ))
@@ -740,7 +739,7 @@ impl Library {
                 .execute(&mut conn)
                 .await?;
         }
-        Ok(())
+        Ok(count)
     }
 
     /// The virtual file row of a plugin book.
@@ -751,19 +750,19 @@ impl Library {
         book_id: &str,
     ) -> Result<Option<FileMeta>, ApiError> {
         let mut conn = self.diesel_db.get().await?;
-        let row: Option<FileRow> = schema::book_files::table
+        let row: Option<FileMeta> = schema::book_files::table
             .filter(
                 schema::book_files::source
                     .eq(source)
                     .and(schema::book_files::external_id.eq(external_id))
                     .and(schema::book_files::book_id.eq(book_id)),
             )
-            .select(FileRow::as_select())
+            .select(FILE_COLUMNS)
             .first(&mut conn)
             .await
             .optional()?;
         drop(conn);
-        Ok(row.map(FileMeta::try_from).transpose()?)
+        Ok(row)
     }
 
     /// Insert a bare metadata entry (no files yet) — a book added on its
@@ -1137,8 +1136,7 @@ impl Library {
                 .await
                 .map(|(file, _)| file);
         }
-        self.upsert_chapters(&file.id, &content.chapters).await?;
-        file.chapter_count = content.chapters.len() as u32;
+        file.chapter_count = self.upsert_chapters(&file.id, &content.chapters).await?;
         diesel::update(schema::book_files::table.find(&file.id))
             .set(schema::book_files::chapter_count.eq(i64::from(file.chapter_count)))
             .execute(&mut self.diesel_db.get().await?)
@@ -1227,14 +1225,15 @@ impl Library {
 
     /// Retain the original file bytes on disk
     /// (`data/files/{file_id}.{ext}`, storage-unification design §4.2)
-    /// and return the `book_files` columns `orig_ext, orig_sha256,
-    /// orig_size`.
+    /// and return typed original-file metadata.
     async fn store_original(
         &self,
         file_id: &str,
         ext: &str,
         bytes: &[u8],
-    ) -> Result<(String, String, i64), ApiError> {
+    ) -> Result<OriginalInfo, ApiError> {
+        let size = u64::try_from(bytes.len()).context("original file is too large")?;
+        i64::try_from(size).context("original size exceeds SQLite integer range")?;
         tokio::fs::create_dir_all(&self.files_dir)
             .await
             .with_context(|| format!("create files dir {}", self.files_dir.display()))?;
@@ -1242,7 +1241,11 @@ impl Library {
         tokio::fs::write(&path, bytes)
             .await
             .with_context(|| format!("write original {}", path.display()))?;
-        Ok((ext.to_string(), sha256_hex(bytes), bytes.len() as i64))
+        Ok(OriginalInfo {
+            ext: ext.to_string(),
+            sha256: sha256_hex(bytes),
+            size,
+        })
     }
 
     /// Disk path of a file's retained original bytes.
@@ -1287,10 +1290,12 @@ impl Library {
         visibility: Visibility,
         label: &str,
     ) -> Result<FileMeta, ApiError> {
+        let chapter_count =
+            u32::try_from(parsed.chapters.len()).context("too many parsed chapters")?;
         let file_id = uuid::Uuid::new_v4().simple().to_string();
         let format = detect_format(filename);
         let toc_json = serde_json::to_string(&parsed.toc).unwrap_or_else(|_| "[]".into());
-        let (orig_ext, orig_sha256, orig_size) = self
+        let original = self
             .store_original(&file_id, format.as_ref(), bytes)
             .await?;
 
@@ -1307,20 +1312,21 @@ impl Library {
                 schema::book_files::label.eq(label),
                 schema::book_files::visibility.eq(visibility),
                 schema::book_files::owner_id.eq(owner_id),
-                schema::book_files::chapter_count.eq(parsed.chapters.len() as i64),
+                schema::book_files::chapter_count.eq(i64::from(chapter_count)),
                 schema::book_files::toc.eq(toc_json),
-                schema::book_files::orig_ext.eq(&orig_ext),
-                schema::book_files::orig_sha256.eq(&orig_sha256),
-                schema::book_files::orig_size.eq(orig_size),
+                schema::book_files::orig_ext.eq(&original.ext),
+                schema::book_files::orig_sha256.eq(&original.sha256),
+                schema::book_files::orig_size.eq(i64::try_from(original.size)
+                    .context("original size exceeds SQLite integer range")?),
             ))
             .execute(&mut tx)
             .await?;
 
-        for (idx, chapter) in parsed.chapters.iter().enumerate() {
+        for (idx, chapter) in (0..chapter_count).zip(&parsed.chapters) {
             diesel::insert_into(schema::chapters::table)
                 .values((
                     schema::chapters::file_id.eq(&file_id),
-                    schema::chapters::idx.eq(idx as i64),
+                    schema::chapters::idx.eq(i64::from(idx)),
                     schema::chapters::title.eq(&chapter.title),
                     schema::chapters::content.eq(&chapter.content),
                     schema::chapters::linear.eq(chapter.linear),
@@ -1362,7 +1368,7 @@ impl Library {
         // batch below still returns every visible file of a listed book.
         let mut book_q = schema::books::table
             .filter(schema::books::title.like(&pattern))
-            .select(BookRow::as_select())
+            .select(BOOK_COLUMNS)
             .into_boxed::<diesel::sqlite::Sqlite>();
         if let Some(source) = source {
             // A book with at least one file from the source the caller
@@ -1405,7 +1411,7 @@ impl Library {
                 .and(schema::books::created_by.eq(&user.id))),
             );
         }
-        let rows: Vec<BookRow> = book_q
+        let rows: Vec<BookMeta> = book_q
             .order((
                 schema::books::series_id.is_not_null().desc(),
                 schema::books::series_id.asc(),
@@ -1423,7 +1429,7 @@ impl Library {
         let mut file_q = schema::book_files::table
             .filter(schema::book_files::book_id.eq_any(ids))
             .order(schema::book_files::created_at.desc())
-            .select(FileRow::as_select())
+            .select(FILE_COLUMNS)
             .into_boxed();
         if !is_admin {
             file_q = file_q.filter(
@@ -1432,19 +1438,17 @@ impl Library {
                     .or(schema::book_files::owner_id.eq(&user.id)),
             );
         }
-        let file_rows: Vec<FileRow> = file_q.load(&mut conn).await?;
+        let file_rows: Vec<FileMeta> = file_q.load(&mut conn).await?;
         drop(conn);
 
         let mut by_book: std::collections::HashMap<String, Vec<FileMeta>> =
             std::collections::HashMap::new();
-        for row in file_rows {
-            let meta = FileMeta::try_from(row)?;
+        for meta in file_rows {
             by_book.entry(meta.book_id.clone()).or_default().push(meta);
         }
 
         let mut books = Vec::new();
-        for row in rows {
-            let book = BookMeta::try_from(row)?;
+        for book in rows {
             let files = by_book.remove(&book.id).unwrap_or_default();
             // Metadata-only entries (no visible files) belong to the
             // caller and were already admitted by the join filter above.
@@ -1454,13 +1458,13 @@ impl Library {
     }
 
     pub async fn get_book(&self, id: &str) -> Result<Option<BookMeta>, ApiError> {
-        let row: Option<BookRow> = schema::books::table
+        let row: Option<BookMeta> = schema::books::table
             .find(id)
-            .select(BookRow::as_select())
+            .select(BOOK_COLUMNS)
             .first(&mut self.diesel_db.get().await?)
             .await
             .optional()?;
-        Ok(row.map(BookMeta::try_from).transpose()?)
+        Ok(row)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1588,13 +1592,13 @@ impl Library {
         }
 
         // Files of this book backed by a plugin source.
-        let plugin_files: Vec<FileRow> = schema::book_files::table
+        let plugin_files: Vec<FileMeta> = schema::book_files::table
             .filter(
                 schema::book_files::book_id
                     .eq(book_id)
                     .and(schema::book_files::source.ne("local")),
             )
-            .select(FileRow::as_select())
+            .select(FILE_COLUMNS)
             .load(&mut self.diesel_db.get().await?)
             .await?;
 
@@ -1642,7 +1646,7 @@ impl Library {
                     // Refresh replaces the extended metadata wholesale.
                     schema::books::ext.eq(ext_value),
                     schema::books::series_id.eq(&series_id),
-                    schema::books::volume_no.eq(entry.volume_no as i64),
+                    schema::books::volume_no.eq(i64::from(entry.volume_no)),
                 ))
                 .execute(&mut self.diesel_db.get().await?)
                 .await?;
@@ -1652,8 +1656,7 @@ impl Library {
         // 2) Chapter-title placeholders / content pointers per file, from
         //    each file's own (content) source. Book metadata is untouched
         //    here — a file's plugin never overwrites it.
-        for row in plugin_files {
-            let mut file = FileMeta::try_from(row)?;
+        for mut file in plugin_files {
             if !file.content_mode.has_chapters() {
                 continue;
             }
@@ -1694,16 +1697,13 @@ impl Library {
     /// visibility is applied per book by the caller; the series itself
     /// is already visibility-checked).
     pub async fn series_member_books(&self, id: &str) -> Result<Vec<BookMeta>, ApiError> {
-        let rows: Vec<BookRow> = schema::books::table
+        let rows: Vec<BookMeta> = schema::books::table
             .filter(schema::books::series_id.eq(id))
             .order(schema::books::volume_no.asc())
-            .select(BookRow::as_select())
+            .select(BOOK_COLUMNS)
             .load(&mut self.diesel_db.get().await?)
             .await?;
-        Ok(rows
-            .into_iter()
-            .map(BookMeta::try_from)
-            .collect::<Result<_, _>>()?)
+        Ok(rows)
     }
 
     /// Is the series visible to the caller (creator, admin, or ≥1 member
@@ -1749,12 +1749,12 @@ impl Library {
 
     /// Number of member books of a series (any visibility).
     pub async fn series_volume_count(&self, id: &str) -> Result<u32, ApiError> {
-        let count: i64 = schema::books::table
+        let count: U32Value = schema::books::table
             .filter(schema::books::series_id.eq(id))
-            .count()
+            .select((diesel::dsl::count_star(),))
             .get_result(&mut self.diesel_db.get().await?)
             .await?;
-        Ok(count.max(0) as u32)
+        Ok(count.0)
     }
 
     /// All series the caller can see (creator, or ≥1 visible member
@@ -1788,22 +1788,22 @@ impl Library {
         // Member counts in one grouped query (fixes the per-series COUNT
         // N+1 of the sqlx version).
         let ids: Vec<String> = rows.iter().map(|r| r.id.clone()).collect();
-        let counts: Vec<(Option<String>, i64)> = schema::books::table
+        let counts: Vec<SeriesCount> = schema::books::table
             .filter(schema::books::series_id.eq_any(ids))
             .group_by(schema::books::series_id)
             .select((schema::books::series_id, diesel::dsl::count_star()))
             .load(&mut self.diesel_db.get().await?)
             .await?;
-        let mut by_series: std::collections::HashMap<String, i64> = counts
+        let mut by_series: std::collections::HashMap<String, u32> = counts
             .into_iter()
-            .filter_map(|(sid, n)| sid.map(|sid| (sid, n)))
+            .filter_map(|row| row.series_id.map(|sid| (sid, row.count)))
             .collect();
 
         Ok(rows
             .into_iter()
             .map(|row| {
                 let count = by_series.remove(&row.id).unwrap_or(0);
-                (row, count.max(0) as u32)
+                (row, count)
             })
             .collect())
     }
@@ -1950,6 +1950,7 @@ impl Library {
                 return Err(ApiError::Forbidden);
             }
         }
+        let volume_count = u32::try_from(book_ids.len()).map_err(ApiError::invalid_input)?;
         let mut conn = self.diesel_db.get().await?;
         diesel::update(schema::books::table.filter(schema::books::series_id.eq(id)))
             .set((
@@ -1958,11 +1959,11 @@ impl Library {
             ))
             .execute(&mut conn)
             .await?;
-        for (i, bid) in book_ids.iter().enumerate() {
+        for (volume, bid) in (1..=volume_count).zip(book_ids) {
             diesel::update(schema::books::table.find(bid))
                 .set((
                     schema::books::series_id.eq(id),
-                    schema::books::volume_no.eq(i as i64 + 1),
+                    schema::books::volume_no.eq(i64::from(volume)),
                 ))
                 .execute(&mut conn)
                 .await?;
@@ -2031,16 +2032,20 @@ impl Library {
         let vol = match target_vol {
             Some(Some(n)) => n,
             Some(None) | None => {
-                let max: Option<i64> = schema::books::table
+                let max: Option<U32Value> = schema::books::table
                     .filter(
                         schema::books::series_id
                             .eq(&sid)
                             .and(schema::books::id.ne(book_id)),
                     )
-                    .select(diesel::dsl::max(schema::books::volume_no))
+                    .order(schema::books::volume_no.desc())
+                    .select((schema::books::volume_no,))
                     .first(&mut self.diesel_db.get().await?)
-                    .await?;
-                (max.unwrap_or(0).max(0) as u32).saturating_add(1)
+                    .await
+                    .optional()?;
+                max.map_or(0, |value| value.0)
+                    .checked_add(1)
+                    .ok_or_else(|| ApiError::bad_request("series volume number limit reached"))?
             }
         };
         // Volume numbers within a series are unique.
@@ -2048,7 +2053,7 @@ impl Library {
             .filter(
                 schema::books::series_id
                     .eq(&sid)
-                    .and(schema::books::volume_no.eq(vol as i64))
+                    .and(schema::books::volume_no.eq(i64::from(vol)))
                     .and(schema::books::id.ne(book_id)),
             )
             .select(schema::books::id)
@@ -2063,7 +2068,7 @@ impl Library {
         diesel::update(schema::books::table.find(book_id))
             .set((
                 schema::books::series_id.eq(&sid),
-                schema::books::volume_no.eq(vol as i64),
+                schema::books::volume_no.eq(i64::from(vol)),
             ))
             .execute(&mut self.diesel_db.get().await?)
             .await?;
@@ -2084,7 +2089,7 @@ impl Library {
         let mut q = schema::book_files::table
             .filter(schema::book_files::book_id.eq(book_id))
             .order(schema::book_files::created_at.desc())
-            .select(FileRow::as_select())
+            .select(FILE_COLUMNS)
             .into_boxed();
         if !is_admin {
             q = q.filter(
@@ -2093,21 +2098,18 @@ impl Library {
                     .or(schema::book_files::owner_id.eq(&user.id)),
             );
         }
-        let rows: Vec<FileRow> = q.load(&mut self.diesel_db.get().await?).await?;
-        Ok(rows
-            .into_iter()
-            .map(FileMeta::try_from)
-            .collect::<Result<_, _>>()?)
+        let rows: Vec<FileMeta> = q.load(&mut self.diesel_db.get().await?).await?;
+        Ok(rows)
     }
 
     pub async fn get_file(&self, id: &str) -> Result<Option<FileMeta>, ApiError> {
-        let row: Option<FileRow> = schema::book_files::table
+        let row: Option<FileMeta> = schema::book_files::table
             .find(id)
-            .select(FileRow::as_select())
+            .select(FILE_COLUMNS)
             .first(&mut self.diesel_db.get().await?)
             .await
             .optional()?;
-        Ok(row.map(FileMeta::try_from).transpose()?)
+        Ok(row)
     }
 
     pub async fn update_file(
@@ -2187,20 +2189,13 @@ impl Library {
     // ---- chapters --------------------------------------------------------
 
     pub async fn chapter_titles(&self, file_id: &str) -> Result<Vec<ChapterMeta>, ApiError> {
-        let rows: Vec<ChapterTitleRow> = schema::chapters::table
+        let rows: Vec<ChapterMeta> = schema::chapters::table
             .filter(schema::chapters::file_id.eq(file_id))
             .order(schema::chapters::idx.asc())
-            .select((
-                schema::chapters::idx,
-                schema::chapters::title,
-                schema::chapters::linear,
-            ))
+            .select(CHAPTER_META_COLUMNS)
             .load(&mut self.diesel_db.get().await?)
             .await?;
-        Ok(rows
-            .into_iter()
-            .map(ChapterMeta::try_from)
-            .collect::<Result<_, _>>()?)
+        Ok(rows)
     }
 
     /// The file's hierarchical TOC. Files stored without one (plugin
@@ -2342,8 +2337,8 @@ impl Library {
             .load::<ChapterRow>(&mut self.diesel_db.get().await?)
             .await?
             .into_iter()
-            .filter_map(|row| Option::<Chapter>::try_from(row).transpose())
-            .collect::<Result<Vec<_>, _>>()?;
+            .filter_map(Option::<Chapter>::from)
+            .collect::<Vec<_>>();
         if file.chapter_count != 0 && cached.len() == file.chapter_count as usize {
             let mut chapters = Vec::with_capacity(cached.len());
             for mut chapter in cached {
@@ -2365,7 +2360,7 @@ impl Library {
 
     async fn cached_chapter(&self, file_id: &str, idx: u32) -> Result<Option<Chapter>, ApiError> {
         let row: Option<ChapterRow> = schema::chapters::table
-            .find((file_id, idx as i64))
+            .find((file_id, i64::from(idx)))
             .select((
                 schema::chapters::idx,
                 schema::chapters::title,
@@ -2375,7 +2370,7 @@ impl Library {
             .await
             .optional()?;
 
-        if let Some(mut model) = row.map(Option::<Chapter>::try_from).transpose()?.flatten() {
+        if let Some(mut model) = row.and_then(Option::<Chapter>::from) {
             // Best-effort width/height on stored img tags (chapters
             // materialized before the dimensions existed lack them;
             // without them every image load re-anchors the view).
@@ -2415,7 +2410,7 @@ impl Library {
         diesel::insert_into(schema::chapters::table)
             .values((
                 schema::chapters::file_id.eq(&file.id),
-                schema::chapters::idx.eq(idx as i64),
+                schema::chapters::idx.eq(i64::from(idx)),
                 schema::chapters::title.eq(&chapter.title),
                 schema::chapters::content.eq(&content),
             ))
@@ -2440,29 +2435,30 @@ impl Library {
         &self,
         file_id: &str,
         titles: &[String],
-    ) -> Result<(), ApiError> {
+    ) -> Result<u32, ApiError> {
+        let count = u32::try_from(titles.len()).context("too many chapter titles")?;
         let mut conn = self.diesel_db.get().await?;
         // Preserve all cached bodies, including valid empty chapters.
-        let has_body: std::collections::HashSet<i64> = schema::chapters::table
+        let has_body: std::collections::HashSet<u32> = schema::chapters::table
             .filter(
                 schema::chapters::file_id
                     .eq(file_id)
                     .and(schema::chapters::content.is_not_null()),
             )
-            .select(schema::chapters::idx)
-            .load::<i64>(&mut conn)
+            .select((schema::chapters::idx,))
+            .load::<U32Value>(&mut conn)
             .await?
             .into_iter()
+            .map(|value| value.0)
             .collect();
-        for (idx, title) in titles.iter().enumerate() {
-            let idx = idx as i64;
+        for (idx, title) in (0..count).zip(titles) {
             if has_body.contains(&idx) {
                 continue;
             }
             diesel::insert_into(schema::chapters::table)
                 .values((
                     schema::chapters::file_id.eq(file_id),
-                    schema::chapters::idx.eq(idx),
+                    schema::chapters::idx.eq(i64::from(idx)),
                     schema::chapters::title.eq(title.trim()),
                     schema::chapters::content.eq(None::<String>),
                 ))
@@ -2472,7 +2468,7 @@ impl Library {
                 .execute(&mut conn)
                 .await?;
         }
-        Ok(())
+        Ok(count)
     }
 
     /// Refresh stored titles from the content source after an explicit user action.
@@ -2495,7 +2491,7 @@ impl Library {
             return Ok(file.chapter_count);
         }
         // The plugin returns only this content item's chapter titles.
-        self.upsert_placeholder_titles(&file.id, &titles).await?;
+        let chapter_count = self.upsert_placeholder_titles(&file.id, &titles).await?;
         // Placeholder rows beyond the book's range are stale (previous
         // chapter count that shrank); drop the
         // uncached ones. Materialized bodies stay untouched.
@@ -2504,18 +2500,18 @@ impl Library {
                 schema::chapters::file_id
                     .eq(&file.id)
                     .and(schema::chapters::content.is_null())
-                    .and(schema::chapters::idx.ge(titles.len() as i64)),
+                    .and(schema::chapters::idx.ge(i64::from(chapter_count))),
             ),
         )
         .execute(&mut self.diesel_db.get().await?)
         .await?;
-        if titles.len() != file.chapter_count as usize {
+        if chapter_count != file.chapter_count {
             diesel::update(schema::book_files::table.find(&file.id))
-                .set(schema::book_files::chapter_count.eq(titles.len() as i64))
+                .set(schema::book_files::chapter_count.eq(i64::from(chapter_count)))
                 .execute(&mut self.diesel_db.get().await?)
                 .await?;
         }
-        Ok(titles.len() as u32)
+        Ok(chapter_count)
     }
 }
 
@@ -2586,9 +2582,11 @@ pub async fn store_image(
             schema::images::created_at.eq(chrono::Utc::now()),
             schema::images::id.eq(&id),
             schema::images::mime.eq(mime),
-            schema::images::size.eq(bytes.len() as i64),
-            schema::images::width.eq(dims.map(|(w, _)| w as i64)),
-            schema::images::height.eq(dims.map(|(_, h)| h as i64)),
+            schema::images::size
+                .eq(i64::try_from(bytes.len())
+                    .context("image size exceeds SQLite integer range")?),
+            schema::images::width.eq(dims.map(|(w, _)| i64::from(w))),
+            schema::images::height.eq(dims.map(|(_, h)| i64::from(h))),
         ))
         .on_conflict_do_nothing()
         .execute(&mut db.get().await?)
@@ -2769,16 +2767,18 @@ pub async fn reparse_originals(db: &DieselDb, files_dir: &Path) -> anyhow::Resul
             continue;
         }
         let toc_json = serde_json::to_string(&parsed.toc).unwrap_or_else(|_| "[]".into());
-        let count = parsed.chapters.len() as i64;
+        let chapter_count =
+            u32::try_from(parsed.chapters.len()).context("too many parsed chapters")?;
+        let count = i64::from(chapter_count);
         let mut conn = db.get().await?;
         diesel::delete(schema::chapters::table.filter(schema::chapters::file_id.eq(&file_id)))
             .execute(&mut conn)
             .await?;
-        for (idx, chapter) in parsed.chapters.iter().enumerate() {
+        for (idx, chapter) in (0..chapter_count).zip(&parsed.chapters) {
             diesel::insert_into(schema::chapters::table)
                 .values((
                     schema::chapters::file_id.eq(&file_id),
-                    schema::chapters::idx.eq(idx as i64),
+                    schema::chapters::idx.eq(i64::from(idx)),
                     schema::chapters::title.eq(&chapter.title),
                     schema::chapters::content.eq(&chapter.content),
                     schema::chapters::linear.eq(chapter.linear),
@@ -2796,7 +2796,10 @@ pub async fn reparse_originals(db: &DieselDb, files_dir: &Path) -> anyhow::Resul
         // Keep every session; clamp positions into the new chapter range.
         diesel::update(schema::sessions::table.filter(schema::sessions::file_id.eq(&file_id)))
             .set((
-                schema::sessions::chapter_idx.eq(least(schema::sessions::chapter_idx, count - 1)),
+                schema::sessions::chapter_idx.eq(least(
+                    schema::sessions::chapter_idx,
+                    i64::from(chapter_count.saturating_sub(1)),
+                )),
                 schema::sessions::fraction.eq(least_double(schema::sessions::fraction, 1.0)),
             ))
             .execute(&mut conn)
@@ -3509,16 +3512,11 @@ mod tests {
             .execute(&mut conn)
             .await
             .unwrap();
-        let rows: Vec<ChapterTitleRow> = schema::chapters::table
+        let metas: Vec<ChapterMeta> = schema::chapters::table
             .order(schema::chapters::idx.asc())
-            .select(ChapterTitleRow::as_select())
+            .select(CHAPTER_META_COLUMNS)
             .load(&mut conn)
             .await
-            .unwrap();
-        let metas: Vec<_> = rows
-            .into_iter()
-            .map(ChapterMeta::try_from)
-            .collect::<Result<_, _>>()
             .unwrap();
         assert!(metas[0].linear);
         assert!(!metas[1].linear);

@@ -154,7 +154,7 @@ pub struct SeriesMeta {
 /// [`FileMeta`]s (formats/editions). When the entry is one volume of a
 /// series, `series_id` points to it and `volume_no` is its 1-based
 /// ordinal (`0` = standalone).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, diesel::Queryable)]
 pub struct BookMeta {
     pub id: String,
     pub title: String,
@@ -169,6 +169,7 @@ pub struct BookMeta {
     /// Series this book is a volume of (`None` = standalone).
     pub series_id: Option<String>,
     /// 1-based volume ordinal inside the series (`0` = standalone).
+    #[diesel(deserialize_as = i64)]
     pub volume_no: u32,
 }
 
@@ -214,7 +215,7 @@ impl std::str::FromStr for ContentMode {
 
 /// One actual book file (a local upload or a virtual plugin book).
 /// Chapters, sessions and shares attach to files.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, diesel::Queryable)]
 pub struct FileMeta {
     pub id: String,
     pub book_id: String,
@@ -229,6 +230,7 @@ pub struct FileMeta {
     pub label: String,
     pub visibility: Visibility,
     pub owner_id: Option<String>,
+    #[diesel(deserialize_as = i64)]
     pub chapter_count: u32,
     pub created_at: DateTime<Utc>,
     /// Immutable loading operations selected at acquisition.
@@ -237,14 +239,16 @@ pub struct FileMeta {
     /// content came with one (uploads, plugin file-mode pulls). Enables
     /// `GET /api/files/{id}/download` and `--reparse-originals`.
     /// `None` = plugin chapter-mode files and pre-retention uploads.
+    #[diesel(deserialize_as = crate::db::OriginalColumns)]
     pub original: Option<OriginalInfo>,
 }
 
 /// Metadata of a file's retained original bytes.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, diesel::Queryable)]
 pub struct OriginalInfo {
     /// Original file extension without the dot (`epub` / `txt`).
     pub ext: String,
+    #[diesel(deserialize_as = i64)]
     pub size: u64,
     pub sha256: String,
 }
@@ -393,8 +397,9 @@ impl std::str::FromStr for FileFormat {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, diesel::Queryable)]
 pub struct ChapterMeta {
+    #[diesel(deserialize_as = i64)]
     pub idx: u32,
     pub title: String,
     /// Auxiliary EPUB documents are addressable, but excluded from default navigation.

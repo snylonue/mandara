@@ -20,14 +20,29 @@ in route handlers or row-to-model conversions.
   no application-level legacy timestamp parser or fallback to the Unix epoch.
 - Metadata JSON columns and model fields are both named ext. Chapter linear
   flags use Diesel's native Bool mapping.
-- User, SeriesMeta, ReadingSession, and Share derive Queryable and are loaded
-  directly through server-side column projections; there are no duplicate rows.
-- Rows remain only for signed-to-unsigned integer conversions and shapes that
-  differ from the domain model. Standard TryFrom implementations reject invalid
-  stored numbers, missing reading contexts, and incomplete original-file data
-  instead of clamping, truncating, or silently substituting another value.
-  OriginalInfo and Position are assembled from multiple columns. NULL chapter
+- User, BookMeta, SeriesMeta, FileMeta, ChapterMeta, ReadingSession, and Share
+  derive Queryable and load directly through server-side column projections.
+  Integer fields use `#[diesel(deserialize_as = i64)]` to invoke the standard
+  checked conversion into u32/u64 during ORM deserialization. Negative or
+  out-of-range integers fail the query; they are not narrowed in service code.
+- OriginalInfo is assembled from three nullable columns during ORM decoding.
+  All NULL means no original; partially populated metadata and negative sizes
+  are deserialization errors. Remaining rows represent genuinely different
+  shapes: optional chapter content and the position discriminator. Standard
+  From/TryFrom handle these structures, not integer range checks. NULL chapter
   content means uncached, while an empty string is valid cached content.
+
+## Numeric write boundaries
+
+Write interfaces use unsigned domain types for volumes, chapter counts and
+indices, character offsets, file sizes, and image dimensions. Widen u32 with
+`i64::from`; convert u64 sizes with `i64::try_from` because SQLite integers
+are signed. Check collection lengths as u32 before writing any chapter rows,
+then enumerate using the checked unsigned range. Computed volume ordinals use
+checked addition, not saturation or truncating casts.
+
+These are ORM and application constraints only. No database CHECK constraints
+or STRICT-table migration are introduced by these mappings.
 
 ## Schema generation
 

@@ -1,18 +1,75 @@
 //! Query projections and conversions for rows whose shape differs from domain models.
 
-use crate::schema::{reading_sessions, series, shares, users};
+use crate::schema::{book_files, books, chapters, reading_sessions, series, shares, users};
 use anyhow::{Context as _, ensure};
 use chrono::{DateTime, Utc};
-use mandara_core::BookExt;
-use mandara_core::model::{
-    Authors, BookMeta, Chapter, ChapterMeta, ContentMode, FileFormat, FileMeta, InChapter,
-    OriginalInfo, Position, PositionKind, ReadingProgress, Visibility,
-};
+use mandara_core::model::{Chapter, InChapter, Position, PositionKind, ReadingProgress};
 
 #[cfg(test)]
 mod tests;
 
-// These projections load core Queryable models directly, without duplicate row structs.
+// Tuple order matches each core Queryable model.
+pub const BOOK_COLUMNS: (
+    books::id,
+    books::title,
+    books::authors,
+    books::description,
+    books::cover_url,
+    books::ext,
+    books::created_by,
+    books::created_at,
+    books::series_id,
+    books::volume_no,
+) = (
+    books::id,
+    books::title,
+    books::authors,
+    books::description,
+    books::cover_url,
+    books::ext,
+    books::created_by,
+    books::created_at,
+    books::series_id,
+    books::volume_no,
+);
+type OriginalFileColumns = (
+    book_files::orig_ext,
+    book_files::orig_size,
+    book_files::orig_sha256,
+);
+pub const FILE_COLUMNS: (
+    book_files::id,
+    book_files::book_id,
+    book_files::source,
+    book_files::external_id,
+    book_files::format,
+    book_files::label,
+    book_files::visibility,
+    book_files::owner_id,
+    book_files::chapter_count,
+    book_files::created_at,
+    book_files::content_mode,
+    OriginalFileColumns,
+) = (
+    book_files::id,
+    book_files::book_id,
+    book_files::source,
+    book_files::external_id,
+    book_files::format,
+    book_files::label,
+    book_files::visibility,
+    book_files::owner_id,
+    book_files::chapter_count,
+    book_files::created_at,
+    book_files::content_mode,
+    (
+        book_files::orig_ext,
+        book_files::orig_size,
+        book_files::orig_sha256,
+    ),
+);
+pub const CHAPTER_META_COLUMNS: (chapters::idx, chapters::title, chapters::linear) =
+    (chapters::idx, chapters::title, chapters::linear);
 pub const USER_COLUMNS: (users::id, users::username, users::role, users::created_at) =
     (users::id, users::username, users::role, users::created_at);
 pub const SERIES_COLUMNS: (
@@ -64,130 +121,20 @@ pub const SHARE_COLUMNS: (
 );
 
 #[derive(Debug, diesel::Queryable, diesel::Selectable)]
-#[diesel(table_name = crate::schema::books, check_for_backend(diesel::sqlite::Sqlite))]
-pub struct BookRow {
-    pub id: String,
-    pub title: String,
-    pub authors: Authors,
-    pub description: Option<String>,
-    pub cover_url: Option<String>,
-    pub created_by: Option<String>,
-    pub created_at: DateTime<Utc>,
-    pub series_id: Option<String>,
-    pub volume_no: i64,
-    pub ext: BookExt,
-}
-
-impl TryFrom<BookRow> for BookMeta {
-    type Error = anyhow::Error;
-
-    fn try_from(row: BookRow) -> Result<Self, Self::Error> {
-        Ok(Self {
-            id: row.id,
-            title: row.title,
-            authors: row.authors,
-            description: row.description,
-            cover_url: row.cover_url,
-            ext: row.ext,
-            created_by: row.created_by,
-            created_at: row.created_at,
-            series_id: row.series_id,
-            volume_no: u32::try_from(row.volume_no).context("invalid stored volume number")?,
-        })
-    }
-}
-
-#[derive(Debug, diesel::Queryable, diesel::Selectable)]
-#[diesel(table_name = crate::schema::book_files, check_for_backend(diesel::sqlite::Sqlite))]
-pub struct FileRow {
-    pub id: String,
-    pub book_id: String,
-    pub source: String,
-    pub external_id: String,
-    pub format: FileFormat,
-    pub label: String,
-    pub visibility: Visibility,
-    pub owner_id: Option<String>,
-    pub chapter_count: i64,
-    pub created_at: DateTime<Utc>,
-    pub content_mode: ContentMode,
-    pub orig_ext: Option<String>,
-    pub orig_sha256: Option<String>,
-    pub orig_size: Option<i64>,
-}
-
-impl TryFrom<FileRow> for FileMeta {
-    type Error = anyhow::Error;
-
-    fn try_from(row: FileRow) -> Result<Self, Self::Error> {
-        let original = match (row.orig_ext, row.orig_sha256, row.orig_size) {
-            (None, None, None) => None,
-            (Some(ext), Some(sha256), Some(size)) => Some(OriginalInfo {
-                ext,
-                sha256,
-                size: u64::try_from(size).context("invalid stored file size")?,
-            }),
-            _ => anyhow::bail!("incomplete stored original file metadata"),
-        };
-        Ok(Self {
-            id: row.id,
-            book_id: row.book_id,
-            source: row.source,
-            external_id: row.external_id,
-            format: row.format,
-            label: row.label,
-            visibility: row.visibility,
-            owner_id: row.owner_id,
-            chapter_count: u32::try_from(row.chapter_count)
-                .context("invalid stored chapter count")?,
-            created_at: row.created_at,
-            content_mode: row.content_mode,
-            original,
-        })
-    }
-}
-
-#[derive(Debug, diesel::Queryable, diesel::Selectable)]
 #[diesel(table_name = crate::schema::chapters, check_for_backend(diesel::sqlite::Sqlite))]
 pub struct ChapterRow {
-    pub idx: i64,
+    #[diesel(deserialize_as = i64)]
+    pub idx: u32,
     pub title: String,
     pub content: Option<String>,
 }
 
-impl TryFrom<ChapterRow> for Option<Chapter> {
-    type Error = anyhow::Error;
-
-    fn try_from(row: ChapterRow) -> Result<Self, Self::Error> {
-        // NULL is an uncached placeholder; an empty string is cached content.
-        row.content
-            .map(|content| {
-                Ok(Chapter {
-                    idx: u32::try_from(row.idx).context("invalid stored chapter index")?,
-                    title: row.title,
-                    content,
-                })
-            })
-            .transpose()
-    }
-}
-
-#[derive(Debug, diesel::Queryable, diesel::Selectable)]
-#[diesel(table_name = crate::schema::chapters, check_for_backend(diesel::sqlite::Sqlite))]
-pub struct ChapterTitleRow {
-    pub idx: i64,
-    pub title: String,
-    pub linear: bool,
-}
-
-impl TryFrom<ChapterTitleRow> for ChapterMeta {
-    type Error = anyhow::Error;
-
-    fn try_from(row: ChapterTitleRow) -> Result<Self, Self::Error> {
-        Ok(Self {
-            idx: u32::try_from(row.idx).context("invalid stored chapter index")?,
+impl From<ChapterRow> for Option<Chapter> {
+    fn from(row: ChapterRow) -> Self {
+        row.content.map(|content| Chapter {
+            idx: row.idx,
             title: row.title,
-            linear: row.linear,
+            content,
         })
     }
 }
@@ -199,8 +146,10 @@ pub struct SessionRow {
     pub user_id: String,
     pub file_id: String,
     pub label: String,
-    pub chapter_idx: i64,
-    pub offset: i64,
+    #[diesel(deserialize_as = i64)]
+    pub chapter_idx: u32,
+    #[diesel(deserialize_as = i64)]
+    pub offset: u32,
     pub fraction: f64,
     pub updated_at: DateTime<Utc>,
     pub reading_session_id: Option<String>,
@@ -212,9 +161,7 @@ impl TryFrom<SessionRow> for ReadingProgress {
 
     fn try_from(row: SessionRow) -> Result<Self, Self::Error> {
         let in_chapter = match row.position_kind {
-            PositionKind::Offset => InChapter::CharOffset {
-                offset: u32::try_from(row.offset).context("invalid stored character offset")?,
-            },
+            PositionKind::Offset => InChapter::CharOffset { offset: row.offset },
             PositionKind::Fraction => {
                 ensure!(
                     row.fraction.is_finite() && (0.0..=1.0).contains(&row.fraction),
@@ -235,11 +182,21 @@ impl TryFrom<SessionRow> for ReadingProgress {
             file_id: row.file_id,
             label: row.label,
             position: Position {
-                chapter_idx: u32::try_from(row.chapter_idx)
-                    .context("invalid stored chapter index")?,
+                chapter_idx: row.chapter_idx,
                 in_chapter,
             },
             updated_at: row.updated_at,
         })
     }
+}
+
+/// A one-column unsigned aggregate or scalar, checked by Diesel on load.
+#[derive(diesel::Queryable)]
+pub struct U32Value(#[diesel(deserialize_as = i64)] pub u32);
+
+#[derive(diesel::Queryable)]
+pub struct SeriesCount {
+    pub series_id: Option<String>,
+    #[diesel(deserialize_as = i64)]
+    pub count: u32,
 }
