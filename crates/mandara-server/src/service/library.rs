@@ -105,8 +105,8 @@ use diesel_async::RunQueryDsl as _;
 
 use crate::error::ApiError;
 use crate::rows::{
-    BOOK_COLUMNS, CHAPTER_META_COLUMNS, ChapterRow, FILE_COLUMNS, SERIES_COLUMNS, SeriesCount,
-    U32Value,
+    BOOK_COLUMNS, CHAPTER_META_COLUMNS, ChapterRow, SERIES_COLUMNS, SeriesCount, U32Value,
+    file_columns,
 };
 use crate::service::plugins::{DeclaredCatalog, PluginService};
 
@@ -757,7 +757,7 @@ impl Library {
                     .and(schema::book_files::external_id.eq(external_id))
                     .and(schema::book_files::book_id.eq(book_id)),
             )
-            .select(FILE_COLUMNS)
+            .select(file_columns())
             .first(&mut conn)
             .await
             .optional()?;
@@ -1233,7 +1233,6 @@ impl Library {
         bytes: &[u8],
     ) -> Result<OriginalInfo, ApiError> {
         let size = u64::try_from(bytes.len()).context("original file is too large")?;
-        i64::try_from(size).context("original size exceeds SQLite integer range")?;
         tokio::fs::create_dir_all(&self.files_dir)
             .await
             .with_context(|| format!("create files dir {}", self.files_dir.display()))?;
@@ -1429,7 +1428,7 @@ impl Library {
         let mut file_q = schema::book_files::table
             .filter(schema::book_files::book_id.eq_any(ids))
             .order(schema::book_files::created_at.desc())
-            .select(FILE_COLUMNS)
+            .select(file_columns())
             .into_boxed();
         if !is_admin {
             file_q = file_q.filter(
@@ -1598,7 +1597,7 @@ impl Library {
                     .eq(book_id)
                     .and(schema::book_files::source.ne("local")),
             )
-            .select(FILE_COLUMNS)
+            .select(file_columns())
             .load(&mut self.diesel_db.get().await?)
             .await?;
 
@@ -2089,7 +2088,7 @@ impl Library {
         let mut q = schema::book_files::table
             .filter(schema::book_files::book_id.eq(book_id))
             .order(schema::book_files::created_at.desc())
-            .select(FILE_COLUMNS)
+            .select(file_columns())
             .into_boxed();
         if !is_admin {
             q = q.filter(
@@ -2105,7 +2104,7 @@ impl Library {
     pub async fn get_file(&self, id: &str) -> Result<Option<FileMeta>, ApiError> {
         let row: Option<FileMeta> = schema::book_files::table
             .find(id)
-            .select(FILE_COLUMNS)
+            .select(file_columns())
             .first(&mut self.diesel_db.get().await?)
             .await
             .optional()?;

@@ -32,12 +32,13 @@ pub const BOOK_COLUMNS: (
     books::series_id,
     books::volume_no,
 );
-type OriginalFileColumns = (
-    book_files::orig_ext,
-    book_files::orig_size,
-    book_files::orig_sha256,
+type RequiredOriginalColumns = (
+    diesel::dsl::AssumeNotNull<book_files::orig_ext>,
+    diesel::dsl::AssumeNotNull<book_files::orig_size>,
+    diesel::dsl::AssumeNotNull<book_files::orig_sha256>,
 );
-pub const FILE_COLUMNS: (
+type OriginalFileColumns = diesel::dsl::Nullable<RequiredOriginalColumns>;
+type FileColumns = (
     book_files::id,
     book_files::book_id,
     book_files::source,
@@ -50,24 +51,32 @@ pub const FILE_COLUMNS: (
     book_files::created_at,
     book_files::content_mode,
     OriginalFileColumns,
-) = (
-    book_files::id,
-    book_files::book_id,
-    book_files::source,
-    book_files::external_id,
-    book_files::format,
-    book_files::label,
-    book_files::visibility,
-    book_files::owner_id,
-    book_files::chapter_count,
-    book_files::created_at,
-    book_files::content_mode,
-    (
-        book_files::orig_ext,
-        book_files::orig_size,
-        book_files::orig_sha256,
-    ),
 );
+
+pub fn file_columns() -> FileColumns {
+    use diesel::NullableExpressionMethods as _;
+    (
+        book_files::id,
+        book_files::book_id,
+        book_files::source,
+        book_files::external_id,
+        book_files::format,
+        book_files::label,
+        book_files::visibility,
+        book_files::owner_id,
+        book_files::chapter_count,
+        book_files::created_at,
+        book_files::content_mode,
+        // The database enforces that these columns are present or absent together.
+        (
+            book_files::orig_ext.assume_not_null(),
+            book_files::orig_size.assume_not_null(),
+            book_files::orig_sha256.assume_not_null(),
+        )
+            .nullable(),
+    )
+}
+
 pub const CHAPTER_META_COLUMNS: (chapters::idx, chapters::title, chapters::linear) =
     (chapters::idx, chapters::title, chapters::linear);
 pub const USER_COLUMNS: (users::id, users::username, users::role, users::created_at) =

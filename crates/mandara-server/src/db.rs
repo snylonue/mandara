@@ -75,6 +75,8 @@ pub async fn run_migrations(db: &Path) -> anyhow::Result<()> {
 mod tests {
     use super::*;
 
+    mod original_metadata;
+
     #[tokio::test]
     async fn nullable_content_migration_preserves_rows_and_cache_presence() {
         use diesel::{ExpressionMethods as _, QueryDsl as _};

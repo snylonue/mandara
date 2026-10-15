@@ -40,6 +40,10 @@ fn connection() -> SqliteConnection {
             '2026-08-26 12:34:56.789+00:00');"#,
     )
     .unwrap();
+    conn.batch_execute(include_str!(
+        "../../migrations/0025_original_metadata_atomic.sql"
+    ))
+    .unwrap();
     conn
 }
 
@@ -69,7 +73,7 @@ fn reads_domain_values_without_field_adapters() {
     assert_eq!(book.ext.publisher.as_deref(), Some("出版社"));
     assert_eq!(book.ext.extra["future"]["nested"], true);
     let file: FileMeta = book_files::table
-        .select(FILE_COLUMNS)
+        .select(file_columns())
         .first::<FileMeta>(conn)
         .unwrap();
     assert_eq!(file.format, FileFormat::Epub);
@@ -307,7 +311,7 @@ fn rejects_invalid_json_timestamps_and_enum_values() {
         conn.batch_execute(sql).unwrap();
         assert!(matches!(
             book_files::table
-                .select(FILE_COLUMNS)
+                .select(file_columns())
                 .first::<FileMeta>(conn),
             Err(DeserializationError(_))
         ));
@@ -340,7 +344,7 @@ fn metadata_column_rename_preserves_values() {
 }
 
 #[test]
-fn orm_rejects_invalid_integer_ranges_and_incomplete_originals() {
+fn orm_rejects_invalid_integer_ranges() {
     use crate::schema::{book_files, books, chapters};
     let conn = &mut connection();
     for volume in [-1, i64::from(u32::MAX) + 1] {
@@ -369,15 +373,12 @@ fn orm_rejects_invalid_integer_ranges_and_incomplete_originals() {
         "UPDATE book_files SET chapter_count=-1",
         "UPDATE book_files SET chapter_count=4294967296",
         "UPDATE book_files SET chapter_count=3, orig_size=-1",
-        "UPDATE book_files SET orig_size=NULL",
-        "UPDATE book_files SET orig_ext=NULL",
-        "UPDATE book_files SET orig_sha256=NULL",
     ] {
         conn.batch_execute("UPDATE book_files SET chapter_count=3, orig_ext='epub', orig_sha256='sha', orig_size=42").unwrap();
         conn.batch_execute(sql).unwrap();
         assert!(matches!(
             book_files::table
-                .select(FILE_COLUMNS)
+                .select(file_columns())
                 .first::<FileMeta>(conn),
             Err(DeserializationError(_))
         ));
@@ -386,7 +387,7 @@ fn orm_rejects_invalid_integer_ranges_and_incomplete_originals() {
         .unwrap();
     assert!(
         book_files::table
-            .select(FILE_COLUMNS)
+            .select(file_columns())
             .first::<FileMeta>(conn)
             .unwrap()
             .original
@@ -508,7 +509,7 @@ fn unsigned_boundaries_round_trip_through_orm() {
             .unwrap();
         assert_eq!(
             book_files::table
-                .select(FILE_COLUMNS)
+                .select(file_columns())
                 .first::<FileMeta>(conn)
                 .unwrap()
                 .chapter_count,
@@ -545,7 +546,7 @@ fn unsigned_boundaries_round_trip_through_orm() {
             .execute(conn)
             .unwrap();
         let original = book_files::table
-            .select(FILE_COLUMNS)
+            .select(file_columns())
             .first::<FileMeta>(conn)
             .unwrap()
             .original

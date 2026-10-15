@@ -1,4 +1,4 @@
-//! SQLite codecs and composite value mappings shared by domain models.
+//! SQLite JSON codecs shared by domain values.
 
 use diesel::deserialize::{self, FromSql};
 use diesel::serialize::{self, IsNull, Output, ToSql};
@@ -51,32 +51,5 @@ impl FromSql<Text, Sqlite> for SeriesExt {
 impl ToSql<Text, Sqlite> for SeriesExt {
     fn to_sql<'b>(&'b self, out: &mut Output<'b, '_, Sqlite>) -> serialize::Result {
         write_json(self, out)
-    }
-}
-
-// A nullable composite is absent only when all three columns are NULL.
-#[derive(diesel::Queryable)]
-pub struct OriginalColumns {
-    ext: Option<String>,
-    size: Option<i64>,
-    sha256: Option<String>,
-}
-
-impl TryFrom<OriginalColumns> for Option<crate::OriginalInfo> {
-    type Error = Box<dyn std::error::Error + Send + Sync>;
-
-    fn try_from(columns: OriginalColumns) -> Result<Self, Self::Error> {
-        match (columns.ext, columns.size, columns.sha256) {
-            (None, None, None) => Ok(None),
-            (Some(ext), Some(size), Some(sha256)) => {
-                use diesel::{Queryable, sql_types::BigInt};
-                let original =
-                    <crate::OriginalInfo as Queryable<(Text, BigInt, Text), Sqlite>>::build((
-                        ext, size, sha256,
-                    ))?;
-                Ok(Some(original))
-            }
-            _ => Err("incomplete stored original file metadata".into()),
-        }
     }
 }

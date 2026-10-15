@@ -239,7 +239,6 @@ pub struct FileMeta {
     /// content came with one (uploads, plugin file-mode pulls). Enables
     /// `GET /api/files/{id}/download` and `--reparse-originals`.
     /// `None` = plugin chapter-mode files and pre-retention uploads.
-    #[diesel(deserialize_as = crate::db::OriginalColumns)]
     pub original: Option<OriginalInfo>,
 }
 

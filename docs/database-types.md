@@ -25,9 +25,10 @@ in route handlers or row-to-model conversions.
   Integer fields use `#[diesel(deserialize_as = i64)]` to invoke the standard
   checked conversion into u32/u64 during ORM deserialization. Negative or
   out-of-range integers fail the query; they are not narrowed in service code.
-- OriginalInfo is assembled from three nullable columns during ORM decoding.
-  All NULL means no original; partially populated metadata and negative sizes
-  are deserialization errors. Remaining rows represent genuinely different
+- OriginalInfo uses Diesel's native nullable-composite mapping. The database
+  guarantees its three columns are either all NULL or all non-NULL, so the ORM
+  loads None or a complete OriginalInfo directly. Negative sizes remain ORM
+  deserialization errors. Remaining rows represent genuinely different
   shapes: optional chapter content and the position discriminator. Standard
   From/TryFrom handle these structures, not integer range checks. NULL chapter
   content means uncached, while an empty string is valid cached content.
@@ -41,8 +42,20 @@ are signed. Check collection lengths as u32 before writing any chapter rows,
 then enumerate using the checked unsigned range. Computed volume ordinals use
 checked addition, not saturation or truncating casts.
 
-These are ORM and application constraints only. No database CHECK constraints
-or STRICT-table migration are introduced by these mappings.
+Numeric range constraints remain in the ORM and application. No STRICT-table
+migration is introduced.
+
+## Optional original metadata
+
+Migration 0025 requires original extension, hash, and size to be present or
+absent together. Insert and update triggers enforce this invariant without
+rebuilding book_files, a parent table with foreign-key dependents. SQLite
+cannot add a table-level CHECK directly to an existing table.
+
+The migration checks existing records first and fails if any are partial; it
+does not discard metadata, invent missing values, or alter valid records.
+Empty strings and a zero size are values, not NULL. OriginalInfo no longer
+needs a custom partial-state decoder.
 
 ## Schema generation
 
