@@ -31,8 +31,9 @@ schema:
 	set -euo pipefail
 	db=$(mktemp -d)/schema.db
 	for f in crates/mandara-server/migrations/*.sql; do sqlite3 "$db" < "$f"; done
-	cd crates/mandara-server && DATABASE_URL="$db" diesel print-schema > src/schema.rs 2>/dev/null \
-		|| echo "diesel CLI not found — update src/schema.rs by hand (see the header note)"
+	cd crates/mandara-server
+	schema=$(DATABASE_URL="$db" diesel print-schema)
+	printf '%s\n' "$schema" > src/schema.rs
 	echo "schema.rs regenerated"
 
 # Build the wasm plugins (every plugins/*-plugin crate) -> plugins-built/*.wasm

@@ -298,6 +298,7 @@ async fn account_creation_creates_one_ordinary_session_without_recreating_delete
     let sessions = json_request(&f, "GET", "/api/sessions", token, json!(null)).await;
     assert_eq!(sessions.as_array().unwrap().len(), 1);
     assert_eq!(sessions[0]["user_id"], auth["user"]["id"]);
+    assert_eq!(sessions[0]["created_at"], auth["user"]["created_at"]);
     assert!(sessions[0].get("is_default").is_none());
     let uri = format!("/api/sessions/{}", sessions[0]["id"].as_str().unwrap());
     assert_eq!(

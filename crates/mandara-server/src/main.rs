@@ -12,7 +12,6 @@ mod rows;
 mod schema;
 mod service;
 mod state;
-mod time;
 
 use std::sync::Arc;
 

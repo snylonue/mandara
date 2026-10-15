@@ -63,17 +63,15 @@ pub async fn register(
     // The very first account bootstraps the admin role — there is no other
     // way to create one.
     let first = users::table.count().get_result::<i64>(&mut conn).await? == 0;
-    let role = if first {
-        Role::Admin.to_string()
-    } else {
-        Role::User.to_string()
-    };
+    let role = if first { Role::Admin } else { Role::User };
+    let created_at = chrono::Utc::now();
     let result = diesel::insert_into(users::table)
         .values((
             users::id.eq(&id),
             users::username.eq(username.as_ref()),
             users::password_hash.eq(&hash),
-            users::role.eq(&role),
+            users::role.eq(role),
+            users::created_at.eq(created_at),
         ))
         .execute(&mut conn)
         .await;
@@ -91,12 +89,8 @@ pub async fn register(
     let user = User {
         id,
         username: username.to_string(),
-        created_at: chrono::Utc::now(),
-        role: if first {
-            mandara_core::model::Role::Admin
-        } else {
-            mandara_core::model::Role::User
-        },
+        created_at,
+        role,
     };
     let token = st.auth.issue_token(&user)?;
     Ok(AuthResponse { token, user }.with_cookie(&st))

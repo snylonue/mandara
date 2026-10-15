@@ -317,6 +317,7 @@ impl PluginService {
         let result = diesel::insert_into(crate::schema::plugin_instances::table)
             .values((
                 crate::schema::plugin_instances::id.eq(id),
+                crate::schema::plugin_instances::created_at.eq(chrono::Utc::now()),
                 crate::schema::plugin_instances::wasm_file.eq(wasm_file),
             ))
             .execute(&mut conn)

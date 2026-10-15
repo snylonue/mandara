@@ -5,6 +5,36 @@ use crate::ext::{BookExt, SeriesExt};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+/// Authors stored as a JSON array and exposed as the same array on the wire.
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    diesel::AsExpression,
+    diesel::FromSqlRow,
+)]
+#[serde(transparent)]
+#[diesel(sql_type = diesel::sql_types::Text)]
+pub struct Authors(pub Vec<String>);
+
+impl From<Vec<String>> for Authors {
+    fn from(authors: Vec<String>) -> Self {
+        Self(authors)
+    }
+}
+
+impl std::ops::Deref for Authors {
+    type Target = [String];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 /// Invalid textual representations of domain values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum ModelError {
@@ -25,6 +55,7 @@ pub enum ModelError {
 /// User role. Administrators can manage every book and every file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(diesel_derive_enum::DbEnum)]
 pub enum Role {
     Admin,
     User,
@@ -61,6 +92,7 @@ impl std::str::FromStr for Role {
 /// (and admins); `Public` files are visible to every logged-in user.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(diesel_derive_enum::DbEnum)]
 pub enum Visibility {
     Private,
     Public,
@@ -108,7 +140,7 @@ pub struct User {
 pub struct SeriesMeta {
     pub id: String,
     pub title: String,
-    pub authors: Vec<String>,
+    pub authors: Authors,
     pub description: Option<String>,
     pub cover_url: Option<String>,
     /// Extended metadata (publisher/status/tags/…; see [`SeriesExt`]).
@@ -126,7 +158,7 @@ pub struct SeriesMeta {
 pub struct BookMeta {
     pub id: String,
     pub title: String,
-    pub authors: Vec<String>,
+    pub authors: Authors,
     pub description: Option<String>,
     pub cover_url: Option<String>,
     /// Extended metadata (ISBN/publisher/…; see [`BookExt`]).
@@ -143,6 +175,7 @@ pub struct BookMeta {
 /// Loading operations selected when a content item is added.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(diesel_derive_enum::DbEnum)]
 pub enum ContentMode {
     Chapters,
     File,
@@ -324,6 +357,7 @@ mod tests {
 /// pull materializes them into their actual format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(diesel_derive_enum::DbEnum)]
 pub enum FileFormat {
     Epub,
     Txt,
@@ -572,6 +606,7 @@ pub struct ReadingProgress {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(diesel_derive_enum::DbEnum)]
 pub enum ShareKind {
     /// Share of a file: anyone with the link can read it.
     Book,

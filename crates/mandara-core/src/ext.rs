@@ -108,7 +108,17 @@ fn clean_extra(extra: &mut Map<String, Value>) {
 
 /// Extended book metadata. Every known key is optional; unknown keys are
 /// preserved verbatim (`extra`).
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    diesel::AsExpression,
+    diesel::FromSqlRow,
+)]
+#[diesel(sql_type = diesel::sql_types::Text)]
 pub struct BookExt {
     /// 副标题
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -236,17 +246,6 @@ impl BookExt {
             self.extra.insert(k.clone(), v.clone());
         }
     }
-
-    /// Serialized column form (`"{}"` when empty).
-    pub fn to_column(&self) -> String {
-        serde_json::to_string(self).unwrap_or_else(|_| "{}".into())
-    }
-
-    /// Parse a stored column (tolerant: unreadable content reads as
-    /// empty, matching the `authors` column behavior).
-    pub fn from_column(raw: &str) -> Self {
-        serde_json::from_str(raw).unwrap_or_default()
-    }
 }
 
 /// Publication status of a series.
@@ -289,7 +288,17 @@ impl std::str::FromStr for SeriesStatus {
 
 /// Extended series metadata (edition-independent facts that belong to the
 /// publication family, not to one volume).
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    diesel::AsExpression,
+    diesel::FromSqlRow,
+)]
+#[diesel(sql_type = diesel::sql_types::Text)]
 pub struct SeriesExt {
     /// 原作名
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -380,14 +389,6 @@ impl SeriesExt {
             Some(v) => Self::from_value(v.clone()),
         }
     }
-
-    pub fn to_column(&self) -> String {
-        serde_json::to_string(self).unwrap_or_else(|_| "{}".into())
-    }
-
-    pub fn from_column(raw: &str) -> Self {
-        serde_json::from_str(raw).unwrap_or_default()
-    }
 }
 
 #[cfg(test)]
@@ -454,7 +455,7 @@ mod tests {
         );
         assert!(!ext.extra.contains_key("nulled"), "nulls are dropped");
         // round-trip preserves them
-        let back = BookExt::from_column(&ext.to_column());
+        let back: BookExt = serde_json::from_str(&serde_json::to_string(&ext).unwrap()).unwrap();
         assert_eq!(back, ext);
     }
 
@@ -509,6 +510,6 @@ mod tests {
         };
         ext.sanitize().unwrap();
         assert_eq!(ext, BookExt::default());
-        assert_eq!(ext.to_column(), "{}");
+        assert_eq!(serde_json::to_value(ext).unwrap(), json!({}));
     }
 }

@@ -1,9 +1,9 @@
 //! Core domain models shared by all mandara crates.
 //!
-//! This crate is intentionally dependency-light: no database or runtime
-//! bindings live here. The server maps its own persistence rows into these
-//! models.
+//! Domain values include their SQLite mappings so persistence queries can
+//! read and write the same types used by the application.
 
+mod db;
 pub mod error;
 pub mod ext;
 pub mod model;

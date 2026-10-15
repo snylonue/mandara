@@ -82,6 +82,7 @@ pub async fn create_session(
             reading_sessions::id.eq(uuid::Uuid::new_v4().simple().to_string()),
             reading_sessions::user_id.eq(&user.id),
             reading_sessions::label.eq(label),
+            reading_sessions::created_at.eq(chrono::Utc::now()),
         ))
         .on_conflict((reading_sessions::user_id, reading_sessions::label))
         .do_nothing()
@@ -154,7 +155,7 @@ async fn store_progress(
     file_id: &str,
     position: Position,
 ) -> Result<ReadingProgress, ApiError> {
-    let now = crate::time::DbTs::now();
+    let now = chrono::Utc::now();
     let position_kind = match position.in_chapter {
         InChapter::Fraction { .. } => "fraction",
         InChapter::CharOffset { .. } => "offset",
@@ -171,7 +172,7 @@ async fn store_progress(
             sessions::offset.eq(i64::from(position.offset())),
             sessions::fraction.eq(position.fraction()),
             sessions::position_kind.eq(position_kind),
-            sessions::updated_at.eq(now.as_str()),
+            sessions::updated_at.eq(now),
         ))
         .on_conflict((sessions::reading_session_id, sessions::file_id))
         .do_update()
@@ -180,7 +181,7 @@ async fn store_progress(
             sessions::offset.eq(i64::from(position.offset())),
             sessions::fraction.eq(position.fraction()),
             sessions::position_kind.eq(position_kind),
-            sessions::updated_at.eq(now.as_str()),
+            sessions::updated_at.eq(now),
         ))
         .execute(&mut conn)
         .await?;

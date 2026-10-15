@@ -24,8 +24,8 @@ use anyhow::Context as _;
 use tracing::{info, warn};
 
 use mandara_core::model::{
-    BookMeta, Chapter, ChapterMeta, ContentMode, FileFormat, FileMeta, ImageId, Role, SeriesMeta,
-    TocNode, User, Visibility,
+    Authors, BookMeta, Chapter, ChapterMeta, ContentMode, FileFormat, FileMeta, ImageId, Role,
+    SeriesMeta, TocNode, User, Visibility,
 };
 use mandara_core::source::{
     SourceBook, SourceBookFile, SourceDeclaredChapter, SourceDeclaredContent, SourceSeries,
@@ -53,6 +53,14 @@ diesel::define_sql_function! {
     ) -> diesel::sql_types::Text;
 }
 
+diesel::define_sql_function! {
+    #[sql_name = "COALESCE"]
+    fn coalesce_visibility(
+        x: diesel::sql_types::Nullable<mandara_core::model::VisibilityMapping>,
+        y: mandara_core::model::VisibilityMapping,
+    ) -> mandara_core::model::VisibilityMapping;
+}
+
 // `LEAST(a, b)` — declared like the other SQLite builtins Diesel lacks.
 diesel::define_sql_function! {
     #[sql_name = "MIN"]
@@ -73,13 +81,12 @@ diesel::define_sql_function! {
     ) -> diesel::sql_types::Nullable<diesel::sql_types::Text>;
 }
 
-/// Validate + normalize a source's extended metadata object and render it
-/// as the stored column value. Invalid payloads fail the acquisition —
-/// bad data never lands (docs/metadata-ext-design.md).
-fn source_ext_column(ext: Option<&serde_json::Value>) -> Result<String, ApiError> {
+/// Validate and normalize a source's extended metadata object. Invalid payloads
+/// fail acquisition before persistence (docs/metadata-ext-design.md).
+fn source_ext(ext: Option<&serde_json::Value>) -> Result<BookExt, ApiError> {
     match ext {
-        None => Ok("{}".into()),
-        Some(v) => Ok(BookExt::from_value(v.clone())?.to_column()),
+        None => Ok(BookExt::default()),
+        Some(v) => Ok(BookExt::from_value(v.clone())?),
     }
 }
 
@@ -424,7 +431,7 @@ impl Library {
         // (no content indirection), real format/toc/chapter count.
         diesel::update(schema::book_files::table.find(file_id))
             .set((
-                schema::book_files::format.eq(format.as_ref()),
+                schema::book_files::format.eq(format),
                 schema::book_files::label.eq(&label),
                 schema::book_files::toc.eq(toc_json),
                 schema::book_files::chapter_count.eq(parsed.chapters.len() as i64),
@@ -554,15 +561,16 @@ impl Library {
         let ext =
             SeriesExt::from_value(series.ext.clone().unwrap_or_else(|| serde_json::json!({})))?;
         let id = uuid::Uuid::new_v4().simple().to_string();
-        let authors = serde_json::to_string(&series.authors).unwrap_or_else(|_| "[]".into());
+        let authors = Authors(series.authors.clone());
         diesel::insert_into(schema::series::table)
             .values((
+                schema::series::created_at.eq(chrono::Utc::now()),
                 schema::series::id.eq(&id),
                 schema::series::title.eq(&series.title),
                 schema::series::authors.eq(&authors),
                 schema::series::description.eq(&series.description),
                 schema::series::cover_url.eq(&series.cover_url),
-                schema::series::ext_meta.eq(ext.to_column()),
+                schema::series::ext_meta.eq(&ext),
                 schema::series::created_by.eq(owner),
                 schema::series::meta_source.eq(source),
                 schema::series::meta_external_id.eq(&series.id),
@@ -577,7 +585,7 @@ impl Library {
                 schema::series::authors.eq(&authors),
                 schema::series::description.eq(&series.description),
                 schema::series::cover_url.eq(&series.cover_url),
-                schema::series::ext_meta.eq(ext.to_column()),
+                schema::series::ext_meta.eq(&ext),
             ))
             .execute(&mut self.diesel_db.get().await?)
             .await?;
@@ -599,8 +607,8 @@ impl Library {
         owner: Option<&str>,
         book: &SourceBook,
     ) -> Result<String, ApiError> {
-        let authors = serde_json::to_string(&book.authors).unwrap_or_else(|_| "[]".into());
-        let ext_json = source_ext_column(book.ext.as_ref())?;
+        let authors = Authors(book.authors.clone());
+        let ext_value = source_ext(book.ext.as_ref())?;
         let series_id = match &book.series {
             Some(series) => Some(self.resolve_plugin_series(source, owner, series).await?),
             None => None,
@@ -623,12 +631,13 @@ impl Library {
                 let book_id = uuid::Uuid::new_v4().simple().to_string();
                 diesel::insert_into(schema::books::table)
                     .values((
+                        schema::books::created_at.eq(chrono::Utc::now()),
                         schema::books::id.eq(&book_id),
                         schema::books::title.eq(&book.title),
                         schema::books::authors.eq(&authors),
                         schema::books::description.eq(&book.description),
                         schema::books::cover_url.eq(&book.cover_url),
-                        schema::books::ext_meta.eq(&ext_json),
+                        schema::books::ext_meta.eq(&ext_value),
                         // The metadata source is this plugin itself.
                         schema::books::meta_source.eq(source),
                         schema::books::meta_external_id.eq(&book.id),
@@ -653,7 +662,7 @@ impl Library {
                 schema::books::cover_url.eq(&book.cover_url),
                 // Refresh replaces the extended metadata wholesale (same
                 // overwrite rule as title/description/cover).
-                schema::books::ext_meta.eq(&ext_json),
+                schema::books::ext_meta.eq(&ext_value),
                 schema::books::series_id.eq(&series_id),
                 schema::books::volume_no.eq(book.volume_no as i64),
             ))
@@ -774,17 +783,18 @@ impl Library {
         owner_id: &str,
     ) -> Result<String, ApiError> {
         let book_id = uuid::Uuid::new_v4().simple().to_string();
-        let authors_json = serde_json::to_string(authors).unwrap_or_else(|_| "[]".into());
+        let authors = Authors(authors.to_vec());
         let mut ext = ext.cloned().unwrap_or_default();
         ext.sanitize()?;
         diesel::insert_into(schema::books::table)
             .values((
+                schema::books::created_at.eq(chrono::Utc::now()),
                 schema::books::id.eq(&book_id),
                 schema::books::title.eq(title),
-                schema::books::authors.eq(authors_json),
+                schema::books::authors.eq(authors),
                 schema::books::description.eq(description.map(str::to_string)),
                 schema::books::cover_url.eq(cover_url.map(str::to_string)),
-                schema::books::ext_meta.eq(ext.to_column()),
+                schema::books::ext_meta.eq(&ext),
                 schema::books::meta_source.eq(meta_source),
                 schema::books::meta_external_id.eq(meta_external_id),
                 schema::books::created_by.eq(owner_id),
@@ -1093,13 +1103,14 @@ impl Library {
         let file_id = uuid::Uuid::new_v4().simple().to_string();
         diesel::insert_into(schema::book_files::table)
             .values((
+                schema::book_files::created_at.eq(chrono::Utc::now()),
                 schema::book_files::id.eq(&file_id),
                 schema::book_files::book_id.eq(book_id),
                 schema::book_files::source.eq(source),
                 schema::book_files::external_id.eq(content_id),
-                schema::book_files::content_mode.eq(mode.as_ref()),
-                schema::book_files::format.eq(FileFormat::Plugin.as_ref()),
-                schema::book_files::visibility.eq("public"),
+                schema::book_files::content_mode.eq(mode),
+                schema::book_files::format.eq(FileFormat::Plugin),
+                schema::book_files::visibility.eq(mandara_core::Visibility::Public),
                 schema::book_files::owner_id.eq(owner),
                 schema::book_files::chapter_count.eq(0_i64),
                 schema::book_files::label.eq(format!("{source} 虚拟")),
@@ -1145,8 +1156,8 @@ impl Library {
     ) -> Result<String, ApiError> {
         let book_id = uuid::Uuid::new_v4().simple().to_string();
         let authors = match &overrides.authors {
-            Some(a) => serde_json::to_string(a).unwrap_or_else(|_| "[]".into()),
-            None => serde_json::to_string(&parsed.authors).unwrap_or_else(|_| "[]".into()),
+            Some(a) => Authors(a.clone()),
+            None => Authors(parsed.authors.clone()),
         };
         // Extended metadata: parsed (epub OPF) first, manual overrides
         // win per-key.
@@ -1157,6 +1168,7 @@ impl Library {
         ext.sanitize()?;
         diesel::insert_into(schema::books::table)
             .values((
+                schema::books::created_at.eq(chrono::Utc::now()),
                 schema::books::id.eq(&book_id),
                 schema::books::title.eq(overrides
                     .title
@@ -1173,7 +1185,7 @@ impl Library {
                     .or_else(|| parsed.cover_url.clone())),
                 schema::books::cover.eq(parsed.cover.as_ref().map(|c| c.bytes.clone())),
                 schema::books::cover_mime.eq(parsed.cover.as_ref().map(|c| c.mime.clone())),
-                schema::books::ext_meta.eq(ext.to_column()),
+                schema::books::ext_meta.eq(&ext),
                 schema::books::created_by.eq(owner_id),
             ))
             .execute(&mut self.diesel_db.get().await?)
@@ -1285,14 +1297,15 @@ impl Library {
         let mut tx = self.diesel_db.get().await?;
         diesel::insert_into(schema::book_files::table)
             .values((
+                schema::book_files::created_at.eq(chrono::Utc::now()),
                 schema::book_files::id.eq(&file_id),
                 schema::book_files::book_id.eq(book_id),
                 schema::book_files::source.eq("local"),
-                schema::book_files::content_mode.eq(ContentMode::File.as_ref()),
+                schema::book_files::content_mode.eq(ContentMode::File),
                 schema::book_files::external_id.eq(&file_id),
-                schema::book_files::format.eq(format.as_ref()),
+                schema::book_files::format.eq(format),
                 schema::book_files::label.eq(label),
-                schema::book_files::visibility.eq(visibility.as_ref()),
+                schema::book_files::visibility.eq(visibility),
                 schema::book_files::owner_id.eq(owner_id),
                 schema::book_files::chapter_count.eq(parsed.chapters.len() as i64),
                 schema::book_files::toc.eq(toc_json),
@@ -1364,7 +1377,7 @@ impl Library {
                 book_q = book_q.filter(diesel::dsl::exists(
                     file_q.filter(
                         schema::book_files::visibility
-                            .eq("public")
+                            .eq(mandara_core::Visibility::Public)
                             .or(schema::book_files::owner_id.eq(&user.id)),
                     ),
                 ));
@@ -1380,7 +1393,7 @@ impl Library {
                     schema::book_files::table.filter(
                         schema::book_files::book_id.eq(schema::books::id).and(
                             schema::book_files::visibility
-                                .eq("public")
+                                .eq(mandara_core::Visibility::Public)
                                 .or(schema::book_files::owner_id.eq(&user.id)),
                         ),
                     ),
@@ -1415,7 +1428,7 @@ impl Library {
         if !is_admin {
             file_q = file_q.filter(
                 schema::book_files::visibility
-                    .eq("public")
+                    .eq(mandara_core::Visibility::Public)
                     .or(schema::book_files::owner_id.eq(&user.id)),
             );
         }
@@ -1460,33 +1473,31 @@ impl Library {
         cover_url: Option<&str>,
         ext: Option<&BookExt>,
     ) -> Result<BookMeta, ApiError> {
-        let authors_json =
-            authors.map(|a| serde_json::to_string(a).unwrap_or_else(|_| "[]".into()));
+        let authors_value = authors.map(|a| Authors(a.clone()));
         let mut conn = self.diesel_db.get().await?;
         // Existence check first: a missing book is a 404, never a DB
         // error (the old path surfaced `diesel::result::Error::NotFound`
         // as a 500 from the ext read).
-        let stored_ext: Option<String> = schema::books::table
+        let stored_ext: Option<BookExt> = schema::books::table
             .find(id)
             .select(schema::books::ext_meta)
             .first(&mut conn)
             .await
             .optional()?;
-        stored_ext
-            .as_deref()
-            .ok_or_else(|| ApiError::not_found("book"))?;
+        let stored_ext = stored_ext.ok_or_else(|| ApiError::not_found("book"))?;
         // Extended metadata merges per-key on top of the stored object
         // (create-time overrides never clear what the source produced).
         // The merge result and the field update land in ONE UPDATE, so a
         // failure cannot leave a half-updated book (ext changed but the
         // title/description not, or vice versa).
-        let ext_json = match ext {
+        let ext_value = match ext {
             None => None,
             Some(ext) => {
-                let stored = stored_ext.as_deref().unwrap_or("{}");
-                let mut map =
-                    serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(stored)
-                        .unwrap_or_default();
+                let mut map = serde_json::to_value(&stored_ext)
+                    .map_err(ApiError::internal)?
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_default();
                 let patch = serde_json::to_value(ext).unwrap_or_default();
                 if let Some(obj) = patch.as_object() {
                     for (k, v) in obj {
@@ -1498,7 +1509,7 @@ impl Library {
                     }
                 }
                 let merged = BookExt::from_value(serde_json::Value::Object(map))?;
-                Some(merged.to_column())
+                Some(merged)
             }
         };
         diesel::update(schema::books::table.find(id))
@@ -1508,12 +1519,12 @@ impl Library {
                     description.map(str::to_string),
                     schema::books::description,
                 )),
-                schema::books::authors.eq(coalesce_opt_nn(authors_json, schema::books::authors)),
+                schema::books::authors.eq(coalesce_opt_nn(authors_value, schema::books::authors)),
                 schema::books::cover_url.eq(coalesce_opt(
                     cover_url.map(str::to_string),
                     schema::books::cover_url,
                 )),
-                schema::books::ext_meta.eq(coalesce_opt_nn(ext_json, schema::books::ext_meta)),
+                schema::books::ext_meta.eq(coalesce_opt_nn(ext_value, schema::books::ext_meta)),
             ))
             .execute(&mut conn)
             .await?;
@@ -1534,14 +1545,17 @@ impl Library {
         let Some(obj) = patch.as_object() else {
             return Err(ApiError::bad_request("`ext` must be a JSON object"));
         };
-        let stored: Option<String> = schema::books::table
+        let stored: Option<BookExt> = schema::books::table
             .find(id)
             .select(schema::books::ext_meta)
             .first(&mut self.diesel_db.get().await?)
             .await
             .optional()?;
         let stored = stored.ok_or_else(|| ApiError::not_found("book"))?;
-        let mut map = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&stored)
+        let mut map = serde_json::to_value(stored)
+            .map_err(ApiError::internal)?
+            .as_object()
+            .cloned()
             .unwrap_or_default();
         for (k, v) in obj {
             if v.is_null() {
@@ -1552,7 +1566,7 @@ impl Library {
         }
         let ext = BookExt::from_value(serde_json::Value::Object(map))?;
         diesel::update(schema::books::table.find(id))
-            .set(schema::books::ext_meta.eq(ext.to_column()))
+            .set(schema::books::ext_meta.eq(&ext))
             .execute(&mut self.diesel_db.get().await?)
             .await?;
         Ok(())
@@ -1609,8 +1623,8 @@ impl Library {
                 ))
             })?;
             let entry = SourceBook::try_from(entry)?;
-            let authors = serde_json::to_string(&entry.authors).unwrap_or_else(|_| "[]".into());
-            let ext_json = source_ext_column(entry.ext.as_ref())?;
+            let authors = Authors(entry.authors.clone());
+            let ext_value = source_ext(entry.ext.as_ref())?;
             let series_id = match &entry.series {
                 Some(series) => Some(
                     self.resolve_plugin_series(meta_src, Some(&user.id), series)
@@ -1625,7 +1639,7 @@ impl Library {
                     schema::books::description.eq(&entry.description),
                     schema::books::cover_url.eq(&entry.cover_url),
                     // Refresh replaces the extended metadata wholesale.
-                    schema::books::ext_meta.eq(ext_json),
+                    schema::books::ext_meta.eq(ext_value),
                     schema::books::series_id.eq(&series_id),
                     schema::books::volume_no.eq(entry.volume_no as i64),
                 ))
@@ -1709,7 +1723,7 @@ impl Library {
             .filter(
                 schema::books::series_id.eq(series_id).and(
                     schema::book_files::visibility
-                        .eq("public")
+                        .eq(mandara_core::Visibility::Public)
                         .or(schema::book_files::owner_id.eq(&user.id)),
                 ),
             )
@@ -1758,7 +1772,7 @@ impl Library {
                                     .eq(schema::series::id.nullable())
                                     .and(
                                         schema::book_files::visibility
-                                            .eq("public")
+                                            .eq(mandara_core::Visibility::Public)
                                             .or(schema::book_files::owner_id.eq(&user.id)),
                                     ),
                             ),
@@ -1800,16 +1814,16 @@ impl Library {
         ext: Option<SeriesExt>,
     ) -> Result<SeriesMeta, ApiError> {
         let id = uuid::Uuid::new_v4().simple().to_string();
-        let authors_json =
-            authors.map(|a| serde_json::to_string(a).unwrap_or_else(|_| "[]".into()));
+        let authors_value = authors.map(|a| Authors(a.clone()));
         diesel::insert_into(schema::series::table)
             .values((
+                schema::series::created_at.eq(chrono::Utc::now()),
                 schema::series::id.eq(&id),
                 schema::series::title.eq(title),
-                schema::series::authors.eq(authors_json.unwrap_or_else(|| "[]".into())),
+                schema::series::authors.eq(authors_value.unwrap_or_default()),
                 schema::series::description.eq(description),
                 schema::series::cover_url.eq(Option::<String>::None),
-                schema::series::ext_meta.eq(ext.unwrap_or_default().to_column()),
+                schema::series::ext_meta.eq(ext.unwrap_or_default()),
                 schema::series::created_by.eq(&user.id),
             ))
             .execute(&mut self.diesel_db.get().await?)
@@ -1855,12 +1869,11 @@ impl Library {
             }
             let ext = SeriesExt::from_value(serde_json::Value::Object(map))?;
             diesel::update(schema::series::table.find(id))
-                .set(schema::series::ext_meta.eq(ext.to_column()))
+                .set(schema::series::ext_meta.eq(&ext))
                 .execute(&mut self.diesel_db.get().await?)
                 .await?;
         }
-        let authors_json =
-            authors.map(|a| serde_json::to_string(a).unwrap_or_else(|_| "[]".into()));
+        let authors_value = authors.map(|a| Authors(a.clone()));
         diesel::update(schema::series::table.find(id))
             .set((
                 schema::series::title.eq(coalesce_opt_nn(title, schema::series::title)),
@@ -1868,7 +1881,7 @@ impl Library {
                     description.map(str::to_string),
                     schema::series::description,
                 )),
-                schema::series::authors.eq(coalesce_opt_nn(authors_json, schema::series::authors)),
+                schema::series::authors.eq(coalesce_opt_nn(authors_value, schema::series::authors)),
             ))
             .execute(&mut self.diesel_db.get().await?)
             .await?;
@@ -2072,7 +2085,7 @@ impl Library {
         if !is_admin {
             q = q.filter(
                 schema::book_files::visibility
-                    .eq("public")
+                    .eq(mandara_core::Visibility::Public)
                     .or(schema::book_files::owner_id.eq(&user.id)),
             );
         }
@@ -2098,8 +2111,8 @@ impl Library {
     ) -> Result<FileMeta, ApiError> {
         diesel::update(schema::book_files::table.find(id))
             .set((
-                schema::book_files::visibility.eq(coalesce_opt_nn(
-                    visibility.map(|v| v.to_string()),
+                schema::book_files::visibility.eq(coalesce_visibility(
+                    visibility,
                     schema::book_files::visibility,
                 )),
                 schema::book_files::label.eq(coalesce_opt_nn(
@@ -2208,7 +2221,7 @@ impl Library {
             .into_iter()
             .map(|r| TocNode {
                 title: r.title,
-                idx: Some(r.idx),
+                idx: Some(r.idx.max(0) as u32),
                 frag: None,
                 children: Vec::new(),
             })
@@ -2568,6 +2581,7 @@ pub async fn store_image(
     use diesel_async::RunQueryDsl as _;
     diesel::insert_into(schema::images::table)
         .values((
+            schema::images::created_at.eq(chrono::Utc::now()),
             schema::images::id.eq(&id),
             schema::images::mime.eq(mime),
             schema::images::size.eq(bytes.len() as i64),
@@ -2902,10 +2916,11 @@ mod tests {
         let (library, fixture, dir) = download_fixture().await;
         diesel::insert_into(schema::users::table)
             .values((
+                schema::users::created_at.eq(chrono::Utc::now()),
                 schema::users::id.eq("u"),
                 schema::users::username.eq("示例用户"),
                 schema::users::password_hash.eq("unused"),
-                schema::users::role.eq("admin"),
+                schema::users::role.eq(mandara_core::Role::Admin),
             ))
             .execute(&mut library.diesel_db.get().await.unwrap())
             .await
@@ -2978,10 +2993,11 @@ mod tests {
         let (library, fixture, dir) = download_fixture().await;
         diesel::insert_into(schema::users::table)
             .values((
+                schema::users::created_at.eq(chrono::Utc::now()),
                 schema::users::id.eq("u"),
                 schema::users::username.eq("示例用户"),
                 schema::users::password_hash.eq("unused"),
-                schema::users::role.eq("admin"),
+                schema::users::role.eq(mandara_core::Role::Admin),
             ))
             .execute(&mut library.diesel_db.get().await.unwrap())
             .await

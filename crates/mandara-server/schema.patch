@@ -1,0 +1,151 @@
+--- schema.rs
++++ schema.rs
+@@ -1,3 +1,9 @@
++//! Diesel schema generated with `just schema`.
++//!
++//! The Diesel CLI applies `schema.patch` from `diesel.toml` to preserve
++//! domain enum mappings, native UTC timestamps, 64-bit numbers, and the
++//! escaped `offset` column. See `docs/database-types.md` for regeneration.
++
+ // @generated automatically by Diesel CLI.
+ 
+ diesel::table! {
+@@ -6,17 +12,17 @@
+         book_id -> Text,
+         source -> Text,
+         external_id -> Text,
+-        format -> Text,
++        format -> mandara_core::model::FileFormatMapping,
+         label -> Text,
+-        visibility -> Text,
++        visibility -> mandara_core::model::VisibilityMapping,
+         owner_id -> Nullable<Text>,
+-        chapter_count -> Integer,
++        chapter_count -> BigInt,
+         toc -> Text,
+-        created_at -> Text,
++        created_at -> diesel::sql_types::TimestamptzSqlite,
+         orig_ext -> Nullable<Text>,
+         orig_sha256 -> Nullable<Text>,
+-        orig_size -> Nullable<Integer>,
+-        content_mode -> Text,
++        orig_size -> Nullable<BigInt>,
++        content_mode -> mandara_core::model::ContentModeMapping,
+     }
+ }
+ 
+@@ -28,11 +34,11 @@
+         description -> Nullable<Text>,
+         cover_url -> Nullable<Text>,
+         created_by -> Nullable<Text>,
+-        created_at -> Text,
++        created_at -> diesel::sql_types::TimestamptzSqlite,
+         cover -> Nullable<Binary>,
+         cover_mime -> Nullable<Text>,
+         series_id -> Nullable<Text>,
+-        volume_no -> Integer,
++        volume_no -> BigInt,
+         ext_meta -> Text,
+         meta_source -> Nullable<Text>,
+         meta_external_id -> Nullable<Text>,
+@@ -42,10 +48,10 @@
+ diesel::table! {
+     chapters (file_id, idx) {
+         file_id -> Text,
+-        idx -> Integer,
++        idx -> BigInt,
+         title -> Text,
+         content -> Nullable<Text>,
+-        linear -> Integer,
++        linear -> BigInt,
+     }
+ }
+ 
+@@ -53,10 +59,10 @@
+     images (id) {
+         id -> Text,
+         mime -> Text,
+-        size -> Integer,
+-        created_at -> Text,
+-        width -> Nullable<Integer>,
+-        height -> Nullable<Integer>,
++        size -> BigInt,
++        created_at -> diesel::sql_types::TimestamptzSqlite,
++        width -> Nullable<BigInt>,
++        height -> Nullable<BigInt>,
+     }
+ }
+ 
+@@ -65,8 +71,8 @@
+         id -> Text,
+         wasm_file -> Text,
+         config -> Text,
+-        enabled -> Integer,
+-        created_at -> Text,
++        enabled -> BigInt,
++        created_at -> diesel::sql_types::TimestamptzSqlite,
+     }
+ }
+ 
+@@ -83,7 +89,7 @@
+         id -> Text,
+         user_id -> Text,
+         label -> Text,
+-        created_at -> Text,
++        created_at -> diesel::sql_types::TimestamptzSqlite,
+     }
+ }
+ 
+@@ -95,7 +101,7 @@
+         description -> Nullable<Text>,
+         cover_url -> Nullable<Text>,
+         created_by -> Nullable<Text>,
+-        created_at -> Text,
++        created_at -> diesel::sql_types::TimestamptzSqlite,
+         ext_meta -> Text,
+         meta_source -> Nullable<Text>,
+         meta_external_id -> Nullable<Text>,
+@@ -108,10 +114,12 @@
+         user_id -> Text,
+         file_id -> Text,
+         label -> Text,
+-        chapter_idx -> Integer,
+-        offset -> Integer,
+-        fraction -> Float,
+-        updated_at -> Text,
++        chapter_idx -> BigInt,
++        /// `offset` is a Diesel keyword; the column keeps its SQL name.
++        #[sql_name = "offset"]
++        offset -> BigInt,
++        fraction -> Double,
++        updated_at -> diesel::sql_types::TimestamptzSqlite,
+         reading_session_id -> Nullable<Text>,
+         position_kind -> Text,
+     }
+@@ -120,12 +128,12 @@
+ diesel::table! {
+     shares (token) {
+         token -> Text,
+-        kind -> Text,
++        kind -> mandara_core::model::ShareKindMapping,
+         file_id -> Text,
+         session_id -> Nullable<Text>,
+         created_by -> Nullable<Text>,
+-        expires_at -> Nullable<Text>,
+-        created_at -> Text,
++        expires_at -> Nullable<diesel::sql_types::TimestamptzSqlite>,
++        created_at -> diesel::sql_types::TimestamptzSqlite,
+     }
+ }
+ 
+@@ -134,8 +142,8 @@
+         id -> Text,
+         username -> Text,
+         password_hash -> Text,
+-        role -> Text,
+-        created_at -> Text,
++        role -> mandara_core::model::RoleMapping,
++        created_at -> diesel::sql_types::TimestamptzSqlite,
+     }
+ }
+ 

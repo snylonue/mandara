@@ -23,7 +23,7 @@ use crate::routes::books::BookDetail;
 pub struct SeriesBrief {
     pub id: String,
     pub title: String,
-    pub authors: Vec<String>,
+    pub authors: mandara_core::Authors,
     pub description: Option<String>,
     pub cover_url: Option<String>,
     /// Extended series metadata (publisher/status/tags/…).

@@ -52,7 +52,8 @@ async-trait = "0.1"
 
 # note: sqlx is used ONLY as the migration runner (sqlx::migrate!);
 # all queries are Diesel DSL against a committed schema.rs (just schema).
-diesel = { version = "2.3", features = ["sqlite"] }
+diesel = { version = "2.3", features = ["sqlite", "chrono"] }
+diesel-derive-enum = { version = "2.1", features = ["sqlite"] }
 diesel-async = { version = "0.9", features = ["sqlite", "deadpool", "sync-connection-wrapper"] }
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
 jsonwebtoken = { version = "11", features = ["rust_crypto"] }

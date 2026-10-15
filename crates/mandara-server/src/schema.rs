@@ -1,10 +1,8 @@
-//! Diesel schema, generated from the SQL migrations in `migrations/`.
+//! Diesel schema generated with `just schema`.
 //!
-//! Regenerate after every migration with `just schema`
-//! (`DATABASE_URL=<scratch db> diesel print-schema > src/schema.rs`),
-//! then widen `Integer` → `BigInt` and `Float` → `Double`: SQLite's
-//! dynamic typing makes both valid, and 64-bit widths match the row
-//! structs/models without casts at every boundary.
+//! The Diesel CLI applies `schema.patch` from `diesel.toml` to preserve
+//! domain enum mappings, native UTC timestamps, 64-bit numbers, and the
+//! escaped `offset` column. See `docs/database-types.md` for regeneration.
 
 // @generated automatically by Diesel CLI.
 
@@ -14,17 +12,17 @@ diesel::table! {
         book_id -> Text,
         source -> Text,
         external_id -> Text,
-        format -> Text,
+        format -> mandara_core::model::FileFormatMapping,
         label -> Text,
-        visibility -> Text,
+        visibility -> mandara_core::model::VisibilityMapping,
         owner_id -> Nullable<Text>,
         chapter_count -> BigInt,
         toc -> Text,
-        created_at -> Text,
+        created_at -> diesel::sql_types::TimestamptzSqlite,
         orig_ext -> Nullable<Text>,
         orig_sha256 -> Nullable<Text>,
         orig_size -> Nullable<BigInt>,
-        content_mode -> Text,
+        content_mode -> mandara_core::model::ContentModeMapping,
     }
 }
 
@@ -36,7 +34,7 @@ diesel::table! {
         description -> Nullable<Text>,
         cover_url -> Nullable<Text>,
         created_by -> Nullable<Text>,
-        created_at -> Text,
+        created_at -> diesel::sql_types::TimestamptzSqlite,
         cover -> Nullable<Binary>,
         cover_mime -> Nullable<Text>,
         series_id -> Nullable<Text>,
@@ -62,7 +60,7 @@ diesel::table! {
         id -> Text,
         mime -> Text,
         size -> BigInt,
-        created_at -> Text,
+        created_at -> diesel::sql_types::TimestamptzSqlite,
         width -> Nullable<BigInt>,
         height -> Nullable<BigInt>,
     }
@@ -74,7 +72,7 @@ diesel::table! {
         wasm_file -> Text,
         config -> Text,
         enabled -> BigInt,
-        created_at -> Text,
+        created_at -> diesel::sql_types::TimestamptzSqlite,
     }
 }
 
@@ -91,7 +89,7 @@ diesel::table! {
         id -> Text,
         user_id -> Text,
         label -> Text,
-        created_at -> Text,
+        created_at -> diesel::sql_types::TimestamptzSqlite,
     }
 }
 
@@ -103,7 +101,7 @@ diesel::table! {
         description -> Nullable<Text>,
         cover_url -> Nullable<Text>,
         created_by -> Nullable<Text>,
-        created_at -> Text,
+        created_at -> diesel::sql_types::TimestamptzSqlite,
         ext_meta -> Text,
         meta_source -> Nullable<Text>,
         meta_external_id -> Nullable<Text>,
@@ -121,7 +119,7 @@ diesel::table! {
         #[sql_name = "offset"]
         offset -> BigInt,
         fraction -> Double,
-        updated_at -> Text,
+        updated_at -> diesel::sql_types::TimestamptzSqlite,
         reading_session_id -> Nullable<Text>,
         position_kind -> Text,
     }
@@ -130,12 +128,12 @@ diesel::table! {
 diesel::table! {
     shares (token) {
         token -> Text,
-        kind -> Text,
+        kind -> mandara_core::model::ShareKindMapping,
         file_id -> Text,
         session_id -> Nullable<Text>,
         created_by -> Nullable<Text>,
-        expires_at -> Nullable<Text>,
-        created_at -> Text,
+        expires_at -> Nullable<diesel::sql_types::TimestamptzSqlite>,
+        created_at -> diesel::sql_types::TimestamptzSqlite,
     }
 }
 
@@ -144,8 +142,8 @@ diesel::table! {
         id -> Text,
         username -> Text,
         password_hash -> Text,
-        role -> Text,
-        created_at -> Text,
+        role -> mandara_core::model::RoleMapping,
+        created_at -> diesel::sql_types::TimestamptzSqlite,
     }
 }
 

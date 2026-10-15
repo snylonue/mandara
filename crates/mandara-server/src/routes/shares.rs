@@ -23,7 +23,6 @@ use crate::routes::{St, can_manage_file, load_visible_file};
 use crate::rows::ShareRow;
 #[allow(unused_imports)]
 use crate::schema::{sessions, shares, users};
-use crate::time::DbTs;
 
 #[derive(Serialize)]
 pub struct ShareResponse {
@@ -131,18 +130,18 @@ pub async fn create_share(
     // years is far beyond any practical share lifetime.
     const MAX_EXPIRY_DAYS: u32 = 3650;
     let expires_days = req.expires_days.unwrap_or(0).min(MAX_EXPIRY_DAYS);
-    let expires_at = (expires_days > 0)
-        .then(|| DbTs::from_datetime(Utc::now() + Duration::days(expires_days as i64)));
+    let expires_at = (expires_days > 0).then(|| Utc::now() + Duration::days(expires_days as i64));
 
     let mut conn = st.diesel_db.get().await?;
     diesel::insert_into(shares::table)
         .values((
             shares::token.eq(&token),
-            shares::kind.eq(kind.as_ref()),
+            shares::kind.eq(kind),
             shares::file_id.eq(&file_id),
             shares::session_id.eq(&session_id),
             shares::created_by.eq(&user.id),
-            shares::expires_at.eq(expires_at.as_ref().map(DbTs::as_str)),
+            shares::expires_at.eq(expires_at),
+            shares::created_at.eq(Utc::now()),
         ))
         .execute(&mut conn)
         .await?;
@@ -164,7 +163,7 @@ pub async fn create_share(
 pub struct ShareBookView {
     pub id: String,
     pub title: String,
-    pub authors: Vec<String>,
+    pub authors: mandara_core::Authors,
     pub description: Option<String>,
 }
 

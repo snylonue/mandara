@@ -1,6 +1,7 @@
 use super::*;
 use diesel::connection::SimpleConnection;
 use diesel::prelude::*;
+use diesel::result::Error::DeserializationError;
 
 fn connection() -> SqliteConnection {
     let mut conn = SqliteConnection::establish(":memory:").unwrap();
@@ -9,28 +10,32 @@ fn connection() -> SqliteConnection {
         CREATE TABLE books (id TEXT, title TEXT, authors TEXT, description TEXT,
             cover_url TEXT, created_by TEXT, created_at TEXT, series_id TEXT,
             volume_no INTEGER, ext_meta TEXT, meta_source TEXT, meta_external_id TEXT);
+        CREATE TABLE series (id TEXT, title TEXT, authors TEXT, description TEXT,
+            cover_url TEXT, created_by TEXT, created_at TEXT, ext_meta TEXT);
         CREATE TABLE book_files (id TEXT, book_id TEXT, source TEXT, external_id TEXT,
             format TEXT, label TEXT, visibility TEXT, owner_id TEXT, chapter_count INTEGER,
             created_at TEXT, content_mode TEXT, orig_ext TEXT, orig_sha256 TEXT, orig_size INTEGER);
         CREATE TABLE chapters (file_id TEXT, idx INTEGER, title TEXT, content TEXT, linear INTEGER);
         CREATE TABLE shares (token TEXT, kind TEXT, file_id TEXT, session_id TEXT,
             created_by TEXT, expires_at TEXT, created_at TEXT);
-        INSERT INTO users VALUES ('user', '读者', 'admin', '2026-08-26T20:34:56.789+08:00');
+        INSERT INTO users VALUES ('user', '读者', 'admin', '2026-08-26 12:34:56.789+00:00');
         INSERT INTO books VALUES ('book', '书名', '["作者"]', NULL, NULL, NULL,
-            '2026-08-26T12:34:56.789Z', NULL, 2,
+            '2026-08-26 12:34:56.789+00:00', NULL, 2,
             '{"publisher":"出版社","future":{"nested":true}}', NULL, NULL);
+        INSERT INTO series VALUES ('series', '系列', '[]', NULL, NULL, NULL,
+            '2026-08-26 12:34:56.789+00:00', '{}');
         INSERT INTO book_files VALUES ('file', 'book', 'local', 'file', 'epub', '版本',
-            'private', 'user', 3, '2026-08-26T12:34:56.789Z', 'file', 'epub', 'sha', 42);
+            'private', 'user', 3, '2026-08-26 12:34:56.789+00:00', 'file', 'epub', 'sha', 42);
         INSERT INTO chapters VALUES ('file', 0, '正文', '', 1), ('file', 1, '注释', NULL, 0);
         INSERT INTO shares VALUES ('link', 'book', 'file', NULL, 'user', NULL,
-            '2026-08-26T12:34:56.789Z');"#,
+            '2026-08-26 12:34:56.789+00:00');"#,
     )
     .unwrap();
     conn
 }
 
 #[test]
-fn selects_domain_values_without_manual_decoding() {
+fn reads_domain_values_without_field_adapters() {
     use crate::schema::{book_files, books, chapters, shares, users};
     let conn = &mut connection();
     let user = users::table
@@ -47,7 +52,11 @@ fn selects_domain_values_without_manual_decoding() {
         .first(conn)
         .unwrap()
         .into_model();
-    assert_eq!(book.authors, ["作者"]);
+    assert_eq!(book.authors.0, ["作者"]);
+    assert_eq!(
+        serde_json::to_value(&book.authors).unwrap(),
+        serde_json::json!(["作者"])
+    );
     assert_eq!(book.volume_no, 2);
     assert_eq!(book.ext.publisher.as_deref(), Some("出版社"));
     assert_eq!(book.ext.extra["future"]["nested"], true);
@@ -66,6 +75,10 @@ fn selects_domain_values_without_manual_decoding() {
         .select(ChapterTitleRow::as_select())
         .load::<ChapterTitleRow>(conn)
         .unwrap();
+    let titles: Vec<_> = titles
+        .into_iter()
+        .map(ChapterTitleRow::into_model)
+        .collect();
     assert!(titles[0].linear);
     assert!(!titles[1].linear);
     let chapters = chapters::table
@@ -82,66 +95,215 @@ fn selects_domain_values_without_manual_decoding() {
         .unwrap();
     assert_eq!(share.kind, ShareKind::Book);
     assert!(share.expires_at.is_none());
-    diesel::update(shares::table)
-        .set(shares::expires_at.eq("2026-08-27T12:34:56.789Z"))
-        .execute(conn)
-        .unwrap();
-    let share = shares::table
-        .select(ShareRow::as_select())
-        .first(conn)
-        .unwrap();
-    assert!(share.expires_at.unwrap() > share.created_at);
 }
 
 #[test]
-fn preserves_legacy_fallbacks_and_rejects_unknown_enums() {
-    use crate::schema::{book_files, books, users};
+fn writes_and_filters_with_domain_values() {
+    use crate::schema::{book_files, books, series, shares, users};
     let conn = &mut connection();
+    let authors: Authors = serde_json::from_value(serde_json::json!(["作者甲", "作者乙"])).unwrap();
+    let ext =
+        BookExt::from_value(serde_json::json!({"publisher":"新出版社", "future": [1,2]})).unwrap();
+    let series_ext =
+        SeriesExt::from_value(serde_json::json!({"status":"completed", "future":true})).unwrap();
     diesel::update(books::table)
-        .set((
-            books::authors.eq("invalid"),
-            books::ext_meta.eq("invalid"),
-            books::created_at.eq(""),
-            books::volume_no.eq(-1_i64),
-        ))
+        .set((books::authors.eq(&authors), books::ext_meta.eq(&ext)))
         .execute(conn)
         .unwrap();
     let book = books::table
         .select(BookRow::as_select())
         .first(conn)
         .unwrap();
-    assert!(book.authors.is_empty());
-    assert_eq!(book.ext_meta, BookExt::default());
-    assert_eq!(book.created_at, DateTime::<Utc>::default());
-    assert_eq!(book.volume_no, 0);
+    assert_eq!(book.authors, authors);
+    assert_eq!(book.ext_meta, ext);
+    diesel::update(series::table)
+        .set((
+            series::authors.eq(Authors::default()),
+            series::ext_meta.eq(&series_ext),
+        ))
+        .execute(conn)
+        .unwrap();
+    let series = series::table
+        .select(SeriesRow::as_select())
+        .first(conn)
+        .unwrap();
+    assert!(series.authors.is_empty());
+    assert_eq!(series.ext_meta, series_ext);
+    for role in [Role::User, Role::Admin] {
+        diesel::update(users::table)
+            .set(users::role.eq(role))
+            .execute(conn)
+            .unwrap();
+        assert_eq!(
+            users::table
+                .filter(users::role.eq(role))
+                .select(users::role)
+                .first::<Role>(conn)
+                .unwrap(),
+            role
+        );
+    }
+    for format in [FileFormat::Txt, FileFormat::Plugin, FileFormat::Epub] {
+        diesel::update(book_files::table)
+            .set(book_files::format.eq(format))
+            .execute(conn)
+            .unwrap();
+        assert_eq!(
+            book_files::table
+                .select(book_files::format)
+                .first::<FileFormat>(conn)
+                .unwrap(),
+            format
+        );
+    }
+    for visibility in [Visibility::Public, Visibility::Private] {
+        diesel::update(book_files::table)
+            .set(book_files::visibility.eq(visibility))
+            .execute(conn)
+            .unwrap();
+        assert_eq!(
+            book_files::table
+                .select(book_files::visibility)
+                .first::<Visibility>(conn)
+                .unwrap(),
+            visibility
+        );
+    }
+    for mode in [ContentMode::Chapters, ContentMode::File] {
+        diesel::update(book_files::table)
+            .set(book_files::content_mode.eq(mode))
+            .execute(conn)
+            .unwrap();
+        assert_eq!(
+            book_files::table
+                .select(book_files::content_mode)
+                .first::<ContentMode>(conn)
+                .unwrap(),
+            mode
+        );
+    }
+    for kind in [ShareKind::Session, ShareKind::Book] {
+        diesel::update(shares::table)
+            .set(shares::kind.eq(kind))
+            .execute(conn)
+            .unwrap();
+        assert_eq!(
+            shares::table
+                .select(shares::kind)
+                .first::<ShareKind>(conn)
+                .unwrap(),
+            kind
+        );
+    }
+}
+
+#[test]
+fn native_timestamps_round_trip_and_nullable_expiry_clears() {
+    use crate::schema::{shares, users};
+    let conn = &mut connection();
+    let timestamp = DateTime::parse_from_rfc3339("2026-08-26T20:34:56.123456789+08:00")
+        .unwrap()
+        .with_timezone(&Utc);
     diesel::update(users::table)
-        .set(users::role.eq("unknown"))
+        .set(users::created_at.eq(timestamp))
+        .execute(conn)
+        .unwrap();
+    let actual = users::table
+        .select(users::created_at)
+        .first::<DateTime<Utc>>(conn)
+        .unwrap();
+    assert_eq!(actual, timestamp);
+    let stored = users::table
+        .select(diesel::dsl::sql::<diesel::sql_types::Text>("created_at"))
+        .first::<String>(conn)
+        .unwrap();
+    assert_eq!(stored, "2026-08-26 12:34:56.123456789+00:00");
+    let expires = timestamp + chrono::Duration::days(1);
+    diesel::update(shares::table)
+        .set(shares::expires_at.eq(Some(expires)))
+        .execute(conn)
+        .unwrap();
+    assert_eq!(
+        shares::table
+            .select(shares::expires_at)
+            .first::<Option<DateTime<Utc>>>(conn)
+            .unwrap(),
+        Some(expires)
+    );
+    diesel::update(shares::table)
+        .set(shares::expires_at.eq(None::<DateTime<Utc>>))
+        .execute(conn)
+        .unwrap();
+    assert_eq!(
+        shares::table
+            .select(shares::expires_at)
+            .first::<Option<DateTime<Utc>>>(conn)
+            .unwrap(),
+        None
+    );
+}
+
+#[test]
+fn rejects_invalid_json_timestamps_and_enum_values() {
+    use crate::schema::{book_files, books, series, shares, users};
+    let conn = &mut connection();
+    for raw in ["invalid", "{}", r#"[1]"#] {
+        diesel::update(books::table)
+            .set(books::authors.eq(raw))
+            .execute(conn)
+            .unwrap();
+        assert!(matches!(
+            books::table.select(books::authors).first::<Authors>(conn),
+            Err(DeserializationError(_))
+        ));
+    }
+    diesel::update(books::table)
+        .set(books::ext_meta.eq("invalid"))
         .execute(conn)
         .unwrap();
     assert!(matches!(
-        users::table
-            .select(UserRow::as_select())
-            .first::<UserRow>(conn),
-        Err(diesel::result::Error::DeserializationError(_))
+        books::table.select(books::ext_meta).first::<BookExt>(conn),
+        Err(DeserializationError(_))
     ));
-    for (format, visibility, mode) in [
-        ("unknown", "private", "file"),
-        ("epub", "unknown", "file"),
-        ("epub", "private", "unknown"),
+    diesel::update(series::table)
+        .set(series::ext_meta.eq("invalid"))
+        .execute(conn)
+        .unwrap();
+    assert!(matches!(
+        series::table
+            .select(series::ext_meta)
+            .first::<SeriesExt>(conn),
+        Err(DeserializationError(_))
+    ));
+    conn.batch_execute(
+        "UPDATE users SET role='unknown', created_at=''; UPDATE shares SET kind='unknown';",
+    )
+    .unwrap();
+    assert!(matches!(
+        users::table.select(users::role).first::<Role>(conn),
+        Err(DeserializationError(_))
+    ));
+    assert!(matches!(
+        users::table
+            .select(users::created_at)
+            .first::<DateTime<Utc>>(conn),
+        Err(DeserializationError(_))
+    ));
+    assert!(matches!(
+        shares::table.select(shares::kind).first::<ShareKind>(conn),
+        Err(DeserializationError(_))
+    ));
+    for sql in [
+        "UPDATE book_files SET format='unknown'",
+        "UPDATE book_files SET format='epub', visibility='unknown'",
+        "UPDATE book_files SET visibility='private', content_mode='unknown'",
     ] {
-        diesel::update(book_files::table)
-            .set((
-                book_files::format.eq(format),
-                book_files::visibility.eq(visibility),
-                book_files::content_mode.eq(mode),
-            ))
-            .execute(conn)
-            .unwrap();
+        conn.batch_execute(sql).unwrap();
         assert!(matches!(
             book_files::table
                 .select(FileRow::as_select())
                 .first::<FileRow>(conn),
-            Err(diesel::result::Error::DeserializationError(_))
+            Err(DeserializationError(_))
         ));
     }
 }
