@@ -34,6 +34,50 @@ fn book(id: &str) -> CatalogEntry {
 }
 
 #[tokio::test]
+async fn metadata_only_acquisition_returns_one_book_without_a_file() {
+    let (library, _, dir) = download_fixture().await;
+    library.diesel_db.get().await.unwrap().batch_execute(
+        "INSERT INTO users (id, username, password_hash, role) VALUES ('admin', '管理员', '', 'admin');",
+    ).await.unwrap();
+    let user = User {
+        id: "admin".into(),
+        username: "管理员".into(),
+        role: Role::Admin,
+        created_at: chrono::Utc::now(),
+    };
+    let overrides = MetadataOverrides {
+        title: Some("独立元数据".into()),
+        ..Default::default()
+    };
+    let outcome = library
+        .acquire_book(
+            &user,
+            AcquireContent::None,
+            AcquireMetadata::New {
+                overrides: &overrides,
+            },
+            Visibility::Private,
+            "",
+        )
+        .await
+        .unwrap();
+    assert_eq!(outcome.book.title, "独立元数据");
+    assert_eq!(outcome.book.created_by.as_deref(), Some("admin"));
+    assert!(outcome.file.is_none());
+    assert!(outcome.series.is_none());
+    let entry = library
+        .get_book_entry(&outcome.book.id, &user)
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(entry.book).unwrap(),
+        serde_json::to_value(outcome.book).unwrap()
+    );
+    assert!(entry.files.is_empty());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
 async fn series_by_ids_preserves_order_duplicates_and_missing_ids_across_batches() {
     let (library, _, dir) = download_fixture().await;
     library

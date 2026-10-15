@@ -334,15 +334,11 @@ pub async fn upload_book(
         StatusCode::CREATED,
         Json(AcquireResult {
             series,
-            books: outcome
-                .books
-                .into_iter()
-                .map(|(book, file)| BookEntry {
-                    series: None,
-                    book,
-                    files: file.into_iter().collect(),
-                })
-                .collect(),
+            books: vec![BookEntry {
+                series: None,
+                book: outcome.book,
+                files: outcome.file.into_iter().collect(),
+            }],
         }),
     ))
 }
@@ -384,9 +380,9 @@ pub async fn attach_file(
             &request.label,
         )
         .await?;
-    let (_book, file, _rest) = outcome.into_parts();
-    let file =
-        file.ok_or_else(|| ApiError::bad_request("metadata-only acquisition produced no file"))?;
+    let file = outcome
+        .file
+        .ok_or_else(|| ApiError::bad_request("metadata-only acquisition produced no file"))?;
     Ok((StatusCode::CREATED, Json(file)))
 }
 

@@ -187,33 +187,11 @@ impl MetadataOverrides {
     }
 }
 
-/// One acquired book and its file.
-type AcquiredBooks = (
-    BookMeta,
-    Option<FileMeta>,
-    Vec<(BookMeta, Option<FileMeta>)>,
-);
-
 /// Result of acquiring one independently addressable book and its parent series.
 pub struct AcquireOutcome {
     pub series: Option<SeriesMeta>,
-    /// Exactly one independently selected book.
-    pub books: Vec<(BookMeta, Option<FileMeta>)>,
-}
-
-impl AcquireOutcome {
-    /// Split the outcome into its first book and the rest. The first book
-    /// always exists — [`Self::books`] is documented non-empty and every
-    /// producer upholds it — so this is the single place that turns the
-    /// contract into a value (a programmer error surfaces as a panic here,
-    /// not as a 500 "internal server error" to clients).
-    pub fn into_parts(self) -> AcquiredBooks {
-        let mut it = self.books.into_iter();
-        let first = it
-            .next()
-            .expect("acquire_book always produces at least one book");
-        (first.0, first.1, it.collect())
-    }
+    pub book: BookMeta,
+    pub file: Option<FileMeta>,
 }
 
 /// One book produced by the metadata stage, ready to have its content
@@ -234,12 +212,6 @@ enum PlannedFill {
     Plugin,
     /// No content (metadata only).
     None,
-}
-
-/// The result of the metadata stage.
-struct MetadataPlan {
-    series: Option<SeriesMeta>,
-    books: Vec<PlannedBook>,
 }
 
 #[derive(Clone)]
@@ -443,7 +415,7 @@ impl Library {
                 "",
             )
             .await?;
-        let (book, file, _rest) = outcome.into_parts();
+        let AcquireOutcome { book, file, .. } = outcome;
         file.ok_or_else(|| ApiError::bad_request("metadata-only acquisition produced no file"))?;
         let files = self.files_of_book(&book.id, user).await?;
         Ok(BookEntry {
@@ -883,37 +855,26 @@ impl Library {
         // book. The two dimensions stay orthogonal — no 2-D cartesian
         // dispatch; adding a content or metadata type only adds one arm to
         // its own stage.
-        let plan = self.resolve_metadata(user, &content, &metadata).await?;
-        let mut books = Vec::with_capacity(plan.books.len());
-        for planned in plan.books {
-            let file = self
-                .attach_content(user, &content, &planned, visibility, label)
-                .await?;
-            let book = self
-                .get_book(&planned.book_id)
-                .await?
-                .ok_or_else(|| ApiError::not_found("book"))?;
-            books.push((book, file));
-        }
-        let series = match books
-            .as_slice()
-            .first()
-            .and_then(|(book, _)| book.series_id.as_deref())
-        {
+        let planned = self.resolve_metadata(user, &content, &metadata).await?;
+        let file = self
+            .attach_content(user, &content, &planned, visibility, label)
+            .await?;
+        let book = self
+            .get_book(&planned.book_id)
+            .await?
+            .ok_or_else(|| ApiError::not_found("book"))?;
+        let series = match book.series_id.as_deref() {
             Some(id) => self.get_series(id).await?,
-            None => plan.series,
+            None => None,
         };
-        for (_, file) in &books {
-            if let Some(file) = file {
-                self.queue_download(file);
-            }
+        if let Some(file) = &file {
+            self.queue_download(file);
         }
-        Ok(AcquireOutcome { series, books })
+        Ok(AcquireOutcome { series, book, file })
     }
 
-    /// Stage 1: resolve the metadata source into a [`MetadataPlan`] — the
-    /// selected book to fill. A
-    /// 1-D match on [`AcquireMetadata`]; the `New` branch also matches on
+    /// Stage 1: resolve the metadata source into the selected [`PlannedBook`].
+    /// A 1-D match on [`AcquireMetadata`]; the `New` branch also matches on
     /// the content type, since auto-metadata genuinely depends on whether
     /// there is an upload to parse/identify or a plugin entry to use.
     async fn resolve_metadata(
@@ -921,7 +882,7 @@ impl Library {
         user: &User,
         content: &AcquireContent<'_>,
         metadata: &AcquireMetadata<'_>,
-    ) -> Result<MetadataPlan, ApiError> {
+    ) -> Result<PlannedBook, ApiError> {
         match metadata {
             // ---- attach to an existing metadata entry -----------------
             AcquireMetadata::Attach { book_id } => {
@@ -948,12 +909,9 @@ impl Library {
                     AcquireContent::Plugin { .. } => PlannedFill::Plugin,
                     AcquireContent::None => unreachable!("checked above"),
                 };
-                Ok(MetadataPlan {
-                    series: None,
-                    books: vec![PlannedBook {
-                        book_id: book_id.to_string(),
-                        fill,
-                    }],
+                Ok(PlannedBook {
+                    book_id: book_id.to_string(),
+                    fill,
                 })
             }
 
@@ -968,12 +926,9 @@ impl Library {
                     .resolve_plugin_metadata(source, Some(&user.id), &meta_entry)
                     .await?;
                 self.apply_overrides(&book_id, overrides).await?;
-                Ok(MetadataPlan {
-                    series: None,
-                    books: vec![PlannedBook {
-                        book_id,
-                        fill: self.content_fill(content),
-                    }],
+                Ok(PlannedBook {
+                    book_id,
+                    fill: self.content_fill(content),
                 })
             }
 
@@ -996,12 +951,9 @@ impl Library {
                         None => self.create_book(&parsed, &user.id, overrides).await?,
                     };
                     // An upload is one complete edition — never a split.
-                    Ok(MetadataPlan {
-                        series: None,
-                        books: vec![PlannedBook {
-                            book_id,
-                            fill: PlannedFill::Upload { fill_cover: false },
-                        }],
+                    Ok(PlannedBook {
+                        book_id,
+                        fill: PlannedFill::Upload { fill_cover: false },
                     })
                 }
 
@@ -1017,10 +969,7 @@ impl Library {
                         .await?;
                     self.apply_overrides(&book_id, overrides).await?;
                     let fill = PlannedFill::Plugin;
-                    Ok(MetadataPlan {
-                        series: None,
-                        books: vec![PlannedBook { book_id, fill }],
-                    })
+                    Ok(PlannedBook { book_id, fill })
                 }
 
                 // None: a manually described entry (title required).
@@ -1046,12 +995,9 @@ impl Library {
                             &user.id,
                         )
                         .await?;
-                    Ok(MetadataPlan {
-                        series: None,
-                        books: vec![PlannedBook {
-                            book_id,
-                            fill: PlannedFill::None,
-                        }],
+                    Ok(PlannedBook {
+                        book_id,
+                        fill: PlannedFill::None,
                     })
                 }
             },
@@ -3063,6 +3009,8 @@ mod tests {
 
     #[tokio::test]
     async fn content_attachment_does_not_require_book_metadata_from_its_provider() {
+        use diesel_async::SimpleAsyncConnection as _;
+
         let (library, fixture, dir) = download_fixture().await;
         diesel::insert_into(schema::users::table)
             .values((
@@ -3081,6 +3029,17 @@ mod tests {
             role: Role::Admin,
             created_at: chrono::Utc::now(),
         };
+        library
+            .diesel_db
+            .get()
+            .await
+            .unwrap()
+            .batch_execute(
+                "INSERT INTO series (id, title) VALUES ('parent', '父系列');
+             UPDATE books SET series_id = 'parent', volume_no = 1;",
+            )
+            .await
+            .unwrap();
         let original = library.get_book(&fixture.book_id).await.unwrap().unwrap();
         let result = library
             .acquire_book(
@@ -3097,8 +3056,13 @@ mod tests {
             )
             .await
             .unwrap();
-        let (book, content, _) = result.into_parts();
-        let content = content.unwrap();
+        assert_eq!(
+            result.series.as_ref().map(|series| series.id.as_str()),
+            Some("parent")
+        );
+        let book = result.book;
+        let content = result.file.unwrap();
+        assert_eq!(book.series_id, original.series_id);
         assert_eq!(book.id, original.id);
         assert_eq!(book.title, original.title);
         assert_eq!(content.external_id, "hello-content-2");
