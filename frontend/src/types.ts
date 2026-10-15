@@ -45,8 +45,6 @@ export type PluginSeriesLookupResponse = Schemas["PluginSeriesLookupResponse"];
 export type ConfigField = Schemas["ConfigField"];
 export type ConfigSchema = Schemas["ConfigSchema"];
 export type ConfigError = Schemas["ConfigError"];
-export type ValidationErrorResponse = {
-  error: string;
-  errors: ConfigError[];
-};export type BookExt = Schemas["BookExt"];
+export type ValidationErrorResponse = Schemas["ValidationErrorResponse"];
+export type BookExt = Schemas["BookExt"];
 export type SeriesExt = Schemas["SeriesExt"];

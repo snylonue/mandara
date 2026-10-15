@@ -3,10 +3,11 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
-test("API read models distinguish metadata, summaries, and nullable parents", () => {
+test("API models share canonical schemas and distinguish metadata from summaries", () => {
   const file = fileURLToPath(new URL("api-model-contract.ts", import.meta.url));
   const source = `
-    import type { AcquireResult, BookEntry, BookMeta, SeriesBrief, SeriesMeta } from "../src/types";
+    import type { AcquireResult, BookEntry, BookMeta, SeriesBrief, SeriesMeta, ValidationErrorResponse } from "../src/types";
+    import type { components } from "../src/api/schema";
     declare const book: BookMeta;
     declare const metadata: SeriesMeta;
     const member: BookEntry = { book, files: [], series: metadata };
@@ -20,6 +21,15 @@ test("API read models distinguish metadata, summaries, and nullable parents", ()
     metadata.volume_count;
     // @ts-expect-error Publication status lives only in ext.
     summary.status;
+    declare const wireError: components["responses"]["ValidationError"]["content"]["application/json"];
+    const validationError: ValidationErrorResponse = wireError;
+    const responseError: typeof wireError = validationError;
+    const invalidConfig: ValidationErrorResponse = {
+      error: "invalid plugin configuration",
+      errors: [{ field: "site-name", message: "required" }],
+    };
+    // @ts-expect-error Field errors are required in validation responses.
+    const missingErrors: ValidationErrorResponse = { error: "invalid plugin configuration" };
   `;
   const options = {
     strict: true,

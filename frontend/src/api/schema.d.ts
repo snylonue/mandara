@@ -880,6 +880,10 @@ export interface components {
         Error: {
             error: string;
         };
+        /** @description Plugin configuration validation failure with field-level details. */
+        ValidationErrorResponse: components["schemas"]["Error"] & {
+            errors: components["schemas"]["ConfigError"][];
+        };
         Health: {
             /** @enum {string} */
             status: "ok";
@@ -1329,10 +1333,7 @@ export interface components {
                 [name: string]: unknown;
             };
             content: {
-                "application/json": {
-                    error: string;
-                    errors: components["schemas"]["ConfigError"][];
-                };
+                "application/json": components["schemas"]["ValidationErrorResponse"];
             };
         };
         /** @description Error response */

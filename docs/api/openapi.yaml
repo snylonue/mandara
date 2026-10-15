@@ -1606,15 +1606,7 @@ components:
       content:
         application/json:
           schema:
-            type: object
-            required: [error, errors]
-            properties:
-              error:
-                type: string
-              errors:
-                type: array
-                items:
-                  $ref: "#/components/schemas/ConfigError"
+            $ref: "#/components/schemas/ValidationErrorResponse"
     Error:
       description: Error response
       content:
@@ -1659,6 +1651,18 @@ components:
       properties:
         error:
           type: string
+
+    ValidationErrorResponse:
+      description: Plugin configuration validation failure with field-level details.
+      allOf:
+        - $ref: "#/components/schemas/Error"
+        - type: object
+          required: [errors]
+          properties:
+            errors:
+              type: array
+              items:
+                $ref: "#/components/schemas/ConfigError"
 
     Health:
       type: object
