@@ -426,6 +426,14 @@ fn stored_image(settings: &Settings, raw: &str) -> Option<String> {
     if !matches!(url.scheme(), "http" | "https") {
         return None;
     }
+    let key = format!("image:v1:{url}");
+    if let Some(reference) = mandara::plugin::state::get(&key)
+        .ok()
+        .flatten()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+    {
+        return Some(reference);
+    }
     // Credentials are for Novelia's API, never for illustration hosts.
     if let Some(bytes) = settings.fetch(&url, false) {
         let mime = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
@@ -441,7 +449,12 @@ fn stored_image(settings: &Settings, raw: &str) -> Option<String> {
         };
         if let Some(mime) = mime {
             let id = mandara::plugin::store::store_image(&bytes, mime);
-            return Some(format!("/api/images/{id}"));
+            let reference = format!("/api/images/{id}");
+            // Never cache download failures or remote-URL fallbacks.
+            if mandara::plugin::state::set(&key, reference.as_bytes()).is_err() {
+                log("Novelia image cache write failed");
+            }
+            return Some(reference);
         }
     }
     Some(url.to_string())
