@@ -248,9 +248,7 @@
     "invalid": "链接无效或已过期",
     "progressOf": "{{owner}} 的进度 · 阅读档案「{{label}}」",
     "readTo": "已读到",
-    "updatedAt": "（更新于 {{time}}）",
-    "from": "分享自 Mandara · ",
-    "deploy": "自己部署一个 Mandara"
+    "updatedAt": "（更新于 {{time}}）"
   },
   "plugin": {
     "chooseSource": "选择插件源…",

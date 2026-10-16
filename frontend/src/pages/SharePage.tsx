@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { IconPin } from "../components/icons";
@@ -71,10 +71,6 @@ export function SharePage() {
         }}
         readOnly
       />
-      <p className="hint center">
-        {t("share.from")}
-        <Link to="/">{t("share.deploy")}</Link>
-      </p>
     </div>
   );
 }
