@@ -271,6 +271,167 @@ async fn book_entries_share_one_read_model_and_reuse_the_resolved_series() {
 }
 
 #[tokio::test]
+async fn list_books_aligns_streams_across_batches_and_propagates_errors() {
+    let (library, _, dir) = download_fixture().await;
+    library
+        .diesel_db
+        .get()
+        .await
+        .unwrap()
+        .batch_execute(
+            "INSERT INTO series (id, title) VALUES ('first', '系列一'), ('last', '系列二');
+         WITH RECURSIVE n(i) AS (VALUES(0) UNION ALL SELECT i + 1 FROM n WHERE i < 500)
+         INSERT INTO books (id, title, series_id, volume_no)
+         SELECT printf('book-%04d', i), '批次书籍', CASE WHEN i < 500 THEN 'first' ELSE 'last' END, i FROM n;
+         INSERT INTO books (id, title, created_at)
+         VALUES ('standalone', '批次独立书籍', '2025-01-01T00:00:00Z'),
+                ('empty', '批次独立元数据', '2024-01-01T00:00:00Z');
+         INSERT INTO book_files (id, book_id, source, external_id, visibility)
+         SELECT 'file-' || id, id, 'local', 'file-' || id, 'public'
+         FROM books WHERE title LIKE '批次%' AND id != 'empty';",
+        )
+        .await
+        .unwrap();
+    let user = User {
+        id: "admin".into(),
+        username: "管理员".into(),
+        role: Role::Admin,
+        created_at: chrono::Utc::now(),
+    };
+    let queries = count_selects(&library.diesel_db).await;
+    let entries = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        library.list_books(Some("批次"), None, &user),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(queries.swap(0, Ordering::SeqCst), 5);
+    assert_eq!(entries.len(), 503);
+    for (index, entry) in entries[..501].iter().enumerate() {
+        assert_eq!(entry.book.id, format!("book-{index:04}"));
+        assert_eq!(entry.files.len(), 1);
+        assert_eq!(entry.files[0].book_id, entry.book.id);
+        assert_eq!(
+            entry.series.as_ref().unwrap().id,
+            if index < 500 { "first" } else { "last" }
+        );
+    }
+    assert_eq!(entries[501].book.id, "standalone");
+    assert_eq!(entries[501].files.len(), 1);
+    assert!(entries[501].series.is_none());
+    assert_eq!(entries[502].book.id, "empty");
+    assert!(entries[502].files.is_empty());
+    assert!(entries[502].series.is_none());
+
+    let standalone = library.list_books(Some("独立"), None, &user).await.unwrap();
+    assert_eq!(standalone.len(), 2);
+    assert!(standalone.iter().all(|entry| entry.series.is_none()));
+    assert_eq!(queries.swap(0, Ordering::SeqCst), 2);
+    assert!(
+        library
+            .list_books(Some("无匹配"), None, &user)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(queries.swap(0, Ordering::SeqCst), 1);
+
+    // Decoding failures in either later batch must not return a partial list.
+    library
+        .diesel_db
+        .get()
+        .await
+        .unwrap()
+        .batch_execute("UPDATE series SET created_at = 'invalid' WHERE id = 'last';")
+        .await
+        .unwrap();
+    assert!(library.list_books(Some("批次"), None, &user).await.is_err());
+    library
+        .diesel_db
+        .get()
+        .await
+        .unwrap()
+        .batch_execute(
+            "UPDATE series SET created_at = '2024-01-01T00:00:00Z';
+         UPDATE book_files SET created_at = 'invalid' WHERE book_id = 'book-0500';",
+        )
+        .await
+        .unwrap();
+    assert!(library.list_books(Some("批次"), None, &user).await.is_err());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn list_books_preserves_visibility_and_attaches_all_visible_sources() {
+    let (library, _, dir) = download_fixture().await;
+    library.diesel_db.get().await.unwrap().batch_execute(
+        "INSERT INTO users (id, username, password_hash) VALUES ('viewer', '读者', '');
+         INSERT INTO books (id, title, created_by, created_at)
+         VALUES ('mixed', '筛选书籍', 'viewer', '2025-01-01T00:00:00Z'),
+                ('empty', '筛选元数据', 'viewer', '2024-01-01T00:00:00Z'),
+                ('hidden', '筛选隐藏书籍', 'viewer', '2023-01-01T00:00:00Z'),
+                ('foreign-empty', '筛选他人元数据', NULL, '2022-01-01T00:00:00Z');
+         INSERT INTO book_files (id, book_id, source, external_id, visibility, owner_id, created_at)
+         VALUES ('public', 'mixed', 'source-a', 'public', 'public', NULL, '2024-01-01T00:00:00Z'),
+                ('owned', 'mixed', 'source-b', 'owned', 'private', 'viewer', '2025-01-01T00:00:00Z'),
+                ('secret', 'mixed', 'source-c', 'secret', 'private', NULL, '2026-01-01T00:00:00Z'),
+                ('hidden-file', 'hidden', 'source-c', 'hidden-file', 'private', NULL, '2024-01-01T00:00:00Z');",
+    ).await.unwrap();
+    let user = User {
+        id: "viewer".into(),
+        username: "读者".into(),
+        role: Role::User,
+        created_at: chrono::Utc::now(),
+    };
+    let entries = library.list_books(Some("筛选"), None, &user).await.unwrap();
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| entry.book.id.as_str())
+            .collect::<Vec<_>>(),
+        ["mixed", "empty"]
+    );
+    assert!(entries[1].files.is_empty());
+    for source in ["source-a", "source-b"] {
+        let entries = library
+            .list_books(Some("筛选"), Some(source), &user)
+            .await
+            .unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].book.id, "mixed");
+        assert_eq!(
+            entries[0]
+                .files
+                .iter()
+                .map(|file| file.id.as_str())
+                .collect::<Vec<_>>(),
+            ["owned", "public"]
+        );
+    }
+    assert!(
+        library
+            .list_books(Some("筛选"), Some("source-c"), &user)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let admin = User {
+        role: Role::Admin,
+        ..user
+    };
+    let entries = library
+        .list_books(Some("筛选"), Some("source-c"), &admin)
+        .await
+        .unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].book.id, "mixed");
+    assert_eq!(entries[0].files.len(), 3);
+    assert_eq!(entries[1].book.id, "hidden");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
 async fn series_stream_queries_on_demand_and_reports_later_batch_errors() {
     let (library, _, dir) = download_fixture().await;
     let queries = count_selects(&library.diesel_db).await;

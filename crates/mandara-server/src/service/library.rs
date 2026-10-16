@@ -1423,28 +1423,39 @@ impl Library {
 
         // Source filtering chooses books, not which of their visible files to attach.
         drop(conn);
-        let files = self
-            .files_of_books(rows.iter().map(|book| book.id.as_str()), user)
-            .try_collect::<Vec<_>>()
-            .await?;
-        let series = self
-            .series_by_ids(rows.iter().filter_map(|book| book.series_id.as_deref()))
-            .try_collect::<Vec<_>>()
-            .await?;
-        let mut books = rows.into_iter().zip(files);
-        let mut series = series.into_iter();
-        Ok(std::iter::from_fn(|| {
-            let (book, files) = books.next()?;
-            Some(BookEntry {
-                series: book
-                    .series_id
-                    .as_ref()
-                    .and_then(|_| series.next().flatten()),
-                book,
-                files,
-            })
+        let (ids, series_ids): (Vec<_>, Vec<_>) = rows
+            .iter()
+            .map(|book| (book.id.clone(), book.series_id.clone()))
+            .unzip();
+        let files = self.files_of_books(ids.iter().map(|id| id.as_str()), user);
+        let series = self.series_by_ids(
+            series_ids
+                .iter()
+                .filter_map(|series_id| series_id.as_deref()),
+        );
+        let books = std::pin::pin!(stream::iter(rows).zip(files));
+        let series = std::pin::pin!(series);
+        stream::try_unfold((books, series), |(mut books, mut series)| async move {
+            let Some((book, files)) = books.next().await else {
+                return Ok(None);
+            };
+            let files = files?;
+            let parent = if book.series_id.is_some() {
+                series.try_next().await?.flatten()
+            } else {
+                None
+            };
+            Ok(Some((
+                BookEntry {
+                    book,
+                    files,
+                    series: parent,
+                },
+                (books, series),
+            )))
         })
-        .collect())
+        .try_collect()
+        .await
     }
 
     pub async fn get_book(&self, id: &str) -> Result<Option<BookMeta>, ApiError> {
