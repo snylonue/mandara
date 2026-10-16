@@ -76,6 +76,7 @@ mod tests {
     use super::*;
 
     mod original_metadata;
+    mod plugin_visibility;
 
     #[tokio::test]
     async fn nullable_content_migration_preserves_rows_and_cache_presence() {

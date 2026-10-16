@@ -82,7 +82,8 @@ it("selects empty volumes by default and attaches confirmed content using local 
   expect((screen.getByRole("checkbox", { name: names[1] }) as HTMLInputElement).checked).toBe(true);
   const before = structuredClone(books.map((entry) => entry.book));
   const user = await chooseContent();
-  await user.selectOptions(screen.getByLabelText(names[1] + "内容的可见性"), "public");
+  expect(screen.queryByLabelText("第2卷 · 卷二内容的可见性")).toBeNull();
+  expect(screen.getAllByText("插件内容始终公开，所有登录用户均可阅读。")).toHaveLength(2);
   await user.type(screen.getByLabelText(names[1] + "内容的备注"), " 精校版 ");
   expect(submitted).toHaveLength(0);
   await user.click(screen.getByRole("button", { name: "添加 2 卷内容" }));
@@ -91,7 +92,7 @@ it("selects empty volumes by default and attaches confirmed content using local 
     ["local:2", "wenku8", "content:2"], ["local:3", "wenku8", "content:3"],
   ]);
   expect(submitted[0].get("visibility")).toBe("public"); expect(submitted[0].get("label")).toBe("精校版");
-  expect(submitted[1].get("visibility")).toBe("private");
+  expect(submitted[1].get("visibility")).toBe("public");
   for (const form of submitted) for (const field of ["meta_plugin_source", "meta_plugin_book_id", "metadata_only", "title", "authors", "series_id"]) expect(form.has(field)).toBe(false);
   expect(books.map((entry) => entry.book)).toEqual(before); expect(books[0].files).toHaveLength(1);
   expect(onChanged).toHaveBeenCalledOnce();

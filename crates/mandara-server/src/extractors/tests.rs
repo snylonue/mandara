@@ -21,6 +21,7 @@ use crate::service::{Library, plugins::PluginService};
 use crate::state::{AppState, St};
 
 mod numbers;
+mod plugin_visibility;
 mod sessions;
 mod shares;
 

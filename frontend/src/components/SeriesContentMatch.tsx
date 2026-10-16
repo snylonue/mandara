@@ -156,7 +156,8 @@ export function SeriesContentMatch({ targets, selectedIds, instances, disabled, 
       if (content && signatures.has(signature)) { duplicate = true; ready = false; }
       if (content) signatures.add(signature);
     }
-    return { targetId: book.id, content, ...(settings[book.id] ?? defaults) };
+    const value = settings[book.id] ?? defaults;
+    return { targetId: book.id, content, ...value, visibility: content?.kind === "plugin" ? "public" : value.visibility };
   });
   // The parent owns submission; report the draft only when its inputs change.
   useLayoutEffect(() => {
@@ -218,10 +219,10 @@ export function SeriesContentMatch({ targets, selectedIds, instances, disabled, 
                 <div className="hint">{candidate.file ? candidate.file.name : candidate.preview?.id ?? candidate.candidateId}</div>
                 {!candidate.file && !candidate.preview && <p className="hint">{candidate.error ?? t(candidate.loading ? "library.checkingSourceContent" : "library.seriesUnconfirmedContent")}</p>}
                 <div className="row item-settings">
-                  <select aria-label={t("library.seriesVisibilityFor", { title: book.title })} value={value.visibility}
+                  {!candidate.file ? <span className="hint">{t("library.pluginPublicOnly")}</span> : <select aria-label={t("library.seriesVisibilityFor", { title: book.title })} value={value.visibility}
                     onChange={(event) => setSettings((prev) => ({ ...prev, [book.id]: { ...value, visibility: event.target.value as Visibility } }))}>
                     <option value="private">{t("library.visibilityPrivate")}</option><option value="public">{t("library.visibilityPublic")}</option>
-                  </select>
+                  </select>}
                   <input aria-label={t("library.seriesLabelFor", { title: book.title })} placeholder={t("library.labelPlaceholder")} value={value.label}
                     onChange={(event) => setSettings((prev) => ({ ...prev, [book.id]: { ...value, label: event.target.value } }))} />
                 </div>

@@ -587,7 +587,11 @@ export interface paths {
         delete: operations["deleteFile"];
         options?: never;
         head?: never;
-        /** Toggle visibility or rename the edition label (owner or admin) */
+        /**
+         * Toggle upload visibility or rename the edition label (owner or admin)
+         * @description Plugin content is always public, even when its format is epub or txt.
+         *     Setting a plugin item to private returns 400 without applying any changes.
+         */
         patch: operations["patchFile"];
         trace?: never;
     };
@@ -999,6 +1003,7 @@ export interface components {
         /**
          * @description One independently selectable content item of a book. Source identity
          *     is immutable; add or delete an item instead of changing its source.
+         *     Items whose source is not local are always public, regardless of format.
          */
         FileMeta: {
             id: string;
@@ -1134,6 +1139,7 @@ export interface components {
             ext?: components["schemas"]["BookExt"];
         };
         PatchFile: {
+            /** @description Only local uploads may be private; plugin items reject private with 400. */
             visibility?: components["schemas"]["Visibility"];
             label?: string;
         };
@@ -1977,8 +1983,9 @@ export interface operations {
                      */
                     metadata_only?: boolean;
                     /**
-                     * @description Choose whether this file is published
-                     * @default private
+                     * @description Uploads default to private and may choose either visibility.
+                     *     Plugin content defaults to public; requesting private returns 400.
+                     *     Metadata-only additions create no file, so visibility has no effect.
                      * @enum {string}
                      */
                     visibility?: "private" | "public";
@@ -2471,6 +2478,7 @@ export interface operations {
                     "application/json": components["schemas"]["FileMeta"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
         };

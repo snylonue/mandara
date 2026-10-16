@@ -93,7 +93,7 @@ impl<'a> AcquisitionRequest<'a> {
         fields: &'a UploadFields,
         file: &'a Option<(Vec<u8>, String)>,
         overrides: &'a MetadataOverrides,
-        visibility: Visibility,
+        visibility: Option<Visibility>,
         label: String,
     ) -> Result<Self, ApiError> {
         let content = if fields.metadata_only {
@@ -157,6 +157,10 @@ impl<'a> AcquisitionRequest<'a> {
             AcquireMetadata::New { overrides }
         };
 
+        let visibility = visibility.unwrap_or(match &content {
+            AcquireContent::Plugin { .. } => Visibility::Public,
+            _ => Visibility::Private,
+        });
         Ok(AcquisitionRequest {
             content,
             metadata,
@@ -188,10 +192,18 @@ async fn field_text(field: axum::extract::multipart::Field<'_>) -> Result<String
 /// `file` field (the content then comes from a plugin source).
 async fn read_upload(
     mut multipart: Multipart,
-) -> Result<(UploadFields, Option<(Vec<u8>, String)>, Visibility, String), ApiError> {
+) -> Result<
+    (
+        UploadFields,
+        Option<(Vec<u8>, String)>,
+        Option<Visibility>,
+        String,
+    ),
+    ApiError,
+> {
     let mut bytes: Option<Vec<u8>> = None;
     let mut filename: Option<String> = None;
-    let mut visibility = Visibility::Private;
+    let mut visibility = None;
     let mut label = String::new();
     let mut fields = UploadFields::default();
 
@@ -207,7 +219,7 @@ async fn read_upload(
             }
             Some("visibility") => {
                 let v = field_text(field).await?;
-                visibility = parse_visibility(Some(&v), Visibility::Private)?;
+                visibility = Some(parse_visibility(Some(&v), Visibility::Private)?);
             }
             Some("label") => label = field_text(field).await?,
             Some("book_id") => fields.book_id = Some(field_text(field).await?),

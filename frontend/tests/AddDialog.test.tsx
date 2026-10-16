@@ -57,7 +57,8 @@ it("adds confirmed source content without searching a second time and keeps per-
   const note = screen.getByPlaceholderText("备注（如：epub 精校版）");
   await user.type(note, "精校版");
   expect(document.activeElement).toBe(note);
-  await user.selectOptions(screen.getByLabelText("可见性"), "public");
+  expect(screen.queryByLabelText("可见性")).toBeNull();
+  expect(screen.getByText("插件内容始终公开，所有登录用户均可阅读。")).toBeTruthy();
   expect((screen.getByRole("button", { name: "已选择此内容" }) as HTMLButtonElement).disabled).toBe(true);
   await user.click(screen.getByRole("button", { name: "添加书籍" }));
   await waitFor(() => expect(onAdded).toHaveBeenCalledOnce());

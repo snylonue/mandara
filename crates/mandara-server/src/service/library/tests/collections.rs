@@ -374,9 +374,9 @@ async fn list_books_preserves_visibility_and_attaches_all_visible_sources() {
                 ('foreign-empty', '筛选他人元数据', NULL, '2022-01-01T00:00:00Z');
          INSERT INTO book_files (id, book_id, source, external_id, visibility, owner_id, created_at)
          VALUES ('public', 'mixed', 'source-a', 'public', 'public', NULL, '2024-01-01T00:00:00Z'),
-                ('owned', 'mixed', 'source-b', 'owned', 'private', 'viewer', '2025-01-01T00:00:00Z'),
-                ('secret', 'mixed', 'source-c', 'secret', 'private', NULL, '2026-01-01T00:00:00Z'),
-                ('hidden-file', 'hidden', 'source-c', 'hidden-file', 'private', NULL, '2024-01-01T00:00:00Z');",
+                ('owned', 'mixed', 'source-b', 'owned', 'public', 'viewer', '2025-01-01T00:00:00Z'),
+                ('secret', 'mixed', 'local', 'secret', 'private', NULL, '2026-01-01T00:00:00Z'),
+                ('hidden-file', 'hidden', 'local', 'hidden-file', 'private', NULL, '2024-01-01T00:00:00Z');",
     ).await.unwrap();
     let user = User {
         id: "viewer".into(),
@@ -411,7 +411,7 @@ async fn list_books_preserves_visibility_and_attaches_all_visible_sources() {
     }
     assert!(
         library
-            .list_books(Some("筛选"), Some("source-c"), &user)
+            .list_books(Some("筛选"), Some("local"), &user)
             .await
             .unwrap()
             .is_empty()
@@ -421,7 +421,7 @@ async fn list_books_preserves_visibility_and_attaches_all_visible_sources() {
         ..user
     };
     let entries = library
-        .list_books(Some("筛选"), Some("source-c"), &admin)
+        .list_books(Some("筛选"), Some("local"), &admin)
         .await
         .unwrap();
     assert_eq!(entries.len(), 2);

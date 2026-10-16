@@ -129,6 +129,7 @@
     "seriesMatchFor": "{{title}}对应的内容",
     "seriesNoContent": "仅添加书目（不添加内容）",
     "seriesUnconfirmedContent": "内容尚未确认，请等待、修改内容 ID，或将此卷设为仅添加书目。",
+    "pluginPublicOnly": "插件内容始终公开，所有登录用户均可阅读。",
     "seriesVisibilityFor": "{{title}}内容的可见性",
     "seriesLabelFor": "{{title}}内容的备注",
     "seriesContentDone": "此卷内容已添加",
