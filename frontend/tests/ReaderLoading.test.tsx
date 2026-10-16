@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { Reader } from "../src/components/Reader";
 import type { Chapter } from "../src/types";
+import { ApiError } from "../src/api";
 
 const chapters = [
   { idx: 0, title: "第一章", linear: true },
@@ -31,6 +32,56 @@ it("stops loading on failure and retries the same chapter", async () => {
   expect(load.mock.calls).toEqual([[0], [0]]);
   expect(screen.queryByRole("alert")).toBeNull();
   expect(screen.queryByRole("button", { name: "重新加载章节" })).toBeNull();
+});
+
+it("repairs a missing body only on explicit retry and reads the next chapter normally", async () => {
+  const load = vi.fn<(idx: number) => Promise<Chapter>>()
+    .mockRejectedValueOnce(new ApiError(404, "stored chapter"))
+    .mockResolvedValueOnce(second);
+  const retry = vi.fn<(idx: number) => Promise<Chapter>>().mockResolvedValue(first);
+  render(<Reader title="测试书籍" chapters={chapters} loadChapter={load} retryChapter={retry} />);
+  expect((await screen.findByRole("alert")).textContent).toBe("章节正文尚未缓存，点击“重新加载章节”可补下载。");
+  expect(retry).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "重新加载章节" }));
+  await screen.findByText("缓存正文");
+  expect(retry.mock.calls).toEqual([[0]]);
+  fireEvent.click(screen.getByRole("button", { name: /下一章/ }));
+  await screen.findByText("下一章正文");
+  fireEvent.click(screen.getByRole("button", { name: /上一章/ }));
+  await screen.findByText("缓存正文");
+  expect(load.mock.calls).toEqual([[0], [1]]);
+  expect(retry.mock.calls).toEqual([[0]]);
+});
+
+it("keeps public retries storage-only and explains a missing body", async () => {
+  const load = vi.fn<(idx: number) => Promise<Chapter>>()
+    .mockRejectedValueOnce(new ApiError(404, "stored chapter"))
+    .mockResolvedValueOnce(first);
+  render(<Reader title="测试书籍" chapters={chapters} loadChapter={load} readOnly />);
+  expect((await screen.findByRole("alert")).textContent).toBe("章节正文尚未缓存，请稍后重试或联系书籍管理者。");
+  fireEvent.click(screen.getByRole("button", { name: "重新加载章节" }));
+  await screen.findByText("缓存正文");
+  expect(load.mock.calls).toEqual([[0], [0]]);
+});
+
+it("ignores a repaired chapter until it is selected again", async () => {
+  let complete!: (chapter: Chapter) => void;
+  const pending = new Promise<Chapter>(resolve => { complete = resolve; });
+  const load = vi.fn<(idx: number) => Promise<Chapter>>()
+    .mockRejectedValueOnce(new ApiError(404, "stored chapter"))
+    .mockResolvedValueOnce(second);
+  const retry = vi.fn().mockReturnValue(pending);
+  render(<Reader title="测试书籍" chapters={chapters} loadChapter={load} retryChapter={retry} />);
+  await screen.findByRole("alert");
+  fireEvent.click(screen.getByRole("button", { name: "重新加载章节" }));
+  await waitFor(() => expect(retry).toHaveBeenCalledWith(0));
+  fireEvent.click(screen.getByRole("button", { name: /下一章/ }));
+  await screen.findByText("下一章正文");
+  await act(async () => complete(first));
+  expect(screen.queryByText("缓存正文")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: /上一章/ }));
+  await screen.findByText("缓存正文");
+  expect(load.mock.calls).toEqual([[0], [1]]);
 });
 
 it("uses a translated fallback for non-Error failures", async () => {

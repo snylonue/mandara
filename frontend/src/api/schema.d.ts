@@ -618,6 +618,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/files/{id}/chapters/{idx}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry a missing chapter body
+         * @description Explicit user action, available to authenticated users who can read the file.
+         *     Returns an already stored body unchanged (including empty bodies). Otherwise
+         *     downloads and persists the declared chapter before returning it, sharing
+         *     in-flight downloads and the acquisition concurrency limit. Chapter-mode
+         *     retries preserve other cached bodies without refreshing metadata or titles.
+         *     File-mode retries rebuild the parsed book through the retained original or
+         *     declared file provider, using the same loader as acquisition.
+         *     Undeclared indices return 404 without contacting the source. Public share
+         *     reads remain storage-only and cannot initiate retries.
+         */
+        post: operations["retryChapter"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/images/{id}": {
         parameters: {
             query?: never;
@@ -2508,6 +2536,43 @@ export interface operations {
             };
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+        };
+    };
+    retryChapter: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Book file id */
+                id: components["parameters"]["FileId"];
+                /** @description Zero-based stored chapter index */
+                idx: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Persisted chapter content */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Chapter"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description Content download failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
         };
     };
     getImage: {

@@ -2324,6 +2324,30 @@ impl Library {
             .ok_or_else(|| ApiError::not_found("stored chapter"))
     }
 
+    /// Explicitly retry a declared missing body through the acquisition-time loader.
+    pub async fn retry_chapter(&self, file: &FileMeta, idx: u32) -> Result<Chapter, ApiError> {
+        if let Some(chapter) = self.cached_chapter(&file.id, idx).await? {
+            return Ok(chapter);
+        }
+        // Only declared chapters may trigger provider I/O; never discover a directory here.
+        let declared = schema::chapters::table
+            .find((&file.id, i64::from(idx)))
+            .select(schema::chapters::idx)
+            .first::<i64>(&mut self.diesel_db.get().await?)
+            .await
+            .optional()?;
+        if declared.is_none() {
+            return Err(ApiError::not_found("chapter"));
+        }
+        let _permit = self
+            .downloads
+            .permits
+            .acquire()
+            .await
+            .expect("download limiter stays open");
+        self.download_chapter(file, idx).await
+    }
+
     /// Populate content for acquisition and explicit refresh jobs.
     async fn download_chapter(&self, file: &FileMeta, idx: u32) -> Result<Chapter, ApiError> {
         if let Some(chapter) = self.cached_chapter(&file.id, idx).await? {

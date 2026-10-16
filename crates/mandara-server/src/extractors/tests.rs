@@ -20,6 +20,7 @@ use crate::config::Config;
 use crate::service::{Library, plugins::PluginService};
 use crate::state::{AppState, St};
 
+mod chapter_retry;
 mod numbers;
 mod plugin_visibility;
 mod sessions;

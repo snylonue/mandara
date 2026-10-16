@@ -61,6 +61,17 @@ pub async fn get_chapter(
     Ok(Json(st.library.get_chapter(&file, path.idx).await?))
 }
 
+// POST /api/files/{id}/chapters/{idx}/retry -------------------------------------
+
+pub async fn retry_chapter(
+    AuthenticatedUser(user): AuthenticatedUser,
+    State(st): State<St>,
+    Path(path): Path<ChapterPath>,
+) -> Result<impl IntoResponse, ApiError> {
+    let file = load_visible_file(&st, &user, &path.id).await?;
+    Ok(Json(st.library.retry_chapter(&file, path.idx).await?))
+}
+
 // GET /api/files/{id}/download ------------------------------------------------
 //
 // Streams the retained original bytes (upload or plugin file-mode pull).

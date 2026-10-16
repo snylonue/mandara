@@ -136,6 +136,10 @@ pub fn router(state: St) -> Router {
         )
         .route("/api/files/{id}/chapters/{idx}", get(files::get_chapter))
         .route(
+            "/api/files/{id}/chapters/{idx}/retry",
+            post(files::retry_chapter),
+        )
+        .route(
             "/api/files/{id}/rematerialize",
             post(files::rematerialize_file),
         )
