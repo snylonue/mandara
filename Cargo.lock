@@ -2239,6 +2239,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "url",
  "wit-bindgen 0.60.0",
 ]

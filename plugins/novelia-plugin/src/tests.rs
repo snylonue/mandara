@@ -9,7 +9,32 @@ fn settings(translation: u32) -> Settings {
         password: String::new(),
         auth_base: AUTH_BASE.into(),
         token: RefCell::new(None),
+        token_from_state: Cell::new(false),
     }
+}
+
+#[test]
+fn token_scope_tracks_credentials_and_endpoints_but_not_translation() {
+    let original = settings(0);
+    let scope = original.auth_scope();
+    assert_eq!(scope, settings(4).auth_scope());
+    for field in 0..4 {
+        let mut changed = settings(0);
+        match field {
+            0 => changed.base.push_str("/api2"),
+            1 => changed.auth_base.push_str("/auth2"),
+            2 => changed.username.push(' '),
+            _ => changed.password.push(' '),
+        }
+        assert_ne!(scope, changed.auth_scope());
+    }
+    let mut first = settings(0);
+    first.username = "ab".into();
+    first.password = "c".into();
+    let mut second = settings(0);
+    second.username = "a".into();
+    second.password = "bc".into();
+    assert_ne!(first.auth_scope(), second.auth_scope());
 }
 
 #[test]

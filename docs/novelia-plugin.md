@@ -24,9 +24,9 @@ Restart the server, then register the component in the admin UI. Nix package dis
 
 Both account fields empty means anonymous access. Web search needs login on the live deployment, while public Wenku downloads and web details/chapters can be read anonymously. If either account field is supplied, both values are submitted without trimming or local completeness checks; upstream decides whether they are valid. A failed login makes API calls unavailable rather than silently falling back to guest access.
 
-The plugin posts `{app: "n", username, password}` to the configured authentication service's `/api/v1/auth/login` and uses the successful response body verbatim as the API Bearer token, without checking JWT structure. Login is lazy: one submission per export call that needs network data, reused across API requests in that call. Password submissions are never retried. The guest is stateless between calls, so later calls log in afresh rather than keeping an expiring token or browser refresh cookie. Illustration requests receive neither credentials nor the Bearer token.
+The plugin posts `{app: "n", username, password}` to the configured authentication service's `/api/v1/auth/login` and uses the successful response body verbatim as the API Bearer token, without checking JWT structure. Login is lazy. Successful tokens are persisted under `auth:v1` in instance state and reused across calls and server restarts. A SHA-256 fingerprint binds the entry to the exact API URL, authentication URL, username and password; changing any of them prevents reuse. No JWT parsing, guest clock or browser refresh cookie is needed: the API determines validity. A cached token rejected with 401 is removed, followed by one new login and a retry of that GET. A freshly issued rejected token, a failed login, and 403 responses never trigger another password submission. Failures are remembered only within the current export; state errors degrade to per-call login. Illustration requests receive neither credentials nor the Bearer token.
 
-Only use trusted site and authentication endpoints, preferably HTTPS. Credentials are stored in ordinary instance configuration, **not encrypted by this plugin**; protect administrator access and database backups. The admin form masks password fields visually, which is not a storage security boundary. Real credentials are never supplied as defaults or committed to the repository; login logs omit passwords, tokens and response bodies.
+Only use trusted site and authentication endpoints, preferably HTTPS. Credentials are stored in ordinary instance configuration, and cached Bearer tokens in instance state, **not encrypted by this plugin**; protect administrator access and database backups. The admin form masks password fields visually, which is not a storage security boundary. Real credentials are never supplied as defaults or committed to the repository; login logs omit passwords, tokens and response bodies.
 
 ## IDs and content loading
 
@@ -45,7 +45,7 @@ Wenku declares file-mode content and returns a translated EPUB/TXT through `get-
 
 Web automatic mode chooses the first complete translation array, falling back to Japanese. A fixed translator with no complete array returns unavailable; empty chapters remain valid. Wenku requires a positive chapter count for a selected translator and does not support Japanese-only downloads. Downloads use `mode=zh&translationsMode=priority` with repeated `translations` parameters. Partial translations remain partial: the upstream exporter retains original EPUB chapters or inserts missing-translation notes in TXT. The plugin never starts translation jobs.
 
-Translation settings are not encoded into content IDs. Changing the translator or upstream file can change the returned bytes without changing the ID; rematerialize cached content when necessary. Search totals are estimates until the final upstream page. GET transport/timeouts and 5xx have at most one retry; 401/403/404/429 are final. Host fetch size/time caps apply to large downloads.
+Translation settings are not encoded into content IDs. Changing the translator or upstream file can change the returned bytes without changing the ID; rematerialize cached content when necessary. Search totals are estimates until the final upstream page. GET transport/timeouts and 5xx have at most one retry; 401 has only the cached-token recovery described above, while 403/404/429 are final. Host fetch size/time caps apply to large downloads.
 
 ## Upgrade from earlier builds
 
@@ -57,11 +57,13 @@ Translation settings are not encoded into content IDs. Changing the translator o
 cargo test -p novelia-plugin
 ./scripts/build-plugins.sh novelia
 cargo test -p mandara-plugin --test novelia compiled_guest -- --ignored
+cargo test -p mandara-plugin --test novelia_auth_cache -- --ignored
+cargo test -p mandara-plugin --test image_cache compiled_guest_novelia -- --ignored
 # Opt-in live validation (downloads one translated EPUB):
 cargo test -p mandara-plugin --test novelia live_guest -- --ignored
 ```
 
-Mock integration tests exercise the actual Wasm component, verbatim account/password JSON, opaque token use, one login per call, upstream rejection of incomplete credentials, illustration isolation, content-only Wenku lookups and file redirects. A captured upload-list fixture tests exact volumeId addressing independently of metadata.
+Mock integration tests exercise the actual Wasm component, verbatim account/password JSON, opaque token use, persistent token reuse, bounded 401 recovery, credential/endpoint invalidation, upstream rejection of incomplete credentials, illustration isolation, content-only Wenku lookups and file redirects. A captured upload-list fixture tests exact volumeId addressing independently of metadata.
 
 Set `NOVELIA_TEST_USERNAME` and `NOVELIA_TEST_PASSWORD` in the test process environment to also validate the guest's login and authenticated web search. Never persist real credentials in test fixtures or shell history. Live tests are opt-in because network availability, permissions and upstream catalog data can change.
 
