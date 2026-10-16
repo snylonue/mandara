@@ -7,7 +7,7 @@ export default defineConfig({
     port: 5173,
     // dev: proxy API calls to the rust backend
     proxy: {
-      "/api": "http://127.0.0.1:8080",
+      "/api": process.env.MANDARA_API_TARGET || "http://127.0.0.1:8080",
     },
   },
   build: {

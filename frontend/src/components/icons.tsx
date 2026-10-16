@@ -19,6 +19,14 @@ function base(size?: number) {
   };
 }
 
+/** Camera — selected passage screenshot. */
+export function IconCamera({ size, className }: IconProps) {
+  return <svg {...base(size)} className={className}>
+    <path d="M14.5 4h-5L7 7H3v13h18V7h-4z" />
+    <circle cx="12" cy="13" r="4" />
+  </svg>;
+}
+
 /** Globe — public visibility. */
 export function IconPublic({ size, className }: IconProps) {
   return (

@@ -510,3 +510,46 @@ body:has(.app-reader),
     padding: var(--space-1) var(--space-2);
   }
 }
+
+.screenshot-hint {
+  flex-shrink: 0;
+  margin: 0;
+  padding: var(--space-2) var(--space-5);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}
+
+.screenshot-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-5);
+  margin: var(--space-4) 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.screenshot-options label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.screenshot-preview {
+  max-height: 48dvh;
+  overflow: auto;
+  margin-block: var(--space-4);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+}
+
+.screenshot-preview img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.screenshot-link {
+  overflow-wrap: anywhere;
+}

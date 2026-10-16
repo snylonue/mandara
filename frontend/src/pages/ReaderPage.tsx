@@ -6,7 +6,7 @@ import { api } from "../api";
 import { Reader } from "../components/Reader";
 import { useToast } from "../components/toast";
 import { SessionControl, useReadingSessions } from "../readingSessions";
-import type { Chapter, FileDetail, Position, ReadingProgress, SessionsResponse } from "../types";
+import type { Chapter, CreateShare, FileDetail, Position, ReadingProgress, SessionsResponse, ShareInfo } from "../types";
 
 export function ReaderPage() {
   const { id = "" } = useParams();
@@ -153,6 +153,13 @@ export function ReaderPage() {
       </div>}
       title={detail.book.title} chapters={detail.chapters} toc={detail.toc}
       backHref={"/book/" + detail.book.id}
+      createShareLink={async () => {
+        const body: CreateShare = { kind: "book", file_ids: [id] };
+        const share = await api<ShareInfo>("/files/" + encodeURIComponent(id) + "/shares", {
+          method: "POST", body: JSON.stringify(body),
+        });
+        return new URL(share.url.replace(/\/$/, "") + "/read", location.origin).href;
+      }}
       loadChapter={idx => api<Chapter>("/files/" + id + "/chapters/" + idx)}
       initialPosition={initialPosition} onProgress={save}
     />

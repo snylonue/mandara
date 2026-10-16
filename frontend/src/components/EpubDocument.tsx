@@ -1,5 +1,6 @@
 import { useEffect, useImperativeHandle, useMemo, useRef, type Ref } from "react";
 import type { ReaderSettings } from "./ReaderSettings";
+import { selectedChapterText } from "../readerScreenshot";
 
 export interface EpubDocumentHandle {
   scrollToFragment: (fragment: string) => void;
@@ -7,20 +8,21 @@ export interface EpubDocumentHandle {
 }
 
 /** Never insert publisher CSS into the application DOM. */
-export function EpubDocument({ content, title, settings, onFraction, onReady, onNavigate, ref }: {
+export function EpubDocument({ content, title, settings, onFraction, onReady, onNavigate, onSelectionChange, ref }: {
   content: string;
   title: string;
   settings: ReaderSettings;
   onFraction: (fraction: number) => void;
   onReady: () => void;
   onNavigate: (idx: number, fragment?: string) => void;
+  onSelectionChange?: (text: string) => void;
   ref?: Ref<EpubDocumentHandle>;
 }) {
   const frame = useRef<HTMLIFrameElement>(null);
   const cleanup = useRef<(() => void) | null>(null);
   const defaultsRef = useRef<HTMLStyleElement | null>(null);
-  const callbacks = useRef({ onFraction, onReady, onNavigate });
-  callbacks.current = { onFraction, onReady, onNavigate };
+  const callbacks = useRef({ onFraction, onReady, onNavigate, onSelectionChange });
+  callbacks.current = { onFraction, onReady, onNavigate, onSelectionChange };
   const source = useMemo(() => {
     const csp = "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data: " + location.origin + "/api/images/; font-src data:; base-uri 'none'; form-action 'none'";
     // iOS cannot paint horizontally overflowing vertical iframe documents
@@ -191,15 +193,20 @@ export function EpubDocument({ content, title, settings, onFraction, onReady, on
         window.open(href, "_blank", "noopener,noreferrer");
       }
     }
+    function selectionChanged() {
+      callbacks.current.onSelectionChange?.(selectedChapterText(doc!.body, doc!.getSelection()));
+    }
     const observer = new ResizeObserver(scaleFixedLayout);
     if (frame.current) observer.observe(frame.current);
     win.addEventListener("scroll", scroll, { passive: true });
+    doc.addEventListener("selectionchange", selectionChanged);
     doc.addEventListener("click", click);
     doc.addEventListener("wheel", wheel, { passive: false });
     doc.addEventListener("keydown", keydown);
     cleanup.current = () => {
       observer.disconnect();
       win.removeEventListener("scroll", scroll);
+      doc.removeEventListener("selectionchange", selectionChanged);
       doc.removeEventListener("click", click);
       doc.removeEventListener("wheel", wheel);
       doc.removeEventListener("keydown", keydown);

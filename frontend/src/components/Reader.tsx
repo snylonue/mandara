@@ -1,13 +1,20 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { IconArrowLeft, IconChevronLeft, IconChevronRight, IconList, IconType } from "./icons";
+import { IconArrowLeft, IconChevronLeft, IconChevronRight, IconList, IconType, IconCamera } from "./icons";
 import { EpubDocument, type EpubDocumentHandle } from "./EpubDocument";
+import { ReaderScreenshotDialog, type ReaderExcerpt } from "./ReaderScreenshotDialog";
+import { selectedChapterText } from "../readerScreenshot";
 import {
   ReaderSettingsPanel,
   useReaderSettings,
 } from "./ReaderSettings";
 import type { Chapter, ChapterMeta, Position, TocNode } from "../types";
+
+// Keep native selections intact when reader controls or scroll progress rerender.
+const TextChapterContent = memo(function TextChapterContent({ content }: { content: string }) {
+  return <div className="epub-content" dangerouslySetInnerHTML={{ __html: content }} />;
+});
 
 interface ReaderProps {
   title: string;
@@ -25,6 +32,9 @@ interface ReaderProps {
   /** Where the top-bar 返回 points (book detail page); hidden when absent. */
   backHref?: string;
   sessionControls?: ReactNode;
+  /** Public reader URL, or an explicit action that creates one for this file. */
+  shareLink?: string;
+  createShareLink?: () => Promise<string>;
 }
 
 export function Reader({
@@ -37,10 +47,16 @@ export function Reader({
   readOnly,
   backHref,
   sessionControls,
+  shareLink,
+  createShareLink,
 }: ReaderProps) {
   const { t } = useTranslation();
   const [settings, setSettings] = useReaderSettings();
   const [tocOpen, setTocOpen] = useState(false);
+  const [selection, setSelection] = useState<{ text: string; chapterIdx: number } | null>(null);
+  const [excerpt, setExcerpt] = useState<ReaderExcerpt | null>(null);
+  const [screenshotHint, setScreenshotHint] = useState(false);
+  const [createdShareLink, setCreatedShareLink] = useState<string>();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [idx, setIdx] = useState(() =>
     Math.min(initialPosition?.chapter_idx ?? 0, Math.max(chapters.length - 1, 0)),
@@ -58,9 +74,41 @@ export function Reader({
   const pendingFragRef = useRef<string | null>(null);
   const epubRef = useRef<EpubDocumentHandle>(null);
   const articleRef = useRef<HTMLElement>(null);
+  const screenshotButtonRef = useRef<HTMLButtonElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const renderTarget = useRef<{ fragment: string | null; fraction: number }>({ fragment: null, fraction: 0 });
   const isDocument = chapter?.content.startsWith("<!doctype html>") ?? false;
+
+  useEffect(() => {
+    if (isDocument) return;
+    const root = articleRef.current?.querySelector(".epub-content");
+    if (!root) return;
+    function updateSelection() {
+      setSelection({ text: selectedChapterText(root!, document.getSelection()), chapterIdx: idx });
+    }
+    document.addEventListener("selectionchange", updateSelection);
+    return () => document.removeEventListener("selectionchange", updateSelection);
+  }, [chapter, idx, isDocument]);
+
+  function openScreenshot() {
+    if (!chapter || !selection?.text || selection.chapterIdx !== idx || !articleRef.current) {
+      setScreenshotHint(true);
+      return;
+    }
+    const style = getComputedStyle(articleRef.current);
+    setExcerpt({
+      text: selection.text, title, chapter: chapter.title, chapterIdx: idx,
+      style: {
+        background: style.getPropertyValue("--bg").trim(),
+        foreground: style.getPropertyValue("--text-1").trim(),
+        muted: style.getPropertyValue("--text-2").trim(),
+        accent: style.getPropertyValue("--accent").trim(),
+        fontFamily: style.fontFamily,
+      },
+    });
+    setSettingsOpen(false);
+    setScreenshotHint(false);
+  }
 
   function scrollToFragId(frag: string | null) {
     // The chapter content carries the original element ids, so a TOC
@@ -139,6 +187,8 @@ export function Reader({
       lastChapterRef.current = clamped;
       lastFractionRef.current = 0;
       if (onProgress && !readOnly) onProgress(0, clamped);
+      setSelection(null);
+      setScreenshotHint(false);
       setIdx(clamped);
       setFraction(0);
       pendingFragRef.current = frag ?? null;
@@ -223,6 +273,13 @@ export function Reader({
           </div>
         </div>
         <div className="reader-topbar-side reader-topbar-end">
+          <button ref={screenshotButtonRef} className="btn ghost reader-toolbar-icon"
+            disabled={!chapter}
+            onMouseDown={event => event.preventDefault()}
+            onClick={openScreenshot}
+            aria-label={t("screenshot.title")} title={t("screenshot.title")}>
+            <IconCamera size={18} />
+          </button>
           <button
             className="btn ghost reader-toolbar-icon"
             onClick={() => setSettingsOpen((v) => !v)}
@@ -242,6 +299,15 @@ export function Reader({
           />
         )}
       </header>
+
+      {screenshotHint && <p className="screenshot-hint" role="status">{t("screenshot.selectHint")}</p>}
+      {excerpt && <ReaderScreenshotDialog excerpt={excerpt} shareLink={shareLink ?? createdShareLink}
+        createShareLink={createShareLink ? async () => {
+          const link = await createShareLink();
+          setCreatedShareLink(link);
+          return link;
+        } : undefined}
+        onClose={() => { setExcerpt(null); requestAnimationFrame(() => screenshotButtonRef.current?.focus()); }} />}
 
       {/* left slide-in table of contents */}
       {tocOpen && (
@@ -288,6 +354,7 @@ export function Reader({
             title={chapter.title}
             settings={settings}
             onNavigate={goto}
+            onSelectionChange={text => setSelection({ text, chapterIdx: idx })}
             onReady={() => {
               const target = renderTarget.current;
               epubRef.current?.restoreFraction(target.fraction);
@@ -300,7 +367,7 @@ export function Reader({
               window.clearTimeout(debounceRef.current);
               debounceRef.current = window.setTimeout(() => onProgress(f, idx), 600);
             }}
-          /> : <div className="epub-content" dangerouslySetInnerHTML={{ __html: chapter.content }} />)}
+          /> : <TextChapterContent content={chapter.content} />)}
         </article>
       </div>
 

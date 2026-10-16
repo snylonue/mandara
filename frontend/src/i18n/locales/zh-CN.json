@@ -355,5 +355,28 @@
     "hiatus": "休刊中",
     "totalVolumesLine": "全 {{count}} 卷",
     "formHint": "留空的字段不填写即可；保存时清空已填字段会删除对应信息。"
+  },
+  "screenshot": {
+    "title": "选段截图",
+    "description": "将所选文字排版为图片，使用当前阅读主题，不包含插图或原书版式。",
+    "selectHint": "请先在正文中拖动或长按选择文字，再点击右上角相机按钮。",
+    "include": "图片附带信息",
+    "bookTitle": "书名",
+    "chapter": "章节",
+    "shareLink": "分享链接",
+    "shareWarning": "生成链接后，任何持链接者都能阅读当前内容版本的整本书，而不只是所选文字。仅勾选不会创建链接。",
+    "generateLink": "确认并生成分享链接",
+    "shareFailed": "生成分享链接失败，请重试。",
+    "preview": "所选文字截图预览",
+    "rendering": "正在生成截图…",
+    "renderFailed": "截图生成失败，请关闭后重试。",
+    "tooLong": "所选内容过长，请减少文字或段落后重试（最多 6000 字）。",
+    "clipboardUnavailable": "此浏览器或当前 HTTP 连接不支持复制图片。请保存 PNG，或通过 HTTPS / localhost 访问后复制。",
+    "copyFailed": "复制失败，可能未获得剪贴板权限。请重试或保存 PNG。",
+    "copied": "图片已复制",
+    "copying": "复制中…",
+    "copy": "复制图片",
+    "save": "保存 PNG",
+    "filename": "阅读摘录.png"
   }
 }
