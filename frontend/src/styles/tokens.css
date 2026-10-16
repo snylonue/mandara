@@ -162,6 +162,11 @@
   --fs-3xl: 34px;
 }
 
+/* Match daylight reader chrome and gutters to the reading column, not the shelf. */
+.reader[data-theme="light"] {
+  --bg: #fbfbfd;
+}
+
 /* Sepia reader chrome uses the same paper and ink as its reading column. */
 .reader[data-theme="sepia"] {
   --bg: #f4ecd8;

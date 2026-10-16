@@ -24,13 +24,22 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it.each(["light", "dark"])("keeps reading themes independent from the %s app theme", async (appTheme) => {
+it.each(["light", "dark"].flatMap((appTheme) =>
+  ["text", "epub"].map((format) => ({ appTheme, format })),
+))("keeps $format reading backgrounds consistent and independent from the $appTheme app theme", async ({ appTheme, format }) => {
   document.documentElement.dataset.theme = appTheme;
   // The default reading theme is night, even on a light-themed shelf.
-  const chapter = { idx: 0, title: "正文", content: "<p>测试正文</p>" };
+  const content = format === "epub"
+    ? "<!doctype html><html><body><p>测试正文</p></body></html>"
+    : "<p>测试正文</p>";
+  const chapter = { idx: 0, title: "正文", content };
   const { container } = render(<Reader title="测试书籍" chapters={[{ idx: 0, title: "正文", linear: true }]}
     loadChapter={async () => chapter} />);
-  await screen.findByText("测试正文");
+  if (format === "epub") {
+    await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
+  } else {
+    await screen.findByText("测试正文");
+  }
   const article = container.querySelector(".reader-body")!;
   expect(container.querySelector(".reader")!.getAttribute("data-theme")).toBe("dark");
   expect(getComputedStyle(article).backgroundColor).toBe("rgb(15, 17, 21)");
@@ -51,7 +60,14 @@ it.each(["light", "dark"])("keeps reading themes independent from the %s app the
     const chrome = getComputedStyle(container.querySelector(".reader")!);
     expect(chrome.colorScheme).toBe(theme === "dark" ? "dark" : "light");
     expect(chrome.getPropertyValue("--bg").trim()).toBe(
-      theme === "dark" ? "#0f1115" : theme === "sepia" ? "#f4ecd8" : "#efede4");
+      theme === "dark" ? "#0f1115" : theme === "sepia" ? "#f4ecd8" : "#fbfbfd");
+    // JSDOM does not resolve var() in background shorthands. Check that chrome
+    // consumes the same token whose resolved color the column asserts above.
+    for (const selector of [".reader", ".reader-topbar", ".reader-bottom"]) {
+      const rule = Array.from(style.sheet!.cssRules).find((rule) =>
+        (rule as CSSStyleRule).selectorText === selector) as CSSStyleRule;
+      expect(rule.style.background).toBe("var(--bg)");
+    }
     expect(chrome.getPropertyValue("--surface").trim()).toBe(
       theme === "dark" ? "#171a21" : theme === "sepia" ? "#f8f1e3" : "#fcfbf6");
     expect(chrome.getPropertyValue("--surface-raised").trim()).toBe(
