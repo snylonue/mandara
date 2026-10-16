@@ -1,4 +1,35 @@
 /* ---- share ---- */
+.share-book {
+  max-width: 820px;
+  margin-inline: auto;
+  overflow-wrap: anywhere;
+}
+
+.share-description {
+  white-space: pre-wrap;
+  margin-block: var(--space-4);
+}
+
+.share-chapters {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.share-chapters a {
+  display: block;
+  padding: var(--space-3);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-1);
+  text-decoration: none;
+}
+
+.share-chapters a:hover,
+.share-chapters a:focus-visible {
+  color: var(--accent);
+  background: var(--surface-2);
+}
+
 .share-snapshot {
   border-color: var(--accent);
 }

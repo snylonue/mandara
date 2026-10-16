@@ -248,7 +248,9 @@
     "invalid": "链接无效或已过期",
     "progressOf": "{{owner}} 的进度 · 阅读档案「{{label}}」",
     "readTo": "已读到",
-    "updatedAt": "（更新于 {{time}}）"
+    "updatedAt": "（更新于 {{time}}）",
+    "readFromProgress": "从分享进度阅读",
+    "noChapters": "暂无可阅读章节"
   },
   "plugin": {
     "chooseSource": "选择插件源…",

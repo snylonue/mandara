@@ -42,7 +42,8 @@ function loadTheme(): AppTheme {
 export default function App() {
   const { user, logout } = useAuth();
   const reading = Boolean(useMatch("/read/:id"));
-  const sharing = Boolean(useMatch("/share/:token"));
+  const sharing = Boolean(useMatch("/share/:token/*"));
+  const sharedReading = Boolean(useMatch("/share/:token/read"));
   const { t } = useTranslation();
   const [theme, setTheme] = useState<AppTheme>(loadTheme);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -75,7 +76,7 @@ export default function App() {
   return (
     <ToastProvider>
       <ReadingSessionsProvider>
-        <div className={`app${reading || sharing ? " app-reader" : ""}`}>
+        <div className={`app${reading || sharedReading ? " app-reader" : ""}`}>
           <header className={`nav${scrolled ? " scrolled" : ""}`}>
             <div className="nav-left">
               <Link to="/" className="brand">
@@ -180,6 +181,7 @@ export default function App() {
                 }
               />
               <Route path="/share/:token" element={<SharePage />} />
+              <Route path="/share/:token/read" element={<SharePage />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </main>
