@@ -13,8 +13,9 @@ info:
     actual books (uploads or virtual plugin books). Several files can share
     one metadata entry. Chapters, reading progress and shares attach to
     files. Each user-wide reading session holds independent progress for
-    every file. Every file is either `private` (owner + admins only) or `public`
-    (all logged-in users).
+    every file. Uploaded files may be `private` (owner + admins only) or
+    `public` (all logged-in users). Plugin content is always `public`, including
+    plugin-provided EPUB/TXT files; only locally uploaded files may be private.
 
     Protected endpoints authenticate requests before parsing path, query,
     or body data. Missing, invalid, or expired credentials and deleted
@@ -633,8 +634,10 @@ paths:
                 visibility:
                   type: string
                   enum: [private, public]
-                  default: private
-                  description: Choose whether this file is published
+                  description: |
+                    Uploads default to private and may choose either visibility.
+                    Plugin content defaults to public; requesting private returns 400.
+                    Metadata-only additions create no file, so visibility has no effect.
                 label:
                   type: string
                   description: Short human label for this edition (e.g. "proofread")
@@ -1086,7 +1089,10 @@ paths:
           $ref: "#/components/responses/NotFound"
     patch:
       tags: [files]
-      summary: Toggle visibility or rename the edition label (owner or admin)
+      summary: Toggle upload visibility or rename the edition label (owner or admin)
+      description: |
+        Plugin content is always public, even when its format is epub or txt.
+        Setting a plugin item to private returns 400 without applying any changes.
       operationId: patchFile
       security:
         - bearerAuth: []
@@ -1105,6 +1111,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/FileMeta"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "403":
           $ref: "#/components/responses/Forbidden"
         "404":
@@ -1859,6 +1867,7 @@ components:
       description: |
         One independently selectable content item of a book. Source identity
         is immutable; add or delete an item instead of changing its source.
+        Items whose source is not local are always public, regardless of format.
       required:
         - id
         - book_id
@@ -2135,6 +2144,7 @@ components:
       type: object
       properties:
         visibility:
+          description: Only local uploads may be private; plugin items reject private with 400.
           $ref: "#/components/schemas/Visibility"
         label:
           type: string

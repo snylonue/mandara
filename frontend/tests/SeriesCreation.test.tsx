@@ -71,7 +71,8 @@ it("matches by returned order and submits independent confirmed content IDs with
   dialog(); const user = await pickMetadata(); await pickContent();
   expect((screen.getByLabelText("元数据卷一对应的内容") as HTMLSelectElement).value).toBe("wenku8:candidate:1");
   expect(submissions).toHaveLength(0); expect(imports).toHaveLength(0);
-  await user.selectOptions(screen.getByLabelText("元数据卷一内容的可见性"), "public");
+  expect(screen.queryByLabelText("元数据卷一内容的可见性")).toBeNull();
+  expect(screen.getAllByText("插件内容始终公开，所有登录用户均可阅读。")).toHaveLength(2);
   await user.type(screen.getByLabelText("元数据卷一内容的备注"), "精校版");
   await user.click(screen.getByRole("button", { name: "创建系列并添加内容" }));
   await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
@@ -80,7 +81,7 @@ it("matches by returned order and submits independent confirmed content IDs with
     ["bangumi", "metadata:1", "wenku8", "content:1"], ["bangumi", "metadata:2", "wenku8", "content:2"],
   ]);
   expect(submissions[0].get("visibility")).toBe("public"); expect(submissions[0].get("label")).toBe("精校版");
-  expect(submissions[1].get("visibility")).toBe("private");
+  expect(submissions[1].get("visibility")).toBe("public");
   expect(onSeriesCreated).toHaveBeenCalledWith(expect.objectContaining({ title: "元数据系列" }));
 });
 
@@ -142,9 +143,12 @@ it("allows uploading local volume files and adjusting their order", async () => 
   const second = new File(["正文乙"], "乙.txt", { type: "text/plain" });
   fireEvent.change(screen.getByLabelText("选择系列正文文件"), { target: { files: [first, second] } });
   await user.selectOptions(screen.getByLabelText("元数据卷一对应的内容"), "file:1");
+  expect(screen.queryByText("插件内容始终公开，所有登录用户均可阅读。")).toBeNull();
+  await user.selectOptions(screen.getByLabelText("元数据卷一内容的可见性"), "public");
   await user.click(screen.getByRole("button", { name: "创建系列并添加内容" }));
   await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
   expect(submissions.map((form) => (form.get("file") as File).name)).toEqual(["乙.txt", "甲.epub"]);
+  expect(submissions.map((form) => form.get("visibility"))).toEqual(["public", "private"]);
   expect(submissions[0].get("meta_plugin_book_id")).toBe("metadata:1");
   expect(submissions[0].has("plugin_source")).toBe(false);
 });

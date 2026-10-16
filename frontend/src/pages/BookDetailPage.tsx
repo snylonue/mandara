@@ -150,9 +150,9 @@ function FileSection({
           )}
           {canManage && (
             <>
-              <button className="btn sm" onClick={() => void toggleVisibility()}>
+              {file.source === "local" && <button className="btn sm" onClick={() => void toggleVisibility()}>
                 {file.visibility === "public" ? t("book.setPrivate") : t("book.setPublic")}
-              </button>
+              </button>}
               <button className="btn sm danger" onClick={() => void deleteFile()}>
                 {t("book.delete")}
               </button>
@@ -230,7 +230,7 @@ export function BookDetailPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [share, setShare] = useState<ShareInfo | null>(null);
   const [attachLabel, setAttachLabel] = useState("");
-  const [attachVisibility, setAttachVisibility] = useState<Visibility>("public");
+  const [attachVisibility, setAttachVisibility] = useState<Visibility>("private");
   const [attaching, setAttaching] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [shareSelection, setShareSelection] = useState<{ bookId: string; initialFileId?: string } | null>(null);
@@ -291,7 +291,7 @@ export function BookDetailPage() {
       form.append("book_id", id);
       form.append("plugin_source", pick.instance.id);
       form.append("plugin_book_id", pick.item.id);
-      form.append("visibility", attachVisibility);
+      form.append("visibility", "public");
       if (attachLabel.trim()) form.append("label", attachLabel.trim());
       const result = await api<AcquireResult>("/books", { method: "POST", body: form });
       const file = result.books[0]?.files[0];
@@ -599,13 +599,6 @@ export function BookDetailPage() {
               value={attachLabel}
               onChange={(e) => setAttachLabel(e.target.value)}
             />
-            <select
-              value={attachVisibility}
-              onChange={(e) => setAttachVisibility(e.target.value as Visibility)}
-            >
-              <option value="private">{t("book.privateTag")}</option>
-              <option value="public">{t("book.publicTag")}</option>
-            </select>
             <button className="btn primary" onClick={() => setAttachOpen(true)}>
               {t("book.attachOpen")}
             </button>
@@ -652,6 +645,11 @@ export function BookDetailPage() {
         {attachTab === "upload" && (
           <div className="field">
             <p className="hint">{t("book.attachUploadHint")}</p>
+            <select aria-label={t("book.attachVisibility")} value={attachVisibility}
+              onChange={(e) => setAttachVisibility(e.target.value as Visibility)}>
+              <option value="private">{t("book.privateTag")}</option>
+              <option value="public">{t("book.publicTag")}</option>
+            </select>
             <button
               className="file-picker"
               disabled={attaching}
@@ -676,6 +674,7 @@ export function BookDetailPage() {
 
         {attachTab === "plugin" && (
           <div className="field">
+            <p className="hint">{t("library.pluginPublicOnly")}</p>
             <SourceSearchPane
               instances={instances}
               filter={(i) =>

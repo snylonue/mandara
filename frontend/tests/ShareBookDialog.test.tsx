@@ -90,9 +90,9 @@ it("prevents duplicate submission and closing while busy, and ignores results af
   expect(onCreated).not.toHaveBeenCalled();
 });
 
-function page() {
+function page(detail: BookEntry = entry) {
   vi.mocked(api).mockImplementation(async (path) => {
-    if (path === "/books/book") return entry;
+    if (path === "/books/book") return detail;
     if (path === "/plugins") return [];
     if (path.endsWith("/sessions")) return { sessions: [], last_session_id: null };
     if (path.endsWith("/shares")) return info;
@@ -131,4 +131,19 @@ it("lets administrators select other users' public content", async () => {
   await screen.findByRole("heading", { name: "测试书籍" });
   fireEvent.click(within(container.querySelector(".detail-info")! as HTMLElement).getByRole("button", { name: "分享" }));
   expect(check("他人版本").checked).toBe(true);
+});
+
+it("only offers visibility editing for uploads, including when a plugin provides an EPUB", async () => {
+  viewer.role = "admin";
+  page({ ...entry, files: [files[0], { ...files[1], format: "epub", content_mode: "file", owner_id: "user" }] });
+  const plugin = (await screen.findByText("网络版")).closest(".file-card")! as HTMLElement;
+  expect(within(plugin).queryByRole("button", { name: /设为/ })).toBeNull();
+  const upload = screen.getByText("精校版").closest(".file-card")! as HTMLElement;
+  expect(within(upload).getByRole("button", { name: "设为公开" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "添加内容" }));
+  const modal = await screen.findByRole("dialog", { name: "添加内容到本书" });
+  expect((within(modal).getByLabelText("可见性") as HTMLSelectElement).value).toBe("private");
+  fireEvent.click(within(modal).getByLabelText("从插件源"));
+  expect(within(modal).queryByLabelText("可见性")).toBeNull();
+  expect(within(modal).getByText("插件内容始终公开，所有登录用户均可阅读。")).toBeTruthy();
 });

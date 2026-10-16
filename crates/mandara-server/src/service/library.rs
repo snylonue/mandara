@@ -13,8 +13,8 @@
 //! materialized via `get-book`. A book can hold multiple content items from
 //! different instances; each item has its own immutable source identity.
 //!
-//! Visibility is per file: `private` = owner + admins only, `public` =
-//! visible to every logged-in user.
+//! Upload visibility is per file: `private` = owner + admins only, `public` =
+//! visible to every logged-in user. Plugin content is always public.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -848,6 +848,9 @@ impl Library {
         visibility: Visibility,
         label: &str,
     ) -> Result<AcquireOutcome, ApiError> {
+        if matches!(content, AcquireContent::Plugin { .. }) && visibility != Visibility::Public {
+            return Err(ApiError::bad_request("plugin content must be public"));
+        }
         // Two sequential stages, each a 1-D match: stage 1 resolves the
         // metadata into a plan; stage 2 attaches the content to the planned
         // book. The two dimensions stay orthogonal — no 2-D cartesian
@@ -2200,6 +2203,13 @@ impl Library {
         visibility: Option<Visibility>,
         label: Option<&str>,
     ) -> Result<FileMeta, ApiError> {
+        let file = self
+            .get_file(id)
+            .await?
+            .ok_or_else(|| ApiError::not_found("file"))?;
+        if file.source != "local" && visibility == Some(Visibility::Private) {
+            return Err(ApiError::bad_request("plugin content must be public"));
+        }
         diesel::update(schema::book_files::table.find(id))
             .set((
                 schema::book_files::visibility.eq(coalesce_visibility(

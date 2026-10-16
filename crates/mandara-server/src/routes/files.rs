@@ -131,7 +131,7 @@ pub async fn download_file(
 #[derive(Deserialize)]
 pub struct PatchFile {
     /// `public` makes the file visible to every logged-in user, `private`
-    /// hides it (owner + admins only).
+    /// hides local uploads (owner + admins only). Plugin content must stay public.
     pub visibility: Option<Visibility>,
     pub label: Option<String>,
 }

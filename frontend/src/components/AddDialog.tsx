@@ -39,14 +39,14 @@ function ItemSettings({ entry, onChange }: {
   const { t } = useTranslation();
   return (
     <div className="row item-settings">
-      <select
+      {entry.kind === "plugin" ? <span className="hint">{t("library.pluginPublicOnly")}</span> : <select
         value={entry.visibility}
         onChange={(e) => onChange({ visibility: e.target.value as Visibility })}
         aria-label={t("library.visibilityLabel")}
       >
         <option value="private">{t("library.visibilityPrivate")}</option>
         <option value="public">{t("library.visibilityPublic")}</option>
-      </select>
+      </select>}
       <input
         placeholder={t("library.labelPlaceholder")}
         value={entry.label}
@@ -187,7 +187,7 @@ export function AddDialog({
       );
       return dup
         ? prev
-        : [...prev, { kind: "plugin", pick, visibility: "private", label: "" }];
+        : [...prev, { kind: "plugin", pick, visibility: "public", label: "" }];
     });
     setDialogError(null);
   }
@@ -234,7 +234,7 @@ export function AddDialog({
   async function acquire(entry: ContentEntry | null, extra: (form: FormData) => void): Promise<AcquireResult> {
     const form = new FormData();
     if (entry) {
-      form.append("visibility", entry.visibility);
+      form.append("visibility", entry.kind === "plugin" ? "public" : entry.visibility);
       if (entry.label.trim()) form.append("label", entry.label.trim());
     }
     extra(form);
