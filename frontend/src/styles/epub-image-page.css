@@ -1,0 +1,53 @@
+/* stylelint-disable declaration-no-important -- Override publication sizing only inside standalone image pages. */
+/* Single-illustration pages fit the frame, not the publisher's page size.
+   These scoped overrides must beat publication rules, unlike text defaults. */
+:root[data-mandara-image-only],
+:root[data-mandara-image-only] body,
+:root[data-mandara-image-only] [data-mandara-image-wrapper] {
+  box-sizing: border-box !important;
+  width: 100% !important;
+  height: 100% !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  max-width: none !important;
+  max-height: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  writing-mode: horizontal-tb !important;
+}
+
+:root[data-mandara-image-only] {
+  overflow: hidden !important;
+  scrollbar-gutter: auto !important;
+}
+
+:root[data-mandara-image-only] body,
+:root[data-mandara-image-only] [data-mandara-image-wrapper] {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  position: static !important;
+}
+
+:root[data-mandara-image-only] [data-mandara-image] {
+  display: block !important;
+  flex: none !important;
+  position: static !important;
+  box-sizing: border-box !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  max-width: 100% !important;
+  max-height: 100% !important;
+  width: auto !important;
+  height: auto !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  object-fit: contain !important;
+}
+
+:root[data-mandara-image-only] svg[data-mandara-image] {
+  width: 100% !important;
+  height: 100% !important;
+}

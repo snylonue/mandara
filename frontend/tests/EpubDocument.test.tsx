@@ -90,6 +90,58 @@ it("updates frame theme defaults without sampling animated colors or changing pu
   }
 });
 
+it.each([
+  '<img class="cover" width="1200" height="1800" src="/api/images/cover">',
+  '<svg viewBox="0 0 1200 1800"><title>彩页</title><image width="1200" height="1800" href="/api/images/cover" /></svg>',
+  '<svg viewBox="0 0 1200 1800"><svg x="100" y="100" width="400" height="600"><image href="/api/images/cover" /></svg></svg>',
+])("fits standalone illustrations and their wrappers: %s", (image) => {
+  const publisher = "body,.page{width:1200px;height:1800px;margin:2em;padding:1em} .cover{max-width:none;width:1200px;height:1800px}";
+  const content = `<!doctype html><html data-epub-layout="reflowable"><head><style>${publisher}</style></head><body><div class="page" style="min-height:1800px"><p>${image}</p></div></body></html>`;
+  const { doc, rerender } = load(content);
+  expect(doc.documentElement.hasAttribute("data-mandara-image-only")).toBe(true);
+  expect(doc.querySelectorAll("[data-mandara-image-wrapper]")).toHaveLength(2);
+  expect(doc.querySelectorAll("[data-mandara-image]")).toHaveLength(1);
+  for (const nested of doc.querySelectorAll("svg svg")) {
+    expect(nested.hasAttribute("data-mandara-image")).toBe(false);
+  }
+  const rules = Array.from(doc.head.querySelector("style")!.sheet!.cssRules) as CSSStyleRule[];
+  const rootRule = rules.find((rule) => rule.selectorText === ":root[data-mandara-image-only]")!;
+  expect(rootRule.style.overflow).toBe("hidden");
+  expect(rootRule.style.getPropertyValue("scrollbar-gutter")).toBe("auto");
+  const imageRule = rules.find((rule) => rule.selectorText === ":root[data-mandara-image-only] [data-mandara-image]")!;
+  expect(imageRule.style.getPropertyValue("max-width")).toBe("100%");
+  expect(imageRule.style.getPropertyValue("max-height")).toBe("100%");
+  expect(imageRule.style.getPropertyPriority("max-height")).toBe("important");
+  expect(imageRule.style.getPropertyValue("object-fit")).toBe("contain");
+  expect(doc.querySelector(".page")!.getAttribute("style")).toBe("min-height:1800px");
+  expect(doc.head.querySelectorAll("style")[1].textContent).toBe(publisher);
+
+  rerender(<EpubDocument {...props} content={content} settings={{ ...settings, fontSize: 28 }} />);
+  expect(doc.documentElement.hasAttribute("data-mandara-image-only")).toBe(true);
+  expect(doc.querySelectorAll("[data-mandara-image-wrapper]")).toHaveLength(2);
+  expect(doc.head.querySelectorAll("style")).toHaveLength(2);
+});
+
+it.each([
+  '<p>正文</p><img src="/api/images/illustration">',
+  '<img src="/api/images/one"><img src="/api/images/two">',
+  '<p><img class="gaiji" src="/api/images/glyph"></p>',
+  '<table><tr><td><img src="/api/images/illustration"></td></tr></table>',
+  '<p>图注</p><svg viewBox="0 0 600 800"><image href="/api/images/illustration" /></svg>',
+])("keeps mixed content scrollable: %s", (body) => {
+  const { doc } = load(`<!doctype html><html><body>${body}</body></html>`);
+  expect(doc.documentElement.hasAttribute("data-mandara-image-only")).toBe(false);
+  expect(doc.querySelectorAll("[data-mandara-image-wrapper]")).toHaveLength(0);
+  expect(doc.head.querySelector("style")!.textContent).not.toContain("overflow: hidden");
+});
+
+it("preserves fixed-layout illustration scaling", () => {
+  const { doc } = load(`<!doctype html><html data-epub-layout="pre-paginated"><head><meta name="viewport" content="width=600,height=800"></head><body><img width="600" height="800" src="/api/images/cover"></body></html>`);
+  expect(doc.documentElement.hasAttribute("data-mandara-image-only")).toBe(false);
+  expect(doc.documentElement.style.width).toBe("600px");
+  expect(doc.documentElement.style.height).toBe("800px");
+});
+
 it("does not add glyph sizing defaults to fixed-layout publications", () => {
   const { doc } = load(`<!doctype html><html data-epub-layout="pre-paginated"><head>
     <meta name="viewport" content="width=600,height=800"></head><body>

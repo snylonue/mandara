@@ -1,5 +1,6 @@
 import { useEffect, useImperativeHandle, useMemo, useRef, type Ref } from "react";
 import type { ReaderSettings } from "./ReaderSettings";
+import imagePageStyles from "../styles/epub-image-page.css?raw";
 
 export interface EpubDocumentHandle {
   scrollToFragment: (fragment: string) => void;
@@ -93,7 +94,24 @@ export function EpubDocument({ content, title, settings, onFraction, onReady, on
     // justification or display:block overrides the publisher's own cascade.
     defaults.textContent = ":where(html){font-size:" + settings.fontSize + "px;line-height:" + settings.lineHeight + ";font-family:" + inherited.fontFamily + ";color:" + foreground + ";color-scheme:" + inherited.colorScheme + ";background:transparent} :where(body){margin:0;padding:0.5em} :where(img,svg){max-width:100%;height:auto} :where(table){max-width:100%}";
     if (doc.documentElement.dataset.epubLayout !== "pre-paginated") {
-      const imageOnly = doc.images.length === 1 && !doc.body.textContent?.trim() && !doc.querySelector("svg,table,video,audio,canvas");
+      // SVG wrappers are common in cover/colour pages. Ignore their internal
+      // labels and metadata when checking for text outside the illustration.
+      const illustrations = Array.from(doc.body.querySelectorAll("img:not(.gaiji),svg"))
+        .filter((element) => !element.parentElement?.closest("svg"));
+      const text = doc.body.cloneNode(true) as HTMLElement;
+      text.querySelectorAll("svg,style,script").forEach((element) => element.remove());
+      const imageOnly = illustrations.length === 1 && !text.textContent?.trim()
+        && !doc.body.querySelector("table,video,audio,canvas,math,img.gaiji");
+      doc.documentElement.toggleAttribute("data-mandara-image-only", imageOnly);
+      doc.querySelectorAll("[data-mandara-image-wrapper]").forEach((element) => element.removeAttribute("data-mandara-image-wrapper"));
+      doc.querySelectorAll("[data-mandara-image]").forEach((element) => element.removeAttribute("data-mandara-image"));
+      if (imageOnly) {
+        illustrations[0].setAttribute("data-mandara-image", "");
+        for (let wrapper = illustrations[0].parentElement; wrapper && wrapper !== doc.body; wrapper = wrapper.parentElement) {
+          wrapper.setAttribute("data-mandara-image-wrapper", "");
+        }
+        defaults.textContent += imagePageStyles;
+      }
       // Overlay scrollbars do not reserve a gutter. Keep text clear even when
       // publication CSS removes body padding or sizes it to the viewport.
       if (!imageOnly) {
@@ -106,12 +124,11 @@ export function EpubDocument({ content, title, settings, onFraction, onReady, on
       }
       // A vertical block can be wider than the viewport, so 100% alone does
       // not constrain publisher image dimensions. Bound both physical axes.
-      defaults.textContent += " :where(img){max-width:calc(100vw - 3em);max-height:calc(100vh - 3em);width:auto;height:auto} :where(html[data-mandara-image-only] body){display:grid;place-items:center;width:100vw;height:100vh;box-sizing:border-box} :where(html[data-mandara-image-only] img){display:block}";
+      defaults.textContent += " :where(img){max-width:calc(100vw - 3em);max-height:calc(100vh - 3em);width:auto;height:auto}";
       // Gaiji are inline character images, not illustrations. Some EPUBs lose
       // their stylesheets; scale these glyphs with the surrounding text rather
       // than their bitmap dimensions. Publication rules still take precedence.
       defaults.textContent += " :where(img.gaiji){display:inline;width:auto;height:1em;vertical-align:baseline}";
-      doc.documentElement.toggleAttribute("data-mandara-image-only", imageOnly);
     }
   }
 

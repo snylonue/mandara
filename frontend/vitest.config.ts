@@ -8,6 +8,7 @@ process.env.NODE_ENV = "test";
 export default mergeConfig(viteConfig, defineConfig({
   test: {
     environment: "jsdom",
+    css: { include: [/epub-image-page\.css/] },
     env: { NODE_ENV: "test" },
     include: ["tests/**/*.test.tsx"],
     setupFiles: ["./tests/setup.ts"],
