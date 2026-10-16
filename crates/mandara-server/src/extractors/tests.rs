@@ -22,6 +22,7 @@ use crate::state::{AppState, St};
 
 mod numbers;
 mod sessions;
+mod shares;
 
 const SECRET: &str = "extractor-tests-only";
 

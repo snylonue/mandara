@@ -126,6 +126,13 @@ diesel::table! {
 }
 
 diesel::table! {
+    share_files (token, file_id) {
+        token -> Text,
+        file_id -> Text,
+    }
+}
+
+diesel::table! {
     shares (token) {
         token -> Text,
         kind -> mandara_core::model::ShareKindMapping,
@@ -158,6 +165,8 @@ diesel::joinable!(series -> users (created_by));
 diesel::joinable!(sessions -> book_files (file_id));
 diesel::joinable!(sessions -> reading_sessions (reading_session_id));
 diesel::joinable!(sessions -> users (user_id));
+diesel::joinable!(share_files -> book_files (file_id));
+diesel::joinable!(share_files -> shares (token));
 diesel::joinable!(shares -> book_files (file_id));
 diesel::joinable!(shares -> sessions (session_id));
 diesel::joinable!(shares -> users (created_by));
@@ -172,6 +181,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     reading_sessions,
     series,
     sessions,
+    share_files,
     shares,
     users,
 );

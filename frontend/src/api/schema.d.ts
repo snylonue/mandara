@@ -802,7 +802,12 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Create a share link for a file or one of its sessions */
+        /**
+         * Share selected content versions of a book or one reading session
+         * @description All selected files must belong to the same book and be shareable by the caller.
+         *     Selection is frozen when the link is created; new versions are never included automatically.
+         *     The path file is the default version and must be selected. Deleting that file revokes the link.
+         */
         post: operations["createShare"];
         delete?: never;
         options?: never;
@@ -1174,6 +1179,8 @@ export interface components {
         /** @enum {string} */
         ShareKind: "book" | "session";
         CreateShare: {
+            /** @description Explicit content selection including the path file. Omit for a single-file link. Session shares allow only their own file. */
+            file_ids?: string[];
             kind?: components["schemas"]["ShareKind"];
             /** @description Per-file ReadingProgress.id (not the context id), required when kind is "session" */
             session_id?: string;
@@ -1195,8 +1202,12 @@ export interface components {
             title: string;
             authors: string[];
             description: string | null;
+            cover_url: string | null;
+            ext: components["schemas"]["BookExt"];
         };
         ShareFileView: {
+            /** @description Content source id (local for uploads, otherwise the plugin instance id) */
+            source: string;
             id: string;
             /** @enum {string} */
             format: "epub" | "txt" | "plugin";
@@ -1214,6 +1225,8 @@ export interface components {
             updated_at: string;
         };
         ShareView: {
+            /** @description Only explicitly selected content versions; the default version comes first. */
+            files: components["schemas"]["ShareFileView"][];
             kind: components["schemas"]["ShareKind"];
             book: components["schemas"]["ShareBookView"];
             file: components["schemas"]["ShareFileView"];
@@ -2841,7 +2854,10 @@ export interface operations {
     };
     shareBook: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Selected shared content id; defaults to the original file. Unselected files return 404. */
+                file_id?: string;
+            };
             header?: never;
             path: {
                 /** @description Share token */
@@ -2865,7 +2881,10 @@ export interface operations {
     };
     shareChapter: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Selected shared content id; defaults to the original file. Unselected files return 404. */
+                file_id?: string;
+            };
             header?: never;
             path: {
                 /** @description Share token */

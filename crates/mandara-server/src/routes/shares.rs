@@ -2,7 +2,7 @@
 //! reading sessions.
 
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use chrono::{Duration, Utc};
@@ -13,17 +13,18 @@ use diesel::OptionalExtension as _;
 use diesel::QueryDsl as _;
 use diesel::expression_methods::NullableExpressionMethods as _;
 use diesel::prelude::SelectableHelper as _;
-use diesel_async::RunQueryDsl as _;
+use diesel_async::{AsyncConnection as _, RunQueryDsl as _};
 
 use mandara_core::model::{
-    ChapterMeta, Position, ReadingProgress, Share, ShareKind, TocNode, Visibility,
+    BookMeta, ChapterMeta, FileMeta, Position, ReadingProgress, Share, ShareKind, TocNode,
+    Visibility,
 };
 
 use crate::error::ApiError;
 use crate::extractors::AuthenticatedUser;
 use crate::routes::{St, can_manage_file, load_visible_file};
 use crate::rows::SHARE_COLUMNS;
-use crate::schema::{sessions, shares, users};
+use crate::schema::{book_files, sessions, share_files, shares, users};
 
 #[derive(Serialize)]
 pub struct ShareResponse {
@@ -80,6 +81,8 @@ pub struct CreateShare {
     pub session_id: Option<String>,
     /// Expiry in days from now (optional).
     pub expires_days: Option<u32>,
+    /// Explicit content selection; omission preserves single-file links.
+    pub file_ids: Option<Vec<String>>,
 }
 
 pub async fn create_share(
@@ -97,6 +100,31 @@ pub async fn create_share(
     }
 
     let kind = req.kind.unwrap_or(ShareKind::Book);
+    let file_ids = req.file_ids.unwrap_or_else(|| vec![file_id.clone()]);
+    let unique: std::collections::HashSet<_> = file_ids.iter().collect();
+    if file_ids.is_empty()
+        || file_ids.len() > 100
+        || unique.len() != file_ids.len()
+        || !file_ids.contains(&file_id)
+        || (kind == ShareKind::Session && file_ids.len() != 1)
+    {
+        return Err(ApiError::bad_request(
+            "select 1..100 distinct files including the default file; session shares allow one file",
+        ));
+    }
+    for id in &file_ids {
+        let selected = load_visible_file(&st, &user, id).await?;
+        if selected.book_id != file.book_id {
+            return Err(ApiError::bad_request(
+                "selected files must belong to the same book",
+            ));
+        }
+        if !can_manage_file(&user, &selected)
+            && !(selected.visibility == Visibility::Public && selected.owner_id.is_none())
+        {
+            return Err(ApiError::Forbidden);
+        }
+    }
 
     let mut session_id = None;
 
@@ -135,18 +163,29 @@ pub async fn create_share(
         (expires_days > 0).then(|| Utc::now() + Duration::days(i64::from(expires_days)));
 
     let mut conn = st.diesel_db.get().await?;
-    diesel::insert_into(shares::table)
-        .values((
-            shares::token.eq(&token),
-            shares::kind.eq(kind),
-            shares::file_id.eq(&file_id),
-            shares::session_id.eq(&session_id),
-            shares::created_by.eq(&user.id),
-            shares::expires_at.eq(expires_at),
-            shares::created_at.eq(Utc::now()),
-        ))
-        .execute(&mut conn)
-        .await?;
+    conn.transaction::<_, ApiError, _>(async |conn| {
+        diesel::insert_into(shares::table)
+            .values((
+                shares::token.eq(&token),
+                shares::kind.eq(kind),
+                shares::file_id.eq(&file_id),
+                shares::session_id.eq(&session_id),
+                shares::created_by.eq(&user.id),
+                shares::expires_at.eq(expires_at),
+                shares::created_at.eq(Utc::now()),
+            ))
+            .execute(&mut *conn)
+            .await?;
+        for id in &file_ids {
+            diesel::insert_into(share_files::table)
+                .values((share_files::token.eq(&token), share_files::file_id.eq(id)))
+                .on_conflict_do_nothing()
+                .execute(&mut *conn)
+                .await?;
+        }
+        Ok(())
+    })
+    .await?;
 
     let row: Share = shares::table
         .find(&token)
@@ -164,6 +203,21 @@ pub struct ShareBookView {
     pub title: String,
     pub authors: mandara_core::Authors,
     pub description: Option<String>,
+    pub cover_url: Option<String>,
+    pub ext: mandara_core::ext::BookExt,
+}
+
+impl From<BookMeta> for ShareBookView {
+    fn from(book: BookMeta) -> Self {
+        Self {
+            id: book.id,
+            title: book.title,
+            authors: book.authors,
+            description: book.description,
+            cover_url: book.cover_url,
+            ext: book.ext,
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -172,6 +226,19 @@ pub struct ShareFileView {
     pub format: mandara_core::model::FileFormat,
     pub label: String,
     pub chapter_count: u32,
+    pub source: String,
+}
+
+impl From<FileMeta> for ShareFileView {
+    fn from(file: FileMeta) -> Self {
+        Self {
+            id: file.id,
+            format: file.format,
+            label: file.label,
+            chapter_count: file.chapter_count,
+            source: file.source,
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -189,6 +256,7 @@ pub struct ShareView {
     pub kind: ShareKind,
     pub book: ShareBookView,
     pub file: ShareFileView,
+    pub files: Vec<ShareFileView>,
     pub session: Option<ShareSessionView>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -243,20 +311,23 @@ pub async fn get_share(
         });
     }
 
+    let files: Vec<FileMeta> = share_files::table
+        .inner_join(book_files::table)
+        .filter(share_files::token.eq(&share.token))
+        .filter(book_files::book_id.eq(&file.book_id))
+        .order((
+            book_files::id.eq(&share.file_id).desc(),
+            book_files::created_at.asc(),
+            book_files::id.asc(),
+        ))
+        .select(crate::rows::file_columns())
+        .load(&mut st.diesel_db.get().await?)
+        .await?;
     Ok(Json(ShareView {
         kind: share.kind,
-        book: ShareBookView {
-            id: book.id,
-            title: book.title,
-            authors: book.authors,
-            description: book.description,
-        },
-        file: ShareFileView {
-            id: file.id,
-            format: file.format,
-            label: file.label,
-            chapter_count: file.chapter_count,
-        },
+        book: book.into(),
+        file: file.into(),
+        files: files.into_iter().map(ShareFileView::from).collect(),
         session,
         created_at: share.created_at,
         expires_at: share.expires_at,
@@ -273,16 +344,49 @@ pub struct ShareBookResponse {
     pub toc: Vec<TocNode>,
 }
 
+#[derive(Deserialize)]
+pub struct ShareFileQuery {
+    pub file_id: Option<String>,
+}
+
+async fn selected_file(
+    st: &St,
+    share: &Share,
+    requested: Option<&str>,
+) -> Result<FileMeta, ApiError> {
+    let id = requested.unwrap_or(&share.file_id);
+    let allowed = share_files::table
+        .find((&share.token, id))
+        .select(share_files::file_id)
+        .first::<String>(&mut st.diesel_db.get().await?)
+        .await
+        .optional()?;
+    if allowed.is_none() {
+        return Err(ApiError::not_found("shared file"));
+    }
+    let file = st
+        .library
+        .get_file(id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("file"))?;
+    let default = st
+        .library
+        .get_file(&share.file_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("file"))?;
+    if file.book_id != default.book_id {
+        return Err(ApiError::not_found("shared file"));
+    }
+    Ok(file)
+}
+
 pub async fn share_book(
     State(st): State<St>,
     Path(token): Path<String>,
+    Query(query): Query<ShareFileQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
     let row = load_share(&st, &token).await?;
-    let file = st
-        .library
-        .get_file(&row.file_id)
-        .await?
-        .ok_or_else(|| ApiError::not_found("file"))?;
+    let file = selected_file(&st, &row, query.file_id.as_deref()).await?;
     let book = st
         .library
         .get_book(&file.book_id)
@@ -291,18 +395,8 @@ pub async fn share_book(
     let chapters = st.library.chapter_titles(&file.id).await?;
     let toc = st.library.file_toc(&file.id).await?;
     Ok(Json(ShareBookResponse {
-        book: ShareBookView {
-            id: book.id,
-            title: book.title,
-            authors: book.authors,
-            description: book.description,
-        },
-        file: ShareFileView {
-            id: file.id,
-            format: file.format,
-            label: file.label,
-            chapter_count: file.chapter_count,
-        },
+        book: book.into(),
+        file: file.into(),
         chapters,
         toc,
     }))
@@ -319,13 +413,10 @@ pub struct ShareChapterPath {
 pub async fn share_chapter(
     State(st): State<St>,
     Path(path): Path<ShareChapterPath>,
+    Query(query): Query<ShareFileQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
     let row = load_share(&st, &path.token).await?;
-    let file = st
-        .library
-        .get_file(&row.file_id)
-        .await?
-        .ok_or_else(|| ApiError::not_found("file"))?;
+    let file = selected_file(&st, &row, query.file_id.as_deref()).await?;
     Ok(Json(st.library.get_chapter(&file, path.idx).await?))
 }
 
