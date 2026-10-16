@@ -30,6 +30,7 @@ export type ReadingSession = Schemas["ReadingSession"];
 export type ReadingProgress = Schemas["ReadingProgress"];
 export type SessionList = ReadingProgress[];
 export type SessionsResponse = Schemas["SessionsResponse"];
+export type CreateShare = Schemas["CreateShare"];
 export type ShareKind = Schemas["ShareKind"];
 export type ShareInfo = Schemas["ShareResponse"];
 export type ShareBookView = Schemas["ShareBookView"];

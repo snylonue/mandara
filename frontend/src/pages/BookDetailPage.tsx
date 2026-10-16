@@ -3,7 +3,8 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { ApiError, api, downloadBinary } from "../api";
 import { useAuth } from "../auth";
-import { BookCover } from "../components/BookCover";
+import { BookHero } from "../components/BookHero";
+import { ShareBookDialog } from "../components/ShareBookDialog";
 import {
   IconArrowLeft,
   IconEdit,
@@ -13,7 +14,7 @@ import {
   IconTrash,
 } from "../components/icons";
 import { Modal } from "../components/Modal";
-import { ExtMetaForm, ExtMetaTable, extMergePatch, type ExtRecord } from "../components/ExtMetaForm";
+import { ExtMetaForm, extMergePatch, type ExtRecord } from "../components/ExtMetaForm";
 import { useToast } from "../components/toast";
 import {
   SourceSearchPane,
@@ -39,8 +40,8 @@ const fmtPercent = (s: ReadingProgress) => {
 };
 
 /// One file row: actions per file (read, visibility toggle, share, delete)
-/// plus its sessions. Manage actions (visibility/share/delete) only show
-/// for the file's owner or an admin — other users' uploads are read-only.
+/// plus its sessions. Visibility/delete require ownership or admin; sharing
+/// also allows ownerless public catalogs, but never other users' uploads.
 function FileSection({
   file,
   canManage,
@@ -103,6 +104,7 @@ function FileSection({
   }
 
   const readable = file.chapter_count > 0;
+  const canShare = canManage || (file.visibility === "public" && file.owner_id === null);
 
   return (
     <div className="file-card">
@@ -127,9 +129,9 @@ function FileSection({
               {t("book.read")}
             </Link>
           )}
-          <button className="btn sm" onClick={() => void onShare(file.id, "book")}>
+          {canShare && <button className="btn sm" onClick={() => void onShare(file.id, "book")}>
             {t("book.share")}
-          </button>
+          </button>}
           {file.original && (
             <button
               className="btn sm"
@@ -200,12 +202,12 @@ function FileSection({
                   </td>
                   <td className="hint">{fmtTime(s.updated_at)}</td>
                   <td className="row-actions">
-                    <button
+                    {canShare && <button
                       className="btn link"
                       onClick={() => void onShare(file.id, "session", s.id)}
                     >
                       {t("book.shareProgress")}
-                    </button>
+                    </button>}
                   </td>
                 </tr>
               );
@@ -231,7 +233,7 @@ export function BookDetailPage() {
   const [attachVisibility, setAttachVisibility] = useState<Visibility>("public");
   const [attaching, setAttaching] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [descExpanded, setDescExpanded] = useState(false);
+  const [shareSelection, setShareSelection] = useState<{ bookId: string; initialFileId?: string } | null>(null);
   const [fileCount409, setFileCount409] = useState<number | null>(null);
   // Extended-metadata edit dialog (creator/admin).
   const [extOpen, setExtOpen] = useState(false);
@@ -255,6 +257,8 @@ export function BookDetailPage() {
   }, [id, t]);
 
   useEffect(() => {
+    setShareSelection(null);
+    setShare(null);
     void load();
   }, [load]);
 
@@ -309,8 +313,12 @@ export function BookDetailPage() {
     setAttachTab("upload");
   }
 
-  /** Create a share for a specific file (book link) or its session. */
+  /** Book links use explicit selection; progress links stay scoped to one file. */
   async function makeShare(fileId: string, kind: "book" | "session", sessionId?: string) {
+    if (kind === "book") {
+      setShareSelection({ bookId: id, initialFileId: fileId });
+      return;
+    }
     try {
       const info = await api<ShareInfo>(`/files/${fileId}/shares`, {
         method: "POST",
@@ -457,7 +465,7 @@ export function BookDetailPage() {
   const canManage = user !== null && (user.role === "admin" || book.created_by === user.id);
   const pluginBacked = files.some((f) => f.source !== "local");
   const firstReadable = files.find((f) => f.chapter_count > 0);
-  const descLong = (book.description?.length ?? 0) > 120;
+  const shareableFiles = files.filter((file) => user && (user.role === "admin" || file.owner_id === user.id || (file.visibility === "public" && file.owner_id === null)));
 
   return (
     <div className="book-detail">
@@ -467,12 +475,8 @@ export function BookDetailPage() {
         </Link>
       </div>
 
-      {/* hero: cover + metadata + actions */}
-      <div className="detail-hero">
-        <div className="detail-cover">
-          <BookCover bookId={book.id} title={book.title} coverUrl={book.cover_url} />
-        </div>
-        <div className="detail-info">
+      <BookHero key={book.id} book={book} fileCount={files.length}
+        series={<>
           {(detail.series || book.volume_no > 0) && (
             <div>
               {detail.series ? (
@@ -488,27 +492,8 @@ export function BookDetailPage() {
               )}
             </div>
           )}
-          <h1>{book.title}</h1>
-          <div className="detail-meta">
-            <span>{book.authors.join(" / ") || t("common.anonymous")}</span>
-            <span>·</span>
-            <span>{t("book.metaCount", { count: files.length })}</span>
-          </div>
-          <ExtMetaTable kind="book" value={(book.ext ?? {}) as ExtRecord} />
-          {book.description && (
-            <p className={`detail-desc ${descExpanded ? "expanded" : ""}`}>
-              {book.description}
-            </p>
-          )}
-          {descLong && (
-            <button
-              className="btn link sm"
-              onClick={() => setDescExpanded((v) => !v)}
-            >
-              {descExpanded ? t("book.descCollapse") : t("book.descExpand")} ▾
-            </button>
-          )}
-          <div className="detail-actions">
+        </>}
+        actions={<>
             {firstReadable && (
               <button
                 className="btn primary"
@@ -517,8 +502,8 @@ export function BookDetailPage() {
                 {t("book.startReading")}
               </button>
             )}
-            {files[0] && (
-              <button className="btn ghost" onClick={() => void makeShare(files[0].id, "book")}>
+            {shareableFiles[0] && (
+              <button className="btn ghost" onClick={() => void makeShare(shareableFiles[0].id, "book")}>
                 <IconShare size={14} /> {t("book.shareBookShort")}
               </button>
             )}
@@ -552,9 +537,15 @@ export function BookDetailPage() {
                 <IconTrash size={14} /> {t("book.deleteMetadata")}
               </button>
             )}
-          </div>
-        </div>
-      </div>
+        </>}
+      />
+      {shareSelection && shareSelection.bookId === id && (
+        <ShareBookDialog key={`share:${id}`} files={shareableFiles}
+          initialFileId={shareableFiles.some((file) => file.id === shareSelection.initialFileId) ? shareSelection.initialFileId : undefined}
+          onClose={() => setShareSelection(null)}
+          onCreated={(info) => { setShare(info); setShareSelection(null); }}
+        />
+      )}
       {share && (
         <div className="share-box">
           <span className="tag">

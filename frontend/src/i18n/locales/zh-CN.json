@@ -250,7 +250,15 @@
     "readTo": "已读到",
     "updatedAt": "（更新于 {{time}}）",
     "readFromProgress": "从分享进度阅读",
-    "noChapters": "暂无可阅读章节"
+    "noChapters": "暂无可阅读章节",
+    "chooseContents": "选择要分享的内容",
+    "selectionHint": "可选择多个内容源（最多 100 个）。任何获得链接的人都能阅读勾选的内容，包括私有版本；未勾选和以后新增的内容不会公开。",
+    "createLink": "生成分享链接",
+    "creating": "正在生成…",
+    "viewSource": "查看{{source}}目录",
+    "currentSource": "当前内容源",
+    "viewContents": "查看目录",
+    "unsharedFile": "此内容源未包含在分享中"
   },
   "plugin": {
     "chooseSource": "选择插件源…",

@@ -1,13 +1,23 @@
 /* ---- share ---- */
-.share-book {
-  max-width: 820px;
-  margin-inline: auto;
+.share-file-option {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding-block: var(--space-3);
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.share-file-option > span {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
   overflow-wrap: anywhere;
 }
 
-.share-description {
-  white-space: pre-wrap;
-  margin-block: var(--space-4);
+.share-file-option input[type="checkbox"] {
+  width: auto;
+  flex: none;
 }
 
 .share-chapters {

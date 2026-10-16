@@ -9,13 +9,13 @@ vi.mock("../src/api", async (importOriginal) => ({
   ...await importOriginal<typeof import("../src/api")>(), api: vi.fn(),
 }));
 const book: ShareBookResponse = {
-  book: { id: "book", title: "测试书籍", authors: ["测试作者"], description: "书籍简介" },
-  file: { id: "file", format: "epub", label: "精校版", chapter_count: 2 },
+  book: { id: "book", title: "测试书籍", authors: ["测试作者"], description: "书籍简介", cover_url: "https://example.test/cover.png", ext: {} },
+  file: { id: "file", format: "epub", label: "精校版", chapter_count: 2, source: "local" },
   chapters: [{ idx: 0, title: "序章", linear: true }, { idx: 1, title: "第一章", linear: true }],
   toc: [],
 };
 const view: ShareView = {
-  kind: "book", book: book.book, file: book.file, session: null,
+  kind: "book", book: book.book, file: book.file, files: [book.file], session: null,
   created_at: "2026-01-01T00:00:00Z", expires_at: null,
 };
 let sharedBook: ShareBookResponse;
@@ -154,4 +154,79 @@ it("discards requests from an old token when another share is opened", async () 
   await act(async () => { resolve({ ...book, book: { ...book.book, title: "过期书籍" } }); });
   expect(screen.queryByText("过期书籍")).toBeNull();
   expect(screen.getByRole("link", { name: "开始阅读" }).getAttribute("href")).toBe("/share/test/read?chapter=0");
+});
+
+it("uses the normal detail hero with stored cover and remote fallback", async () => {
+  const { container } = sharePage();
+  await screen.findByRole("heading", { name: "测试书籍" });
+  const cover = container.querySelector(".detail-hero .detail-cover img")!;
+  expect(cover.getAttribute("src")).toBe("/api/books/book/cover");
+  fireEvent.error(cover);
+  expect(cover.getAttribute("src")).toBe("https://example.test/cover.png");
+  expect(container.querySelector(".book-detail .detail-info")).toBeTruthy();
+});
+
+const alternateBook: ShareBookResponse = {
+  ...book, file: { ...book.file, id: "source-file", label: "网络版", source: "书源乙" },
+  chapters: [{ idx: 0, title: "网络序章", linear: true }, { idx: 1, title: "网络第一章", linear: true }],
+};
+function multipleSources() {
+  sharedView = { ...view, files: [book.file, alternateBook.file] };
+  const fallback = vi.mocked(api).getMockImplementation()!;
+  vi.mocked(api).mockImplementation(async (path, init) => {
+    if (path === "/shares/test/book?file_id=source-file") return alternateBook;
+    if (path === "/shares/test/chapters/0?file_id=source-file") return { idx: 0, title: "网络序章", content: '<p>网络版序章正文</p><img src="/api/images/illustration" alt="插图" />' };
+    if (path === "/shares/test/chapters/1?file_id=source-file") return { idx: 1, title: "网络第一章", content: "<p>网络版第一章正文</p>" };
+    return fallback(path, init);
+  });
+}
+
+it("shows all shared sources and isolates chapters and illustrations when switching versions", async () => {
+  multipleSources();
+  const { router } = sharePage();
+  fireEvent.click(await screen.findByRole("link", { name: "查看网络版目录" }));
+  await screen.findByRole("link", { name: "网络第一章" });
+  expect(router.state.location.search).toBe("?file_id=source-file");
+  fireEvent.click(screen.getByRole("link", { name: "开始阅读" }));
+  await screen.findByText("网络版序章正文");
+  expect(screen.getByRole("img", { name: "插图" }).getAttribute("src")).toBe("/api/images/illustration");
+  fireEvent.click(screen.getByRole("button", { name: /下一章/ }));
+  await screen.findByText("网络版第一章正文");
+  expect(screen.queryByText("第一章正文")).toBeNull();
+  fireEvent.click(screen.getByRole("link", { name: "返回书籍详情" }));
+  fireEvent.click(await screen.findByRole("link", { name: "查看精校版目录" }));
+  fireEvent.click(await screen.findByRole("link", { name: "开始阅读" }));
+  await screen.findByText("序章正文");
+  expect(screen.queryByText("网络版序章正文")).toBeNull();
+  expect(vi.mocked(api).mock.calls.every(([, init]) => !init?.method)).toBe(true);
+});
+
+it("supports reloading a deep reading URL for a non-default source", async () => {
+  multipleSources();
+  sharePage("/share/test/read?file_id=source-file&chapter=1");
+  await screen.findByText("网络版第一章正文");
+  expect(api).toHaveBeenCalledWith("/shares/test/chapters/1?file_id=source-file");
+  expect(screen.getByRole("link", { name: "返回书籍详情" }).getAttribute("href")).toBe("/share/test?file_id=source-file");
+});
+
+it("does not request an unselected source from a manipulated URL", async () => {
+  sharePage("/share/test/read?file_id=private-file");
+  await screen.findByRole("alert");
+  expect(screen.getByText("此内容源未包含在分享中")).toBeTruthy();
+  expect(vi.mocked(api).mock.calls.map(([path]) => path)).toEqual(["/shares/test"]);
+});
+
+it("discards a pending directory after changing content sources", async () => {
+  multipleSources();
+  const fallback = vi.mocked(api).getMockImplementation()!;
+  let finish!: (result: ShareBookResponse) => void;
+  vi.mocked(api).mockImplementation((path, init) => path === "/shares/test/book?file_id=source-file"
+    ? new Promise((resolve) => { finish = resolve; }) : fallback(path, init));
+  const { router } = sharePage();
+  fireEvent.click(await screen.findByRole("link", { name: "查看网络版目录" }));
+  await act(() => router.navigate("/share/test"));
+  await screen.findByRole("link", { name: "第一章" });
+  await act(async () => finish(alternateBook));
+  expect(screen.queryByRole("link", { name: "网络第一章" })).toBeNull();
+  expect(screen.getByRole("link", { name: "第一章" })).toBeTruthy();
 });
