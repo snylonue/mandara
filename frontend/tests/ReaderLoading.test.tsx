@@ -54,6 +54,26 @@ it("ignores a failure from a chapter that is no longer selected", async () => {
   expect(screen.queryByText("加载中…")).toBeNull();
 });
 
+it("allows read-only chapter navigation without saving progress", async () => {
+  const load = vi.fn(async (idx: number) => ({
+    idx, title: chapters[idx].title, content: idx === 0 ? first.content : second.content,
+  }));
+  const onProgress = vi.fn();
+  const { unmount } = render(<Reader title="测试书籍" chapters={chapters} loadChapter={load} onProgress={onProgress} readOnly />);
+  await screen.findByText("缓存正文");
+  expect((screen.getByRole("button", { name: /上一章/ }) as HTMLButtonElement).disabled).toBe(true);
+  const next = screen.getByRole("button", { name: /下一章/ }) as HTMLButtonElement;
+  expect(next.disabled).toBe(false);
+  fireEvent.click(next);
+  await screen.findByText("下一章正文");
+  expect((screen.getByRole("button", { name: /下一章/ }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: /上一章/ }));
+  await screen.findByText("缓存正文");
+  expect(load.mock.calls).toEqual([[0], [1]]);
+  unmount();
+  expect(onProgress).not.toHaveBeenCalled();
+});
+
 it("keeps successful chapter content cached across navigation", async () => {
   const load = vi.fn<(idx: number) => Promise<Chapter>>()
     .mockResolvedValueOnce(first)

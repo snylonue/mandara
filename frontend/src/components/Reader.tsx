@@ -20,7 +20,7 @@ interface ReaderProps {
   onProgress?: (fraction: number, chapterIdx: number) => void;
   /** Hierarchical table of contents (per the ebook's nav/NCX). */
   toc?: TocNode[];
-  /** Disable prev/next persistence and session UI (public share view). */
+  /** Disable progress persistence and session UI, but allow chapter navigation. */
   readOnly?: boolean;
   /** Where the top-bar 返回 points (book detail page); hidden when absent. */
   backHref?: string;
@@ -319,7 +319,7 @@ export function Reader({
         <button
           className="reader-nav-btn next"
           onClick={() => next && goto(next.idx)}
-          disabled={!next || readOnly}
+          disabled={!next}
         >
           <small>
             {t("reader.next")} <IconChevronRight size={13} />
