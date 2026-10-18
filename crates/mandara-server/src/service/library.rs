@@ -3700,18 +3700,9 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
-        let db = crate::db::connect_diesel(&dir.join("t.db")).unwrap();
-        {
-            use diesel_async::SimpleAsyncConnection as _;
-            let mut conn = db.get().await.unwrap();
-            conn.batch_execute(
-                "CREATE TABLE images (id TEXT PRIMARY KEY NOT NULL, mime TEXT NOT NULL, \
-                 size INTEGER NOT NULL, width INTEGER, height INTEGER, \
-                 created_at TEXT NOT NULL DEFAULT '');",
-            )
-            .await
-            .unwrap();
-        }
+        let path = dir.join("t.db");
+        crate::db::run_migrations(&path).await.unwrap();
+        let db = crate::db::connect_diesel(&path).unwrap();
 
         // Two distinct images; the first is referenced twice (dedup by id).
         let img_a = vec![1u8, 2, 3, 4];
