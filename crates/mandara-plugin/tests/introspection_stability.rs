@@ -19,42 +19,36 @@ impl mandara_plugin::host::ImageStore for NoImages {
     }
 }
 
+/// Introspection must return the same answers every time: repeated calls
+/// cannot consume the instance's metered fuel budget.
 #[test]
 fn introspection_is_stable_under_fuel_metering() {
-    {
-        let file = "fixture.wasm";
-        let wasm = include_bytes!("fixtures/hello.wasm").to_vec();
-        let runtime = std::sync::Arc::new(
-            mandara_plugin::PluginRuntime::new(
-                mandara_plugin::FetchPolicy::default(),
-                std::sync::Arc::new(NoImages),
-            )
-            .unwrap(),
+    let wasm = include_bytes!("fixtures/hello.wasm").to_vec();
+    let runtime = std::sync::Arc::new(
+        mandara_plugin::PluginRuntime::new(
+            mandara_plugin::FetchPolicy::default(),
+            std::sync::Arc::new(NoImages),
+        )
+        .unwrap(),
+    );
+    let compiled = runtime.compile("t.wasm", &wasm).expect("load");
+    let plugin = runtime
+        .instance("test", compiled, serde_json::json!({}), common::state())
+        .unwrap();
+    let name = runtime.name(&plugin).unwrap();
+    let capabilities = runtime.capabilities(&plugin).unwrap();
+    let config_fields = runtime.config_schema(&plugin).unwrap().len();
+    for round in 0..10 {
+        assert_eq!(runtime.name(&plugin).unwrap(), name, "round {round}");
+        assert_eq!(
+            runtime.capabilities(&plugin).unwrap(),
+            capabilities,
+            "round {round}"
         );
-        let compiled = runtime.compile("t.wasm", &wasm).expect("load");
-        let plugin = runtime
-            .instance("test", compiled, serde_json::json!({}), common::state())
-            .unwrap();
-        let mut fails = 0;
-        let mut last = String::new();
-        for _ in 0..30 {
-            let r = runtime.name(&plugin);
-            if r.is_err() {
-                fails += 1;
-                last = format!("{r:?}");
-            }
-            let c = runtime.capabilities(&plugin);
-            if c.is_err() && fails < 1 {
-                fails += 1;
-                last = format!("{c:?}");
-            }
-            let s = runtime.config_schema(&plugin);
-            if s.is_err() && fails < 1 {
-                fails += 1;
-                last = format!("{s:?}");
-            }
-        }
-        eprintln!("{file}: {fails} failures, last={last}");
-        assert!(fails == 0, "{file} failed {fails} times, last={last}");
+        assert_eq!(
+            runtime.config_schema(&plugin).unwrap().len(),
+            config_fields,
+            "round {round}"
+        );
     }
 }
