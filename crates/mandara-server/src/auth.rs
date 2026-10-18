@@ -177,42 +177,30 @@ fn cookie_token(headers: &HeaderMap) -> Option<String> {
 mod tests {
     use super::*;
 
+    /// Login and logout must agree on every attribute except the payload:
+    /// a browser only drops a cookie whose path/domain/secure match.
     #[test]
-    fn session_cookie_preserves_token_and_attributes() {
+    fn login_and_logout_cookies_share_attributes_and_differ_only_in_payload() {
         for secure in [false, true] {
             let auth = AuthService::new(true, "test-secret", secure);
-            let header = auth.set_token_cookie("header.payload.signature");
-            let cookie = Cookie::parse(header.to_str().unwrap()).unwrap();
-
-            assert_eq!(cookie.name(), TOKEN_COOKIE);
-            assert_eq!(cookie.value(), "header.payload.signature");
-            assert_eq!(cookie.path(), Some("/"));
-            assert_eq!(
-                cookie.max_age(),
-                Some(Duration::seconds(TOKEN_TTL_SECS as i64))
-            );
-            assert_eq!(cookie.http_only(), Some(true));
-            assert_eq!(cookie.same_site(), Some(SameSite::Lax));
-            assert_eq!(cookie.secure().unwrap_or(false), secure);
-            assert_eq!(cookie.domain(), None);
-        }
-    }
-
-    #[test]
-    fn logout_cookie_clears_token_with_matching_attributes() {
-        for secure in [false, true] {
-            let auth = AuthService::new(true, "test-secret", secure);
-            let header = auth.clear_token_cookie();
-            let cookie = Cookie::parse(header.to_str().unwrap()).unwrap();
-
-            assert_eq!(cookie.name(), TOKEN_COOKIE);
-            assert_eq!(cookie.value(), "");
-            assert_eq!(cookie.path(), Some("/"));
-            assert_eq!(cookie.max_age(), Some(Duration::ZERO));
-            assert_eq!(cookie.http_only(), Some(true));
-            assert_eq!(cookie.same_site(), Some(SameSite::Lax));
-            assert_eq!(cookie.secure().unwrap_or(false), secure);
-            assert_eq!(cookie.domain(), None);
+            for (header, value, max_age) in [
+                (
+                    auth.set_token_cookie("header.payload.signature"),
+                    "header.payload.signature",
+                    Duration::seconds(TOKEN_TTL_SECS as i64),
+                ),
+                (auth.clear_token_cookie(), "", Duration::ZERO),
+            ] {
+                let cookie = Cookie::parse(header.to_str().unwrap()).unwrap();
+                assert_eq!(cookie.name(), TOKEN_COOKIE);
+                assert_eq!(cookie.value(), value);
+                assert_eq!(cookie.path(), Some("/"));
+                assert_eq!(cookie.max_age(), Some(max_age));
+                assert_eq!(cookie.http_only(), Some(true));
+                assert_eq!(cookie.same_site(), Some(SameSite::Lax));
+                assert_eq!(cookie.secure().unwrap_or(false), secure);
+                assert_eq!(cookie.domain(), None);
+            }
         }
     }
 }

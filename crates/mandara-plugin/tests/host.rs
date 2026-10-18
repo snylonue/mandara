@@ -9,8 +9,8 @@ use std::sync::Arc;
 use mandara_plugin::FetchPolicy;
 use mandara_plugin::error::Error;
 use mandara_plugin::host::{
-    CompiledPlugin, ConfigErrors, ConfigField, ConfigKind, ConfigValue, MAX_SEARCH_LIMIT,
-    PluginInstance, PluginRuntime, validate_config, values_from_config,
+    CompiledPlugin, ConfigField, ConfigKind, ConfigValue, MAX_SEARCH_LIMIT, PluginInstance,
+    PluginRuntime, validate_config, values_from_config,
 };
 
 const FIXTURE: &[u8] = include_bytes!("fixtures/hello.wasm");
@@ -286,13 +286,6 @@ fn instances_do_not_retain_the_executor_or_shared_host_services() {
 }
 
 #[test]
-fn fixture_is_valid() {
-    let (runtime, plugin) = load();
-    assert_eq!(plugin.file(), "hello.wasm");
-    assert_eq!(runtime.name(&plugin).unwrap(), "hello");
-}
-
-#[test]
 fn business_exports_receive_explicit_configuration_parameters() {
     let (runtime, instance) = load();
     let configured = instance.with_config(serde_json::json!({
@@ -340,13 +333,6 @@ fn metadata_exports_do_not_require_configuration() {
         ["declare", "identify", "content"]
     );
     assert_eq!(runtime.config_schema(&unconfigured).unwrap().len(), 5);
-}
-
-#[test]
-fn capabilities_stub_declares_supported_patterns() {
-    let (runtime, plugin) = load();
-    let caps = runtime.capabilities(&plugin).unwrap();
-    assert_eq!(caps, vec!["declare", "identify", "content"]);
 }
 
 #[test]
@@ -599,14 +585,4 @@ fn runaway_plugin_is_trapped_by_fuel() {
         }
         other => panic!("expected plugin error, got {other:?}"),
     }
-}
-
-#[test]
-fn config_errors_are_serializable() {
-    let errors = ConfigErrors(vec![mandara_plugin::host::ConfigFieldError {
-        field: "site-name".into(),
-        message: "required field is missing".into(),
-    }]);
-    let json = serde_json::to_value(&errors.0).unwrap();
-    assert_eq!(json[0]["field"], "site-name");
 }

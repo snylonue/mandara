@@ -1895,22 +1895,6 @@ mod tests {
             ],
         });
         let book = parse(&bytes).unwrap();
-        eprintln!(
-            "DBG toc={:?}",
-            book.toc
-                .iter()
-                .map(|n| (
-                    n.title.clone(),
-                    n.idx,
-                    n.children.len(),
-                    n.children
-                        .iter()
-                        .map(|c| c.title.clone())
-                        .collect::<Vec<_>>()
-                ))
-                .collect::<Vec<_>>()
-        );
-
         // Only the non-linear cover is excluded; front matter remains in order.
         assert_eq!(book.chapters.len(), 5);
         assert_eq!(book.chapters[0].title, "第 1 章");

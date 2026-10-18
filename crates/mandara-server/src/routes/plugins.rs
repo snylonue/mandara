@@ -381,17 +381,14 @@ mod tests {
                 "id": "content-only-id", "mode": "chapters", "chapter_count": 1
             })
         );
-    }
-
-    #[test]
-    fn file_content_preview_does_not_require_parsed_chapters() {
-        let preview = ContentPreview::from(SourceDeclaredContent {
+        // File-mode content has no chapters to count.
+        let file = ContentPreview::from(SourceDeclaredContent {
             id: "download".into(),
             mode: ContentMode::File,
             chapters: vec![],
         });
         assert_eq!(
-            serde_json::to_value(preview).unwrap(),
+            serde_json::to_value(file).unwrap(),
             serde_json::json!({
                 "id": "download", "mode": "file", "chapter_count": 0
             })

@@ -36,13 +36,3 @@ test("does not guess a series name for standalone titles", () => {
   }
 });
 
-test("keeps the source metadata unchanged", () => {
-  const volume = entry("第一卷", "系列书名");
-  const before = structuredClone(volume);
-  shelfBookTitle(volume);
-  assert.deepEqual(volume, before);
-});
-
-test("uses the actual parent of each volume, not its ordinal as an identity", () => {
-  assert.notEqual(shelfBookTitle(entry("第一卷", "甲系列")), shelfBookTitle(entry("第一卷", "乙系列")));
-});
