@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { IconArrowLeft, IconChevronLeft, IconChevronRight, IconList, IconType, IconCamera } from "./icons";
 import { EpubDocument, type EpubDocumentHandle } from "./EpubDocument";
 import { ReaderScreenshotDialog, type ReaderExcerpt } from "./ReaderScreenshotDialog";
-import { selectedChapterText } from "../readerScreenshot";
+import { selectedChapterText, type ScreenshotSelection } from "../readerScreenshot";
 import {
   ReaderSettingsPanel,
   useReaderSettings,
@@ -53,7 +53,7 @@ export function Reader({
   const { t } = useTranslation();
   const [settings, setSettings] = useReaderSettings();
   const [tocOpen, setTocOpen] = useState(false);
-  const [selection, setSelection] = useState<{ text: string; chapterIdx: number } | null>(null);
+  const [selection, setSelection] = useState<(ScreenshotSelection & { chapterIdx: number }) | null>(null);
   const [excerpt, setExcerpt] = useState<ReaderExcerpt | null>(null);
   const [screenshotHint, setScreenshotHint] = useState(false);
   const [createdShareLink, setCreatedShareLink] = useState<string>();
@@ -97,7 +97,7 @@ export function Reader({
     }
     const style = getComputedStyle(articleRef.current);
     setExcerpt({
-      text: selection.text, title, chapter: chapter.title, chapterIdx: idx,
+      ...selection, title, chapter: chapter.title, chapterIdx: idx,
       style: {
         background: style.getPropertyValue("--bg").trim(),
         foreground: style.getPropertyValue("--text-1").trim(),
@@ -354,7 +354,7 @@ export function Reader({
             title={chapter.title}
             settings={settings}
             onNavigate={goto}
-            onSelectionChange={text => setSelection({ text, chapterIdx: idx })}
+            onSelectionChange={selected => setSelection({ ...selected, chapterIdx: idx })}
             onReady={() => {
               const target = renderTarget.current;
               epubRef.current?.restoreFraction(target.fraction);

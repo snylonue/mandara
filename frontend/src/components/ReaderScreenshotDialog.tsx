@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { renderReaderScreenshot, type ScreenshotOptions, type ScreenshotStyle } from "../readerScreenshot";
+import { renderReaderScreenshot, type ScreenshotOptions, type ScreenshotStyle, type ScreenshotSelection } from "../readerScreenshot";
 import { Modal } from "./Modal";
 
-export interface ReaderExcerpt {
-  text: string;
+export interface ReaderExcerpt extends ScreenshotSelection {
   title: string;
   chapter: string;
   chapterIdx: number;
@@ -35,7 +34,7 @@ export function ReaderScreenshotDialog({ excerpt, shareLink, createShareLink, on
     const url = showLink && link ? new URL(link, location.origin) : null;
     url?.searchParams.set("chapter", String(excerpt.chapterIdx));
     return {
-      text: excerpt.text, style: excerpt.style,
+      text: excerpt.text, document: excerpt.document, style: excerpt.style,
       title: showTitle ? excerpt.title : undefined,
       chapter: showChapter ? excerpt.chapter : undefined,
       link: url?.href,

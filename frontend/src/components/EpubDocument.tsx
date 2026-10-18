@@ -1,6 +1,6 @@
 import { useEffect, useImperativeHandle, useMemo, useRef, type Ref } from "react";
 import type { ReaderSettings } from "./ReaderSettings";
-import { selectedChapterText } from "../readerScreenshot";
+import { selectedEpubContent, type ScreenshotSelection } from "../readerScreenshot";
 import imagePageStyles from "../styles/epub-image-page.css?raw";
 
 export interface EpubDocumentHandle {
@@ -16,7 +16,7 @@ export function EpubDocument({ content, title, settings, onFraction, onReady, on
   onFraction: (fraction: number) => void;
   onReady: () => void;
   onNavigate: (idx: number, fragment?: string) => void;
-  onSelectionChange?: (text: string) => void;
+  onSelectionChange?: (selection: ScreenshotSelection) => void;
   ref?: Ref<EpubDocumentHandle>;
 }) {
   const frame = useRef<HTMLIFrameElement>(null);
@@ -211,7 +211,7 @@ export function EpubDocument({ content, title, settings, onFraction, onReady, on
       }
     }
     function selectionChanged() {
-      callbacks.current.onSelectionChange?.(selectedChapterText(doc!.body, doc!.getSelection()));
+      callbacks.current.onSelectionChange?.(selectedEpubContent(doc!, doc!.getSelection()));
     }
     const observer = new ResizeObserver(scaleFixedLayout);
     if (frame.current) observer.observe(frame.current);

@@ -37,6 +37,15 @@ it("renders only the excerpt and independently omits optional metadata", async (
   expect((screen.getByLabelText("分享链接") as HTMLInputElement).disabled).toBe(true);
 });
 
+it("preserves the EPUB snapshot when metadata options change", async () => {
+  const document = '<!doctype html><html><head><style>p{color:red}</style></head><body><p>正文</p></body></html>';
+  render(<ReaderScreenshotDialog excerpt={{ ...excerpt, document }} onClose={vi.fn()} />);
+  await screen.findByAltText("所选文字截图预览");
+  expect(renderer.mock.lastCall?.[0].document).toBe(document);
+  fireEvent.click(screen.getByLabelText("书名"));
+  await waitFor(() => expect(renderer.mock.lastCall?.[0]).toMatchObject({ title: undefined, document }));
+});
+
 it("requires explicit confirmation to create a share and reuses its link", async () => {
   const create = vi.fn().mockResolvedValue("https://example.com/share/token/read?file_id=version");
   render(<ReaderScreenshotDialog excerpt={excerpt} createShareLink={create} onClose={vi.fn()} />);
