@@ -48,7 +48,7 @@ fn request(
 
 fn router() -> Box<common::HttpHandler> {
     Box::new(
-        move |target: &str, method: &str, headers: &[(String, String)], _body: &[u8]| {
+        move |target: &str, method: &str, headers: &[(String, String)], body: &[u8]| {
             let (path, query) = target.split_once('?').unwrap_or((target, ""));
             match path {
                 "/hello" => (
@@ -61,14 +61,17 @@ fn router() -> Box<common::HttpHandler> {
                 "/redirect" => (302, vec![("Location".into(), "/hello".into())], Vec::new()),
                 "/loop" => (302, vec![("Location".into(), "/loop".into())], Vec::new()),
                 "/echo" => {
-                    // Reflect method + received headers as JSON, so tests
-                    // can assert exactly what the host forwarded.
+                    // Reflect method, headers and body as JSON, so tests can
+                    // assert exactly what the host forwarded.
                     let mut json = String::from("{");
                     json.push_str(&format!(" \"method\": \"{method}\""));
                     for (name, value) in headers {
                         json.push_str(&format!(", \"{name}\": \"{value}\""));
                     }
-                    json.push_str(" }");
+                    json.push_str(&format!(
+                        ", \"body\": \"{}\" }}",
+                        String::from_utf8_lossy(body)
+                    ));
                     (
                         200,
                         vec![("Content-Type".into(), "application/json".into())],
@@ -127,7 +130,9 @@ fn post_body_and_method_are_sent() {
     let server = common::MockServer::start(router());
     let resp = request("POST", &server.url("/echo"), &[], Some(b"data".to_vec()))
         .expect("POST reaches the server");
-    assert!(String::from_utf8_lossy(&resp.body).contains("\"method\": \"POST\""));
+    let echoed = String::from_utf8_lossy(&resp.body);
+    assert!(echoed.contains("\"method\": \"POST\""), "{echoed}");
+    assert!(echoed.contains("\"body\": \"data\""), "{echoed}");
 }
 
 #[test]

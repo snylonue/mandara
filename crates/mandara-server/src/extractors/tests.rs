@@ -246,7 +246,7 @@ async fn authenticated_chapter_reads_recover_cache_misses_but_shares_do_not() {
 }
 
 #[tokio::test]
-async fn plugin_search_serializes_the_service_read_model() {
+async fn plugin_search_returns_the_catalog_envelope_for_an_empty_result() {
     let fixture = Fixture::with_plugin(true).await;
     fixture
         .state
