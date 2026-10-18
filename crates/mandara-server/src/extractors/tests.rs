@@ -170,6 +170,82 @@ async fn response_json(response: Response) -> Value {
 }
 
 #[tokio::test]
+async fn authenticated_chapter_reads_recover_cache_misses_but_shares_do_not() {
+    let fixture = Fixture::with_plugin(true).await;
+    fixture
+        .state
+        .library
+        .plugins()
+        .set_config("fixture", json!({"site-name": "示例"}))
+        .await
+        .unwrap();
+    fixture.sql("INSERT INTO books(id,title) VALUES('book','示例');
+        INSERT INTO book_files(id,book_id,source,external_id,format,visibility,owner_id,chapter_count)
+        VALUES('file','book','fixture','hello-content-1','plugin','public','user',2);
+        INSERT INTO chapters(file_id,idx,title,content) VALUES('file',0,'第一章',NULL);").await;
+    let token = fixture.token("user", Role::User);
+    let uri = "/api/files/file/chapters/0";
+    assert_eq!(
+        request(fixture.app(), "GET", uri, None, "").await.status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let share = request(
+        fixture.app(),
+        "POST",
+        "/api/files/file/shares",
+        Some(&token),
+        "{}",
+    )
+    .await;
+    assert_eq!(share.status(), StatusCode::CREATED);
+    let share = response_json(share).await;
+    let shared = format!(
+        "/api/shares/{}/chapters/0",
+        share["token"].as_str().unwrap()
+    );
+    assert_eq!(
+        request(fixture.app(), "GET", &shared, None, "")
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+
+    let chapter = request(fixture.app(), "GET", uri, Some(&token), "").await;
+    assert_eq!(chapter.status(), StatusCode::OK);
+    let chapter = response_json(chapter).await;
+    assert!(!chapter["content"].as_str().unwrap().is_empty());
+    let missing_row = request(
+        fixture.app(),
+        "GET",
+        "/api/files/file/chapters/1",
+        Some(&token),
+        "",
+    )
+    .await;
+    assert_eq!(missing_row.status(), StatusCode::OK);
+    fixture
+        .sql("UPDATE book_files SET source='unavailable' WHERE id='file';")
+        .await;
+    for (path, auth) in [(uri, Some(token.as_str())), (shared.as_str(), None)] {
+        let cached = request(fixture.app(), "GET", path, auth, "").await;
+        assert_eq!(cached.status(), StatusCode::OK);
+        assert_eq!(response_json(cached).await, chapter);
+    }
+    assert_eq!(
+        request(
+            fixture.app(),
+            "GET",
+            "/api/files/file/chapters/2",
+            Some(&token),
+            ""
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
 async fn plugin_search_serializes_the_service_read_model() {
     let fixture = Fixture::with_plugin(true).await;
     fixture
@@ -641,7 +717,7 @@ async fn chapter_detail_endpoints_return_only_stored_directories() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn chapter_read_endpoints_do_not_download_missing_bodies() {
+async fn chapter_reads_preserve_empty_bodies_and_shares_do_not_download() {
     let fixture = Fixture::with_plugin(true).await;
     fixture.sql("INSERT INTO books (id, title) VALUES ('book', '示例');
         INSERT INTO book_files (id, book_id, source, external_id, format, visibility, owner_id, content_mode, chapter_count)
@@ -661,16 +737,22 @@ async fn chapter_read_endpoints_do_not_download_missing_bodies() {
             assert_eq!(response.status(), StatusCode::OK);
             assert_eq!(response_json(response).await["content"], content);
         }
-        // The available plugin can supply chapter 1, but a GET must not ask it.
-        for idx in [1, 99] {
-            let response =
-                request(fixture.app(), "GET", &format!("{prefix}/{idx}"), auth, "").await;
-            assert_eq!(response.status(), StatusCode::NOT_FOUND);
-            assert_eq!(
-                response_json(response).await,
-                json!({"error":"stored chapter"})
-            );
-        }
+    }
+    // Anonymous reads cannot use the available plugin to fill chapter 1.
+    for idx in [1, 99] {
+        let response = request(
+            fixture.app(),
+            "GET",
+            &format!("/api/shares/share/chapters/{idx}"),
+            None,
+            "",
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            response_json(response).await,
+            json!({"error":"stored chapter"})
+        );
     }
     let file = fixture
         .state
@@ -680,7 +762,7 @@ async fn chapter_read_endpoints_do_not_download_missing_bodies() {
         .unwrap()
         .unwrap();
     assert!(matches!(
-        fixture.state.library.get_chapter(&file, 1).await,
+        fixture.state.library.get_stored_chapter(&file, 1).await,
         Err(crate::error::ApiError::NotFound(_))
     ));
 }

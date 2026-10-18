@@ -19,7 +19,7 @@ const TextChapterContent = memo(function TextChapterContent({ content }: { conte
 interface ReaderProps {
   title: string;
   chapters: ChapterMeta[];
-  /** Read a stored chapter by index; the request does not fetch from its source. */
+  /** Read a chapter by index; authenticated reads recover missing cached bodies. */
   loadChapter: (idx: number) => Promise<Chapter>;
   /** Initial position to restore. */
   initialPosition?: Position;

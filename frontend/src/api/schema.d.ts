@@ -577,8 +577,9 @@ export interface paths {
          *     Chapter-mode plugins declare the complete chapter list when content is
          *     created; the server saves that declaration with the content. For file-mode
          *     content, chapter titles and TOC are parsed and saved during creation.
-         *     Reading never queries the plugin or starts downloads. Only an explicit
-         *     user refresh updates the directory.
+         *     This directory request never queries the plugin or starts downloads. Only
+         *     an explicit user refresh updates the directory; chapter reads can recover
+         *     missing bodies without refreshing it.
          */
         get: operations["getFile"];
         put?: never;
@@ -604,10 +605,13 @@ export interface paths {
         };
         /**
          * Fetch one chapter's content
-         * @description Returns only persisted chapter content, without fetching from the source
-         *     or waiting for background downloads. Acquisition and explicit user refresh
-         *     download content separately. Returns 404 if a row or its body is not yet
-         *     stored, including pending or failed downloads. A stored empty body is valid.
+         * @description Returns persisted chapter content immediately on a cache hit, including
+         *     valid empty bodies. For a missing body at a valid index, fetches from the
+         *     saved content source (or reparses the retained original), persists the
+         *     result and returns it. Concurrent requests join the same download, including
+         *     acquisition-time background work. Failed downloads are not cached and a
+         *     later read retries. Returns 404 for an invalid index or unavailable source
+         *     content, and 500 for a download failure. Does not refresh the directory.
          */
         get: operations["getChapter"];
         put?: never;
@@ -2508,6 +2512,8 @@ export interface operations {
             };
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            /** @description The content source or retained original could not be loaded */
+            500: components["responses"]["Error"];
         };
     };
     getImage: {
