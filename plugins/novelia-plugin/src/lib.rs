@@ -5,7 +5,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use std::cell::{Cell, RefCell};
 use url::Url;
 
 wit_bindgen::generate!({
@@ -32,9 +31,6 @@ struct Settings {
     username: String,
     password: String,
     auth_base: String,
-    // Remember failures within one call; successful tokens also persist in state.
-    token: RefCell<Option<Option<String>>>,
-    token_from_state: Cell<bool>,
 }
 
 const TOKEN_KEY: &str = "auth:v1";
@@ -75,8 +71,6 @@ impl Settings {
             username: text(3, ""),
             password: text(4, ""),
             auth_base: text(5, AUTH_BASE),
-            token: RefCell::new(None),
-            token_from_state: Cell::new(false),
         }
     }
 
@@ -130,42 +124,29 @@ impl Settings {
     }
 
     fn fresh_token(&self) -> Option<String> {
-        let token = self.login();
-        self.token_from_state.set(false);
-        if let Some(token) = &token {
-            let entry = CachedToken {
-                scope: self.auth_scope(),
-                token: token.clone(),
-            };
-            if let Ok(bytes) = serde_json::to_vec(&entry)
-                && mandara::plugin::state::set(TOKEN_KEY, &bytes).is_err()
-            {
-                log("Novelia token cache write failed");
-            }
+        let token = self.login()?;
+        let entry = CachedToken {
+            scope: self.auth_scope(),
+            token: token.clone(),
+        };
+        if let Ok(bytes) = serde_json::to_vec(&entry)
+            && mandara::plugin::state::set(TOKEN_KEY, &bytes).is_err()
+        {
+            log("Novelia token cache write failed");
         }
-        *self.token.borrow_mut() = Some(token.clone());
-        token
+        Some(token)
     }
 
-    fn access_token(&self) -> Option<String> {
-        if let Some(token) = self.token.borrow().as_ref() {
-            return token.clone();
-        }
-        if let Some(entry) = mandara::plugin::state::get(TOKEN_KEY)
+    fn cached_token(&self) -> Option<String> {
+        mandara::plugin::state::get(TOKEN_KEY)
             .ok()
             .flatten()
             .and_then(|bytes| serde_json::from_slice::<CachedToken>(&bytes).ok())
             .filter(|entry| entry.scope == self.auth_scope() && !entry.token.is_empty())
-        {
-            self.token_from_state.set(true);
-            *self.token.borrow_mut() = Some(Some(entry.token.clone()));
-            return Some(entry.token);
-        }
-        self.fresh_token()
+            .map(|entry| entry.token)
     }
 
     fn invalidate_token(&self) {
-        *self.token.borrow_mut() = Some(None);
         if mandara::plugin::state::delete(TOKEN_KEY).is_err() {
             log("Novelia token cache delete failed");
         }
@@ -185,14 +166,22 @@ impl Settings {
         use mandara::plugin::http::{Header, Request, fetch};
         let authenticated =
             authenticated && (!self.username.is_empty() || !self.password.is_empty());
+        let mut token = if authenticated {
+            self.cached_token()
+        } else {
+            None
+        };
+        let mut refresh_auth = token.is_some();
+        if authenticated && token.is_none() {
+            token = Some(self.fresh_token()?);
+        }
         let mut retry_transient = true;
         loop {
             let mut headers = vec![Header {
                 name: "User-Agent".into(),
                 value: "snylonue/mandara Novelia plugin".into(),
             }];
-            if authenticated {
-                let token = self.access_token()?;
+            if let Some(token) = &token {
                 headers.push(Header {
                     name: "Authorization".into(),
                     value: format!("Bearer {token}"),
@@ -207,11 +196,12 @@ impl Settings {
             }) {
                 Ok(r) if r.status == 200 => return Some(r.body),
                 Ok(r) if r.status == 401 && authenticated => {
-                    let refresh = self.token_from_state.replace(false);
                     self.invalidate_token();
                     // Only a reused token can trigger one new login. Never retry
                     // a rejected freshly issued token or a failed password submission.
-                    if refresh && self.fresh_token().is_some() {
+                    if refresh_auth {
+                        refresh_auth = false;
+                        token = Some(self.fresh_token()?);
                         continue;
                     }
                     log("Novelia API rejected the access token");

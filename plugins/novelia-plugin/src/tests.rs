@@ -8,8 +8,6 @@ fn settings(translation: u32) -> Settings {
         username: String::new(),
         password: String::new(),
         auth_base: AUTH_BASE.into(),
-        token: RefCell::new(None),
-        token_from_state: Cell::new(false),
     }
 }
 

@@ -16,6 +16,83 @@ impl ImageStore for NoImages {
     }
 }
 
+#[test]
+#[ignore = "requires built Novelia component"]
+fn compiled_guest_reads_state_between_requests_in_one_export() {
+    let state = common::state();
+    let shared_state = state.clone();
+    let logins = Arc::new(AtomicUsize::new(0));
+    let login_count = logins.clone();
+    let api = Arc::new(Mutex::new(Vec::new()));
+    let calls = api.clone();
+    let server = common::MockServer::start(move |target, _, headers, _| {
+        if target == "/api/v1/auth/login" {
+            login_count.fetch_add(1, Ordering::SeqCst);
+            return (200, vec![], b"initial-token".to_vec());
+        }
+        let token = headers
+            .iter()
+            .find(|(name, _)| name == "authorization")
+            .map(|(_, value)| value.clone());
+        calls.lock().unwrap().push(token.clone());
+        if target == "/api/novel/syosetu/n1" {
+            let mut entry: serde_json::Value =
+                serde_json::from_slice(&shared_state.get("auth:v1").unwrap().unwrap()).unwrap();
+            entry["token"] = json!("updated-token");
+            shared_state
+                .set("auth:v1", &serde_json::to_vec(&entry).unwrap())
+                .unwrap();
+            return (
+                200,
+                vec![],
+                json!({
+                    "titleJp": "测试", "authors": [], "introductionJp": "简介",
+                    "toc": [{"titleJp": "第一章", "chapterId": "1"}]
+                })
+                .to_string()
+                .into_bytes(),
+            );
+        }
+        assert_eq!(target, "/api/novel/syosetu/n1/chapter/1");
+        let code = if token.as_deref() == Some("Bearer updated-token") {
+            200
+        } else {
+            401
+        };
+        (
+            code,
+            vec![],
+            json!({"titleJp": "第一章", "paragraphs": ["正文"]})
+                .to_string()
+                .into_bytes(),
+        )
+    });
+    let bytes = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../plugins-built/novelia.wasm"
+    ))
+    .expect("build Novelia first");
+    let runtime = PluginRuntime::new(FetchPolicy::default(), Arc::new(NoImages)).unwrap();
+    let compiled = runtime.compile("novelia.wasm", &bytes).unwrap();
+    let config = json!({"base-url": server.url(""), "auth-url": server.url(""), "username": "账号", "password": "密码"});
+    let plugin = runtime
+        .instance("novelia", compiled, config, state)
+        .unwrap();
+    let chapter = runtime
+        .get_chapter(&plugin, "web:syosetu:n1", 0)
+        .unwrap()
+        .unwrap();
+    assert!(chapter.content.contains("正文"));
+    assert_eq!(logins.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        *api.lock().unwrap(),
+        [
+            Some("Bearer initial-token".into()),
+            Some("Bearer updated-token".into())
+        ]
+    );
+}
+
 struct UnavailableState;
 impl StateStore for UnavailableState {
     fn get(&self, _: &str) -> Result<Option<Vec<u8>>, StateStoreError> {
