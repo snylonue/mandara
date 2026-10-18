@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -19,6 +18,7 @@ use crate::auth::AuthService;
 use crate::config::Config;
 use crate::service::{Library, plugins::PluginService};
 use crate::state::{AppState, St};
+use crate::test_support::tempdir;
 
 mod numbers;
 mod plugin_visibility;
@@ -29,7 +29,7 @@ const SECRET: &str = "extractor-tests-only";
 
 struct Fixture {
     state: St,
-    dir: PathBuf,
+    dir: tempfile::TempDir,
 }
 
 impl Fixture {
@@ -38,8 +38,8 @@ impl Fixture {
     }
 
     async fn with_plugin(load_plugin: bool) -> Self {
-        let dir = std::env::temp_dir().join(format!("mandara-auth-{}", uuid::Uuid::new_v4()));
-        let db = dir.join("test.db");
+        let dir = tempdir("mandara-auth-");
+        let db = dir.path().join("test.db");
         crate::db::run_migrations(&db).await.unwrap();
         let diesel_db = crate::db::connect_diesel(&db).unwrap();
         diesel_db
@@ -56,7 +56,10 @@ impl Fixture {
         let runtime = Arc::new(
             mandara_plugin::PluginRuntime::new(
                 mandara_plugin::FetchPolicy::default(),
-                crate::service::images::DbImageStore::new(diesel_db.clone(), dir.join("files")),
+                crate::service::images::DbImageStore::new(
+                    diesel_db.clone(),
+                    dir.path().join("files"),
+                ),
             )
             .unwrap(),
         );
@@ -80,18 +83,18 @@ impl Fixture {
         if load_plugin {
             plugins.register("fixture", "fixture.wasm").await.unwrap();
         }
-        let library = Library::new(diesel_db.clone(), plugins, dir.join("files"));
+        let library = Library::new(diesel_db.clone(), plugins, dir.path().join("files"));
         let cfg = Config {
             addr: "127.0.0.1:0".into(),
             db,
-            data_dir: Some(dir.clone()),
-            plugins_dir: dir.join("plugins"),
+            data_dir: Some(dir.path().to_path_buf()),
+            plugins_dir: dir.path().join("plugins"),
             jwt_secret: SECRET.into(),
             jwt_secret_file: None,
             allow_register: true,
             cookie_secure: false,
             max_upload_mb: 64,
-            frontend_dir: dir.join("frontend"),
+            frontend_dir: dir.path().join("frontend"),
             reparse_originals: false,
         };
         let state = Arc::new(AppState {
@@ -128,21 +131,6 @@ impl Fixture {
             .batch_execute(sql)
             .await
             .unwrap();
-    }
-}
-
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        assert_eq!(self.dir.parent(), Some(std::env::temp_dir().as_path()));
-        assert!(
-            self.dir
-                .file_name()
-                .unwrap()
-                .to_str()
-                .unwrap()
-                .starts_with("mandara-auth-")
-        );
-        std::fs::remove_dir_all(&self.dir).unwrap();
     }
 }
 

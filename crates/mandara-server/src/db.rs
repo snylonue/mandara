@@ -74,6 +74,7 @@ pub async fn run_migrations(db: &Path) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::tempdir;
 
     mod original_metadata;
     mod plugin_visibility;
@@ -82,10 +83,8 @@ mod tests {
     async fn nullable_content_migration_preserves_rows_and_cache_presence() {
         use diesel::{ExpressionMethods as _, QueryDsl as _};
         use diesel_async::{RunQueryDsl as _, SimpleAsyncConnection as _};
-        let dir =
-            std::env::temp_dir().join(format!("mandara-null-content-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let pool = connect_diesel(&dir.join("test.db")).unwrap();
+        let dir = tempdir("mandara-null-content-");
+        let pool = connect_diesel(&dir.path().join("test.db")).unwrap();
         let mut conn = pool.get().await.unwrap();
         conn.batch_execute("CREATE TABLE book_files(id TEXT PRIMARY KEY NOT NULL,source TEXT NOT NULL);
             CREATE TABLE chapters(file_id TEXT NOT NULL REFERENCES book_files(id) ON DELETE CASCADE,idx INTEGER NOT NULL,title TEXT NOT NULL,content TEXT NOT NULL,linear INTEGER NOT NULL DEFAULT 1 CHECK(linear IN(0,1)),PRIMARY KEY(file_id,idx));
@@ -183,8 +182,6 @@ mod tests {
         );
         drop(conn);
         drop(pool);
-        assert_eq!(dir.parent(), Some(std::env::temp_dir().as_path()));
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]
@@ -192,12 +189,8 @@ mod tests {
         use diesel::ExpressionMethods as _;
         use diesel::QueryDsl as _;
         use diesel_async::{RunQueryDsl as _, SimpleAsyncConnection as _};
-        let dir = std::env::temp_dir().join(format!(
-            "mandara-content-migration-{}",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let pool = connect_diesel(&dir.join("test.db")).unwrap();
+        let dir = tempdir("mandara-content-migration-");
+        let pool = connect_diesel(&dir.path().join("test.db")).unwrap();
         let mut conn = pool.get().await.unwrap();
         conn.batch_execute("CREATE TABLE books(id TEXT PRIMARY KEY, meta_source TEXT, meta_external_id TEXT);
             CREATE TABLE book_files(id TEXT PRIMARY KEY, book_id TEXT REFERENCES books(id), source TEXT, external_id TEXT,
@@ -266,28 +259,18 @@ mod tests {
         assert_eq!(original.as_deref(), Some("epub"));
         drop(conn);
         drop(pool);
-        assert_eq!(dir.parent(), Some(std::env::temp_dir().as_path()));
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]
     async fn diesel_pool_applies_pragmas_and_runs_queries() {
-        let dir = std::env::temp_dir().join(format!(
-            "mandara-diesel-test-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let db = dir.join("t.db");
+        let dir = tempdir("mandara-diesel-test-");
+        let db = dir.path().join("t.db");
 
         // Create the schema through the Diesel connection (raw batch —
         // the migrations runner owns the real schema; this is a test).
         {
             use diesel_async::SimpleAsyncConnection as _;
-            let pool0 = connect_diesel(&dir.join("t.db")).unwrap();
+            let pool0 = connect_diesel(&dir.path().join("t.db")).unwrap();
             let mut c = pool0.get().await.unwrap();
             c.batch_execute(
                 "CREATE TABLE users (id TEXT PRIMARY KEY NOT NULL, username TEXT NOT NULL UNIQUE, \
@@ -325,7 +308,5 @@ mod tests {
             .unwrap();
             assert_eq!(fks, 1);
         }
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }
