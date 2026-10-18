@@ -2,9 +2,9 @@
 //! Web novels provide metadata and chapters; Wenku provides content only.
 //! Wenku content uses the upstream volumeId, scoped by its series ID.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::cell::RefCell;
+use sha2::{Digest, Sha256};
 use url::Url;
 
 wit_bindgen::generate!({
@@ -31,8 +31,14 @@ struct Settings {
     username: String,
     password: String,
     auth_base: String,
-    // Guest state lasts one export call. Cache success/failure only within it.
-    token: RefCell<Option<Option<String>>>,
+}
+
+const TOKEN_KEY: &str = "auth:v1";
+
+#[derive(Deserialize, Serialize)]
+struct CachedToken {
+    scope: String,
+    token: String,
 }
 
 fn endpoint(base: &str, segments: &[&str]) -> Option<Url> {
@@ -65,7 +71,6 @@ impl Settings {
             username: text(3, ""),
             password: text(4, ""),
             auth_base: text(5, AUTH_BASE),
-            token: RefCell::new(None),
         }
     }
 
@@ -107,16 +112,44 @@ impl Settings {
             log(&format!("Novelia login HTTP {}", response.status));
             return None;
         }
-        String::from_utf8(response.body).ok()
+        String::from_utf8(response.body)
+            .ok()
+            .filter(|token| !token.is_empty())
     }
 
-    fn access_token(&self) -> Option<String> {
-        if let Some(token) = self.token.borrow().as_ref() {
-            return token.clone();
+    fn auth_scope(&self) -> String {
+        // Hash the full credential/endpoint tuple without persisting another password copy.
+        let scope = json!([self.base, self.auth_base, self.username, self.password]);
+        format!("{:x}", Sha256::digest(scope.to_string().as_bytes()))
+    }
+
+    fn fresh_token(&self) -> Option<String> {
+        let token = self.login()?;
+        let entry = CachedToken {
+            scope: self.auth_scope(),
+            token: token.clone(),
+        };
+        if let Ok(bytes) = serde_json::to_vec(&entry)
+            && mandara::plugin::state::set(TOKEN_KEY, &bytes).is_err()
+        {
+            log("Novelia token cache write failed");
         }
-        let token = self.login();
-        *self.token.borrow_mut() = Some(token.clone());
-        token
+        Some(token)
+    }
+
+    fn cached_token(&self) -> Option<String> {
+        mandara::plugin::state::get(TOKEN_KEY)
+            .ok()
+            .flatten()
+            .and_then(|bytes| serde_json::from_slice::<CachedToken>(&bytes).ok())
+            .filter(|entry| entry.scope == self.auth_scope() && !entry.token.is_empty())
+            .map(|entry| entry.token)
+    }
+
+    fn invalidate_token(&self) {
+        if mandara::plugin::state::delete(TOKEN_KEY).is_err() {
+            log("Novelia token cache delete failed");
+        }
     }
 
     fn translators(&self) -> &'static [&'static str] {
@@ -131,28 +164,52 @@ impl Settings {
 
     fn fetch(&self, url: &Url, authenticated: bool) -> Option<Vec<u8>> {
         use mandara::plugin::http::{Header, Request, fetch};
-        let mut headers = vec![Header {
-            name: "User-Agent".into(),
-            value: "snylonue/mandara Novelia plugin".into(),
-        }];
-        if authenticated && (!self.username.is_empty() || !self.password.is_empty()) {
-            let token = self.access_token()?;
-            headers.push(Header {
-                name: "Authorization".into(),
-                value: format!("Bearer {token}"),
-            });
+        let authenticated =
+            authenticated && (!self.username.is_empty() || !self.password.is_empty());
+        let mut token = if authenticated {
+            self.cached_token()
+        } else {
+            None
+        };
+        let mut refresh_auth = token.is_some();
+        if authenticated && token.is_none() {
+            token = Some(self.fresh_token()?);
         }
-        // Do not retry authorization failures or log response bodies/tokens.
-        for attempt in 0..2 {
+        let mut retry_transient = true;
+        loop {
+            let mut headers = vec![Header {
+                name: "User-Agent".into(),
+                value: "snylonue/mandara Novelia plugin".into(),
+            }];
+            if let Some(token) = &token {
+                headers.push(Header {
+                    name: "Authorization".into(),
+                    value: format!("Bearer {token}"),
+                });
+            }
             match fetch(&Request {
                 method: "GET".into(),
                 url: url.to_string(),
-                headers: headers.clone(),
+                headers,
                 body: None,
                 timeout_ms: Some(30_000),
             }) {
                 Ok(r) if r.status == 200 => return Some(r.body),
-                Ok(r) if r.status >= 500 && attempt == 0 => continue,
+                Ok(r) if r.status == 401 && authenticated => {
+                    self.invalidate_token();
+                    // Only a reused token can trigger one new login. Never retry
+                    // a rejected freshly issued token or a failed password submission.
+                    if refresh_auth {
+                        refresh_auth = false;
+                        token = Some(self.fresh_token()?);
+                        continue;
+                    }
+                    log("Novelia API rejected the access token");
+                    return None;
+                }
+                Ok(r) if r.status >= 500 && retry_transient => {
+                    retry_transient = false;
+                }
                 Ok(r) => {
                     log(&format!("Novelia HTTP {} at {}", r.status, url.path()));
                     return None;
@@ -160,14 +217,15 @@ impl Settings {
                 Err(
                     mandara::plugin::http::FetchError::Timeout(_)
                     | mandara::plugin::http::FetchError::Transport(_),
-                ) if attempt == 0 => continue,
+                ) if retry_transient => {
+                    retry_transient = false;
+                }
                 Err(_) => {
                     log("Novelia HTTP transport/policy failure");
                     return None;
                 }
             }
         }
-        None
     }
 
     fn get<T: serde::de::DeserializeOwned>(&self, url: &Url) -> Option<T> {
@@ -426,6 +484,14 @@ fn stored_image(settings: &Settings, raw: &str) -> Option<String> {
     if !matches!(url.scheme(), "http" | "https") {
         return None;
     }
+    let key = format!("image:v1:{url}");
+    if let Some(reference) = mandara::plugin::state::get(&key)
+        .ok()
+        .flatten()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+    {
+        return Some(reference);
+    }
     // Credentials are for Novelia's API, never for illustration hosts.
     if let Some(bytes) = settings.fetch(&url, false) {
         let mime = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
@@ -441,7 +507,12 @@ fn stored_image(settings: &Settings, raw: &str) -> Option<String> {
         };
         if let Some(mime) = mime {
             let id = mandara::plugin::store::store_image(&bytes, mime);
-            return Some(format!("/api/images/{id}"));
+            let reference = format!("/api/images/{id}");
+            // Never cache download failures or remote-URL fallbacks.
+            if mandara::plugin::state::set(&key, reference.as_bytes()).is_err() {
+                log("Novelia image cache write failed");
+            }
+            return Some(reference);
         }
     }
     Some(url.to_string())

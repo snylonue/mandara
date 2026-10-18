@@ -629,13 +629,26 @@ fn sniff_mime(b: &[u8]) -> Option<&'static str> {
 /// (`/api/images/{id}`). `None` on any failure — callers fall back to the
 /// remote URL so a broken CDN only degrades rendering.
 fn store_image_ref(config: &[ConfigValue], url: &str) -> Option<String> {
+    let key = format!("image:v1:{url}");
+    if let Some(reference) = mandara::plugin::state::get(&key)
+        .ok()
+        .flatten()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+    {
+        return Some(reference);
+    }
     let (_, body) = http_get(config, url, "").ok()?;
     if body.is_empty() {
         return None;
     }
     let mime = sniff_mime(&body)?;
     let id = mandara::plugin::store::store_image(&body, mime);
-    Some(format!("/api/images/{id}"))
+    let reference = format!("/api/images/{id}");
+    // Cache only successfully stored images; quota/backend errors are non-fatal.
+    if mandara::plugin::state::set(&key, reference.as_bytes()).is_err() {
+        mandara::plugin::store::log("Wenku8 image cache write failed");
+    }
+    Some(reference)
 }
 
 /// Localize a plate-URL list into stored-image references. Failures keep

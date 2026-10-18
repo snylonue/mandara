@@ -29,6 +29,14 @@ the full design. This guide is for plugin authors.
   Globals do not survive calls. Use the instance-scoped `state` import for durable plugin data;
   materialized books and chapter bodies remain the host library cache.
 
+Wenku8 and Novelia cache successfully stored illustration references in instance
+state under `image:v1:<absolute-url>`. Repeated URLs reuse the local image
+across chapters and restarts without fetching the bytes again. Failed downloads
+and unsupported image payloads are not cached. State read/write errors degrade
+to uncached behavior; simultaneous cache misses may still download twice because
+the state API has no compare-and-swap. URLs are assumed immutable; delete the
+corresponding state entry to refresh an image whose upstream bytes changed.
+
 ## Host ownership
 
 The Rust host separates four lifetimes:

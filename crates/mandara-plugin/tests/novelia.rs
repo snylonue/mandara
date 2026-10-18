@@ -165,7 +165,8 @@ fn compiled_guest_adapts_web_chapters_and_wenku_downloads() {
         .iter()
         .filter(|(t, _)| t == "/api/v1/auth/login")
         .count();
-    assert_eq!(after - before, 1); // Two API GETs and an image share one login.
+    assert_eq!(before, 1);
+    assert_eq!(after, before); // Earlier exports already cached the login.
     assert_eq!(chapter.title, "序幕");
     assert!(chapter.content.contains("译文 &lt;&gt;&amp;"));
     assert!(

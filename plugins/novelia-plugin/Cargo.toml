@@ -14,3 +14,4 @@ wit-bindgen = "0.60"
 serde = { workspace = true }
 serde_json = { workspace = true }
 url = { workspace = true }
+sha2 = "0.10"
