@@ -2,6 +2,7 @@
    unlayered component/page rules; base element styles live in a named
    @layer so they always lose to component rules. */
 
+@import "@fontsource-variable/noto-serif-sc/index.css";
 @import "./tokens.css";
 @import "./base.css";
 @import "./layout.css";

@@ -61,6 +61,33 @@ it("renders opaque PNG text with optional metadata and rejects excessive height 
   await expect(renderReaderScreenshot({ text: "行\n".repeat(300), style })).rejects.toThrow("selection-size");
 });
 
+it("loads all selected font subsets before measuring and drawing a screenshot", async () => {
+  let complete!: () => void;
+  const pending = new Promise<FontFace[]>(resolve => { complete = () => resolve([]); });
+  const load = vi.fn(() => pending);
+  const descriptor = Object.getOwnPropertyDescriptor(document, "fonts");
+  Object.defineProperty(document, "fonts", { configurable: true, value: { ready: Promise.resolve(), load } });
+  const ctx = HTMLCanvasElement.prototype.getContext.call(document.createElement("canvas"), "2d")!;
+  const measure = vi.spyOn(ctx, "measureText");
+  try {
+    const render = renderReaderScreenshot({ text: "罕见的选段文字", title: "书名", chapter: "章节", link: "https://example.com", style });
+    await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(4));
+    expect(load.mock.calls).toEqual([
+      ["600 30px serif", "书名"], ["400 22px serif", "章节"],
+      ["400 28px serif", "罕见的选段文字"], ["400 20px serif", "https://example.com"],
+    ]);
+    expect(measure).not.toHaveBeenCalled();
+    expect(drawn).not.toHaveBeenCalled();
+    complete();
+    await render;
+    expect(measure).toHaveBeenCalled();
+    expect(drawn.mock.calls.map(call => call[0])).toEqual(["书名", "章节", "罕见的选段文字", "https://example.com"]);
+  } finally {
+    if (descriptor) Object.defineProperty(document, "fonts", descriptor);
+    else Reflect.deleteProperty(document, "fonts");
+  }
+});
+
 it("captures just selected TXT text and clears stale selections after chapter navigation", async () => {
   const chapters = [{ idx: 0, title: "第一章", linear: true }, { idx: 1, title: "第二章", linear: true }];
   const load = async (idx: number) => ({ idx, title: chapters[idx].title, content: idx ? "<p>新的正文</p>" : "<p>只选择中间文字。</p>" });

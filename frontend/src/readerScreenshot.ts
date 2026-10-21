@@ -53,16 +53,18 @@ export async function renderReaderScreenshot(options: ScreenshotOptions): Promis
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("canvas-unavailable");
   const { style } = options;
-  const sections = [
+  const sections = await Promise.all([
     { text: options.title, size: 30, lineHeight: 44, color: style.foreground, weight: 600 },
     { text: options.chapter, size: 22, lineHeight: 34, color: style.muted, weight: 400 },
     { text: options.text, size: 28, lineHeight: 48, color: style.foreground, weight: 400 },
     { text: options.link, size: 20, lineHeight: 30, color: style.muted, weight: 400 },
-  ].filter((section) => section.text).map((section) => {
+  ].filter((section) => section.text).map(async (section) => {
     const font = section.weight + " " + section.size + "px " + style.fontFamily;
+    // Canvas does not wait for unused unicode-range subsets to download.
+    await document.fonts?.load(font, section.text!);
     ctx.font = font;
     return { ...section, font, lines: wrapScreenshotText(section.text!, WIDTH - PADDING * 2, (line) => ctx.measureText(line).width) };
-  });
+  }));
   const height = PADDING * 2 + 16 + sections.reduce((sum, section) => sum + section.lines.length * section.lineHeight + 24, 0);
   // Never silently truncate long selections or exceed mobile canvas limits.
   if (height > MAX_HEIGHT) throw new Error("selection-size");

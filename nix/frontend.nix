@@ -13,7 +13,7 @@ buildNpmPackage {
   pname = "mandara-frontend";
   inherit version;
   src = cleanSource (src + "/frontend");
-  npmDepsHash = "sha256-xdFqTIumgPsQHtJy3AeIfcOMZe5oxtUmtZ1uzo/0mN8=";
+  npmDepsHash = "sha256-4eF/Fn2+ciDnltCjw/S+GOHpDhN+K+x0Kv+syEnAcMY=";
   installPhase = ''
     runHook preInstall
     mkdir -p $out/share/mandara/frontend

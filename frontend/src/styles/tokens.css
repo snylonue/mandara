@@ -90,7 +90,7 @@
 
   /* typography */
   --font-sans: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
-  --font-serif: "Noto Serif SC", "Songti SC", "SimSun", serif;
+  --font-serif: "Noto Serif SC Variable", "Noto Serif SC", "Songti SC", "SimSun", serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --font-body: var(--font-sans);
 

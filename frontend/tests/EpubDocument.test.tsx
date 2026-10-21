@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { fireEvent, render } from "@testing-library/react";
+import { act, fireEvent, render } from "@testing-library/react";
+import { readFileSync } from "node:fs";
 import { EpubDocument } from "../src/components/EpubDocument";
 import type { ReaderSettings } from "../src/components/ReaderSettings";
 
@@ -30,6 +31,57 @@ function load(content: string) {
   fireEvent.load(frame);
   return { ...view, frame, doc };
 }
+it("provides Chinese serif subsets inside Japanese-language publications without rewriting their styles", () => {
+  const text = "看着路边陈旧的扬声器里轰鸣播放着音乐的样子，拉奇皱起了眉头。";
+  const publisher = "p{font-weight:400}.original{opacity:0.4}";
+  const { doc } = load(`<!doctype html><html lang="ja"><head><style>${publisher}</style></head>
+    <body lang="ja"><p>${text}</p><p class="original"><ruby>道<rt>みち</rt></ruby></p></body></html>`);
+  // JSDOM does not retain all @font-face descriptors in CSSOM.
+  const css = doc.head.querySelector("style")!.textContent!;
+  const faces = Array.from(css.matchAll(/@font-face\s*\{([^}]+)\}/g), match => match[1]);
+  const family = '"Noto Serif SC Variable"';
+  expect(faces.length).toBeGreaterThan(1);
+  const tokens = readFileSync("src/styles/tokens.css", "utf8");
+  expect(tokens).toContain("--font-serif: " + family + ",");
+  expect(readFileSync("src/styles/index.css", "utf8")).toContain('@import "@fontsource-variable/noto-serif-sc/index.css"');
+  for (const face of faces) {
+    expect(face).toMatch(/font-family:\s*["']Noto Serif SC Variable["']/);
+    expect(face).toMatch(/font-weight:\s*200 900/);
+    const src = face.match(/url\(["']?([^"')]+)/)![1];
+    expect(new URL(src, location.href).origin).toBe(location.origin);
+  }
+  const ranges = faces.flatMap(face => face.match(/unicode-range:\s*([^;}]+)/i)![1].split(",").map(range => {
+    const [start, end] = range.trim().replace(/^U\+/i, "").split("-").map(hex => parseInt(hex, 16));
+    return [start, end ?? start];
+  }));
+  for (const char of text) {
+    const point = char.codePointAt(0)!;
+    expect(ranges.some(([start, end]) => point >= start && point <= end), char).toBe(true);
+  }
+  const csp = doc.querySelector('meta[http-equiv="Content-Security-Policy"]')!.getAttribute("content")!;
+  expect(csp).toContain("font-src data: " + location.origin + ";");
+  expect(csp).toContain("script-src 'none'");
+  expect(doc.documentElement.lang).toBe("ja");
+  expect(doc.body.lang).toBe("ja");
+  expect(doc.querySelector("p")!.textContent).toBe(text);
+  expect(doc.head.querySelectorAll("style")[1].textContent).toBe(publisher);
+});
+
+it.each([false, true])("waits for frame fonts and ignores stale readiness after unmount=%s", async (unmountEarly) => {
+  const view = load("<!doctype html><html><body><p>测试正文</p></body></html>");
+  // Let the native initial about:blank load finish before simulating another.
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+  props.onReady.mockClear();
+  let complete!: () => void;
+  const ready = new Promise<void>(resolve => { complete = resolve; });
+  Object.defineProperty(view.doc, "fonts", { value: { ready }, configurable: true });
+  fireEvent.load(view.frame);
+  expect(props.onReady).not.toHaveBeenCalled();
+  if (unmountEarly) view.unmount();
+  await act(async () => { complete(); await ready; });
+  expect(props.onReady).toHaveBeenCalledTimes(unmountEarly ? 0 : 1);
+});
+
 function glyphRule(doc: Document) {
   const sheet = doc.head.querySelector("style")!.sheet!;
   return Array.from(sheet.cssRules).find((rule) =>

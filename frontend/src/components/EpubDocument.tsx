@@ -2,6 +2,7 @@ import { useEffect, useImperativeHandle, useMemo, useRef, type Ref } from "react
 import type { ReaderSettings } from "./ReaderSettings";
 import { selectedChapterText } from "../readerScreenshot";
 import imagePageStyles from "../styles/epub-image-page.css?raw";
+import serifFontStyles from "@fontsource-variable/noto-serif-sc/index.css?inline";
 
 export interface EpubDocumentHandle {
   scrollToFragment: (fragment: string) => void;
@@ -25,7 +26,7 @@ export function EpubDocument({ content, title, settings, onFraction, onReady, on
   const callbacks = useRef({ onFraction, onReady, onNavigate, onSelectionChange });
   callbacks.current = { onFraction, onReady, onNavigate, onSelectionChange };
   const source = useMemo(() => {
-    const csp = "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data: " + location.origin + "/api/images/; font-src data:; base-uri 'none'; form-action 'none'";
+    const csp = "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data: " + location.origin + "/api/images/; font-src data: " + location.origin + "; base-uri 'none'; form-action 'none'";
     // iOS cannot paint horizontally overflowing vertical iframe documents
     // (https://bugs.webkit.org/show_bug.cgi?id=320457). Skip our optional
     // empty-CSS direction inference there; keep authored publication CSS.
@@ -95,6 +96,8 @@ export function EpubDocument({ content, title, settings, onFraction, onReady, on
     // Low-specificity defaults precede publication rules; no paragraph/div
     // justification or display:block overrides the publisher's own cascade.
     defaults.textContent = ":where(html){font-size:" + settings.fontSize + "px;line-height:" + settings.lineHeight + ";font-family:" + inherited.fontFamily + ";color:" + foreground + ";color-scheme:" + inherited.colorScheme + ";background:transparent} :where(body){margin:0;padding:0.5em} :where(img,svg){max-width:100%;height:auto} :where(table){max-width:100%}";
+    // Font faces belong to each document; the parent font registry is not inherited.
+    defaults.textContent += serifFontStyles;
     if (doc.documentElement.dataset.epubLayout !== "pre-paginated") {
       // SVG wrappers are common in cover/colour pages. Ignore their internal
       // labels and metadata when checking for text outside the illustration.
@@ -220,7 +223,9 @@ export function EpubDocument({ content, title, settings, onFraction, onReady, on
     doc.addEventListener("click", click);
     doc.addEventListener("wheel", wheel, { passive: false });
     doc.addEventListener("keydown", keydown);
+    let disposed = false;
     cleanup.current = () => {
+      disposed = true;
       observer.disconnect();
       win.removeEventListener("scroll", scroll);
       doc.removeEventListener("selectionchange", selectionChanged);
@@ -228,7 +233,12 @@ export function EpubDocument({ content, title, settings, onFraction, onReady, on
       doc.removeEventListener("wheel", wheel);
       doc.removeEventListener("keydown", keydown);
     };
-    callbacks.current.onReady();
+    // Restore progress only after webfont metrics have settled.
+    const notifyReady = () => {
+      if (!disposed && frame.current?.contentDocument === doc) callbacks.current.onReady();
+    };
+    if (doc.fonts) void doc.fonts.ready.then(notifyReady);
+    else notifyReady();
   }
   useEffect(() => { applySettings(); scaleFixedLayout(); }, [settings]);
   useEffect(() => () => cleanup.current?.(), []);
