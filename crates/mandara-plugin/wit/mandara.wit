@@ -1,8 +1,8 @@
-// Plugin protocol v13: content declarations and instance-scoped persistent state.
+// Plugin protocol v14: book-scoped content choices for explicit file selection.
 // Plugins adapt upstream data and define opaque, stable IDs.
 // Metadata/content source selection belongs exclusively to the host.
 
-package mandara:plugin@0.13.0;
+package mandara:plugin@0.14.0;
 
 /// Shared types between mandara and plugins.
 interface types {
@@ -98,6 +98,13 @@ interface types {
         id: string,
         mode: content-mode,
         chapters: list<declared-chapter>,
+    }
+
+    /// A selectable content file or chapter collection, not book metadata.
+    record content-option {
+        id: string,
+        title: string,
+        available: bool,
     }
 
     /// A catalog association between metadata and optional content.
@@ -277,7 +284,7 @@ world mandara-plugin {
     // Types used by this world's exports come from the imported `types`
     // interface; WIT requires an explicit `use` to bring them into the
     // world scope.
-    use types.{config-field, config-value, book-entry, content-mode, chapter, declared-chapter, declared-content, declared-book, search-result, book-file, source-info, series-entry, series-result, catalog-entry};
+    use types.{config-field, config-value, book-entry, content-mode, chapter, declared-chapter, declared-content, content-option, declared-book, search-result, book-file, source-info, series-entry, series-result, catalog-entry};
 
     /// Human-readable plugin name, read in the registered instance context.
     export name: func() -> string;
@@ -300,6 +307,7 @@ world mandara-plugin {
     ///   - `lookup`   -> single books can be fetched with `get-book`
     ///     (materialize-on-demand, refresh);
     ///   - `identify` -> the source takes part in upload identification;
+    ///   - `content-list` -> enumerate content choices by book ID or URL;
     ///   - `content`  -> the source declares chapters via `get-content` and
     ///     supplies missing bodies via `get-chapter` (chapter mode);
     ///   - `book-file`-> the source provides whole book files via
@@ -324,6 +332,10 @@ world mandara-plugin {
     /// Single book by id (materialize-on-demand, refresh). `none` = not
     /// found.
     export get-book: func(config: list<config-value>, book-id: string) -> option<book-entry>;
+
+    /// List content choices under a user-facing book ID or URL (`content-list`).
+    /// none = book unavailable; some([]) = book has no files. No downloads.
+    export list-content: func(config: list<config-value>, reference: string) -> option<list<content-option>>;
 
     /// Declare content identity, loading form and chapters together.
     /// none = content unavailable; this says nothing about metadata.

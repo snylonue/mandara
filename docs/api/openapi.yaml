@@ -379,6 +379,41 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /api/plugins/{id}/content-options:
+    get:
+      tags: [plugins]
+      summary: List selectable content files under a book ID or URL
+      description: |
+        Requires an enabled content-list source. Returns filenames for explicit
+        selection without importing metadata or downloading book files. Unavailable
+        uploads remain visible with available=false. IDs are passed back by the UI,
+        never constructed by the user. A known book without files returns [].
+      operationId: listPluginContent
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PluginId"
+        - name: q
+          in: query
+          required: true
+          schema: {type: string, minLength: 1}
+          description: User-facing book identifier or website URL
+      responses:
+        "200":
+          description: Content choices in source order
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PluginContentOption"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /api/plugins/{id}/content:
     get:
       tags: [plugins]
@@ -2486,6 +2521,20 @@ components:
           type: string
         message:
           type: string
+
+    PluginContentOption:
+      type: object
+      required: [id, title, available]
+      properties:
+        id:
+          type: string
+          description: Internal content identity returned unchanged on selection
+        title:
+          type: string
+          description: Human-readable filename or chapter collection name
+        available:
+          type: boolean
+          description: Whether this content can be acquired with the current source settings
 
     PluginContentPreview:
       type: object

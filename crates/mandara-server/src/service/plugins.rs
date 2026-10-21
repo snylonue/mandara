@@ -702,6 +702,24 @@ impl PluginService {
         .await
     }
 
+    /// Enumerate choices independently of bibliographic metadata.
+    pub async fn list_content(
+        &self,
+        id: &str,
+        reference: &str,
+    ) -> Result<Option<Vec<mandara_plugin::host::ContentOption>>, ApiError> {
+        let row = self
+            .row(id)
+            .await?
+            .ok_or_else(|| ApiError::not_found("plugin instance"))?;
+        self.requires_cap(&self.plugin_info(&row).await?, "content-list")?;
+        let reference = reference.to_owned();
+        self.call(id, true, move |runtime, instance| {
+            runtime.list_content(&instance, &reference)
+        })
+        .await
+    }
+
     /// Fetch one complete content declaration, independently of book metadata.
     pub async fn get_content(
         &self,

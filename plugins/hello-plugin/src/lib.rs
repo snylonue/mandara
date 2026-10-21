@@ -245,6 +245,10 @@ impl Guest for HelloPlugin {
         None
     }
 
+    fn list_content(_config: Vec<ConfigValue>, _reference: String) -> Option<Vec<ContentOption>> {
+        None
+    }
+
     fn get_content(_config: Vec<ConfigValue>, content_id: String) -> Option<DeclaredContent> {
         let titles = match content_id.as_str() {
             "hello-content-1" => vec!["第一章 你好，书架", "第二章 世界很大"],

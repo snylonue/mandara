@@ -504,6 +504,28 @@ impl PluginRuntime {
         }
     }
 
+    /// Enumerate independent content choices without downloading their bodies.
+    pub fn list_content(
+        &self,
+        instance: &PluginInstance,
+        reference: &str,
+    ) -> Result<Option<Vec<ContentOption>>> {
+        let options = self.invoke_with_config(instance, |store, bindings, config| {
+            bindings.call_list_content(store, config, reference)
+        })?;
+        if options
+            .as_ref()
+            .is_some_and(|items| items.len() > MAX_DECLARE_BOOKS)
+        {
+            return Err(Error::ContentLimit {
+                file: instance.file().to_string(),
+                resource: "content options",
+                limit: MAX_DECLARE_BOOKS,
+            });
+        }
+        Ok(options)
+    }
+
     /// Content identity, loading and chapter declarations from one plugin call.
     pub fn get_content(
         &self,

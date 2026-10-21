@@ -20,6 +20,7 @@ type Candidate = {
   file?: File;
   source?: string;
   candidateId: string;
+  contentOption?: boolean;
   revision?: number;
   preview: PluginContentPreview | null;
   loading: boolean;
@@ -57,11 +58,11 @@ function CandidatePreview({ candidate, disabled, patch, load }: {
   return (
     <li className="series-match-row">
       <span className="strong">{candidate.title}</span>
-      <label className="field">
+      {!candidate.contentOption && <label className="field">
         <span>{t("library.contentId")}</span>
         <input aria-label={t("library.seriesContentIdFor", { title: candidate.title })} disabled={disabled} value={candidate.candidateId}
           onChange={(event) => patch(candidate.key, { candidateId: event.target.value, preview: null, loading: true, error: null })} />
-      </label>
+      </label>}
       <div role="status" className="hint">
         {candidate.loading ? t("library.checkingSourceContent") : candidate.error
           ?? (candidate.preview ? candidate.preview.mode === "file" ? t("library.sourceContentFile")
@@ -128,7 +129,7 @@ export function SeriesContentMatch({ targets, selectedIds, instances, disabled, 
       return true;
     }).map((book) => ({
       key: pick.instance.id + ":" + book.id, title: book.title, source: pick.instance.id,
-      candidateId: book.id, revision, preview: null, loading: true, error: null,
+      candidateId: book.id, contentOption: pick.instance.capabilities.includes("content-list"), revision, preview: null, loading: true, error: null,
     }));
     chooseCandidates(items, pick.item.title);
   }
@@ -174,7 +175,7 @@ export function SeriesContentMatch({ targets, selectedIds, instances, disabled, 
           <label className="radio"><input type="radio" checked={mode === "file"} onChange={() => { setMode("file"); setSourceLoading(false); clear(); }} />{t("library.tabUpload")}</label>
         </div>
         {mode === "plugin" ? <SourceSearchPane
-          target="series" instances={instances} disabled={disabled} onLoadingChange={setSourceLoading}
+          purpose="content" target="series" instances={instances} disabled={disabled} onLoadingChange={setSourceLoading}
           filter={(instance) => instance.enabled && instance.capabilities.includes("lookup")
             && (instance.capabilities.includes("content") || instance.capabilities.includes("book-file"))}
           pickLabel={() => t("library.useAsSeriesContentSource")} onPick={chooseSeries} onClear={clear}
@@ -216,7 +217,7 @@ export function SeriesContentMatch({ targets, selectedIds, instances, disabled, 
                 </select>
               </label>
               {candidate && <>
-                <div className="hint">{candidate.file ? candidate.file.name : candidate.preview?.id ?? candidate.candidateId}</div>
+                <div className="hint">{candidate.file ? candidate.file.name : candidate.contentOption ? candidate.title : candidate.preview?.id ?? candidate.candidateId}</div>
                 {!candidate.file && !candidate.preview && <p className="hint">{candidate.error ?? t(candidate.loading ? "library.checkingSourceContent" : "library.seriesUnconfirmedContent")}</p>}
                 <div className="row item-settings">
                   {!candidate.file ? <span className="hint">{t("library.pluginPublicOnly")}</span> : <select aria-label={t("library.seriesVisibilityFor", { title: book.title })} value={value.visibility}

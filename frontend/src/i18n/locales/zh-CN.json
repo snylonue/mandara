@@ -262,6 +262,14 @@
     "unsharedFile": "此内容源未包含在分享中"
   },
   "plugin": {
+    "contentBookReference": "书籍 ID 或链接",
+    "contentBookHint": "输入文库书籍 ID 或粘贴书籍链接，列出文件后直接选择；网络小说也可使用 web:来源:书号。",
+    "listContentFiles": "列出文件",
+    "chooseContentFile": "选择此文件",
+    "useContentFiles": "使用这些文件并匹配卷册",
+    "noContentFiles": "这本书下还没有文件。",
+    "contentBookUnavailable": "未找到书籍或无法读取文件列表，请检查 ID、链接和来源配置。",
+    "contentFileUnavailable": "当前译文设置下不可用",
     "chooseSource": "选择插件源…",
     "searchPlaceholder": "搜索书名 / 作者…",
     "noResults": "没有更多结果",

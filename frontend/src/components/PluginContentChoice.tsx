@@ -4,8 +4,26 @@ import { useTranslation } from "react-i18next";
 import { api, ApiError } from "../api";
 import type { PluginContentPreview } from "../types";
 import type { SourcePick } from "./SourceSearch";
+import { ContentFilePicker } from "./ContentFilePicker";
 
-export function PluginContentChoice({ pick, disabled, selectedIds, onPick }: {
+type Props = {
+  pick: SourcePick;
+  disabled: boolean;
+  selectedIds: string[];
+  onPick: (pick: SourcePick) => void;
+};
+
+export function PluginContentChoice(props: Props) {
+  const { pick, disabled, selectedIds, onPick } = props;
+  if (pick.instance.capabilities.includes("content-list")) return <ContentFilePicker
+    key={pick.instance.id + ":" + pick.item.id} instance={pick.instance} initialReference={pick.item.id}
+    disabled={disabled} selectedIds={selectedIds}
+    onPick={([option]) => onPick({ ...pick, item: { ...pick.item, id: option.id, title: option.title } })}
+  />;
+  return <DeclaredContentChoice {...props} />;
+}
+
+function DeclaredContentChoice({ pick, disabled, selectedIds, onPick }: {
   pick: SourcePick;
   disabled: boolean;
   selectedIds: string[];

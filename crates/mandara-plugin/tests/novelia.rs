@@ -120,7 +120,7 @@ fn compiled_guest_adapts_web_chapters_and_wenku_downloads() {
         .unwrap();
     assert_eq!(
         runtime.capabilities(&plugin).unwrap(),
-        ["search", "lookup", "content", "book-file"]
+        ["search", "lookup", "content", "book-file", "content-list"]
     );
     assert_eq!(runtime.source_info(&plugin).unwrap().kind, "search");
     let schema = runtime.config_schema(&plugin).unwrap();
@@ -132,6 +132,27 @@ fn compiled_guest_adapts_web_chapters_and_wenku_downloads() {
     let normalized = validate_config(&schema, &json!({"base-url": server.url(""), "auth-url": server.url(""), "providers": ["syosetu"], "username": " test-account ", "password": " test-password "})).unwrap();
     let config = normalized;
     let plugin = plugin.with_config(config.clone());
+    for reference in ["series", "wenku:series", &server.url("/wenku/series")] {
+        let options = runtime.list_content(&plugin, reference).unwrap().unwrap();
+        assert_eq!(options.len(), 3);
+        assert_eq!(options[0].title, "第二卷.epub");
+        assert!(options[0].available);
+        assert!(options[1].available);
+        assert!(!options[2].available);
+        assert!(
+            runtime
+                .get_content(&plugin, &options[0].id)
+                .unwrap()
+                .is_some()
+        );
+    }
+    assert!(
+        !requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(target, _)| target.starts_with("/download") || target.contains("/file/"))
+    );
     let result = runtime.search_books(&plugin, "测试", 0, 10).unwrap();
     assert_eq!(result.total, 1);
     assert!(matches!(&result.items[0], CatalogEntry::Single(b) if b.id == "web:syosetu:n1"));

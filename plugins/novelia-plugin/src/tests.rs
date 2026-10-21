@@ -12,6 +12,62 @@ fn settings(translation: u32) -> Settings {
 }
 
 #[test]
+fn book_references_do_not_require_upload_filenames() {
+    for raw in [
+        "6806f70f2d549f092c9ae862",
+        "wenku:6806f70f2d549f092c9ae862",
+        " https://n.novelia.cc/wenku/6806f70f2d549f092c9ae862?tab=files#uploads ",
+    ] {
+        assert_eq!(
+            BookReference::parse(raw),
+            Some(BookReference::Wenku("6806f70f2d549f092c9ae862".into()))
+        );
+    }
+    for raw in ["web:syosetu:n1", "https://n.novelia.cc/novel/syosetu/n1/"] {
+        assert_eq!(
+            BookReference::parse(raw),
+            Some(BookReference::Web("syosetu".into(), "n1".into()))
+        );
+    }
+    for raw in [
+        "",
+        "wenku:",
+        "https://n.novelia.cc/wenku",
+        "https://n.novelia.cc/wenku/a/b",
+        "file:///wenku/a",
+        "wenku-volume:a:file.epub",
+    ] {
+        assert_eq!(BookReference::parse(raw), None, "{raw}");
+    }
+}
+
+#[test]
+fn content_choices_preserve_every_upload_and_mark_unavailable_translations() {
+    let novel: WenkuNovel = serde_json::from_value(json!({"volumeJp": [
+        {"volumeId": "第二卷 100%:原文.epub", "sakura": 1},
+        {"volumeId": "第一卷.txt", "gpt": 1},
+        {"volumeId": "未译.txt"}
+    ]}))
+    .unwrap();
+    let options = content_options(&settings(0), "series", &novel);
+    assert_eq!(options.len(), 3);
+    assert_eq!(options[0].title, "第二卷 100%:原文.epub");
+    assert_eq!(
+        Id::parse(&options[0].id),
+        Some(Id::Volume("series".into(), options[0].title.clone()))
+    );
+    assert!(options[0].available && options[1].available);
+    assert!(!options[2].available);
+    let gpt = content_options(&settings(1), "series", &novel);
+    assert!(!gpt[0].available && gpt[1].available);
+    assert!(
+        content_options(&settings(4), "series", &novel)
+            .iter()
+            .all(|item| !item.available)
+    );
+}
+
+#[test]
 fn token_scope_tracks_credentials_and_endpoints_but_not_translation() {
     let original = settings(0);
     let scope = original.auth_scope();

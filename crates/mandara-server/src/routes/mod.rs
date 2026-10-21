@@ -100,6 +100,10 @@ pub fn router(state: St) -> Router {
         .route("/api/plugins/{id}/lookup", get(plugins::lookup_plugin))
         .route("/api/plugins/{id}/content", get(plugins::preview_content))
         .route(
+            "/api/plugins/{id}/content-options",
+            get(plugins::list_content),
+        )
+        .route(
             "/api/plugins/{id}/series",
             get(plugins::lookup_series).post(plugins::import_series),
         )

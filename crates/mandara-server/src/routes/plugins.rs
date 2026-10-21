@@ -296,6 +296,40 @@ pub struct LookupParams {
     pub q: String,
 }
 
+#[derive(Serialize)]
+pub struct ContentOption {
+    pub id: String,
+    pub title: String,
+    pub available: bool,
+}
+
+pub async fn list_content(
+    AuthenticatedUser(_user): AuthenticatedUser,
+    State(st): State<St>,
+    Path(id): Path<String>,
+    Query(params): Query<LookupParams>,
+) -> Result<impl IntoResponse, ApiError> {
+    if params.q.trim().is_empty() {
+        return Err(ApiError::bad_request("book reference must not be empty"));
+    }
+    let options = st
+        .library
+        .plugins()
+        .list_content(&id, params.q.trim())
+        .await?
+        .ok_or_else(|| ApiError::not_found("plugin content list"))?;
+    Ok(Json(
+        options
+            .into_iter()
+            .map(|item| ContentOption {
+                id: item.id,
+                title: item.title,
+                available: item.available,
+            })
+            .collect::<Vec<_>>(),
+    ))
+}
+
 /// A content declaration preview; deliberately excludes chapter bodies.
 #[derive(Serialize)]
 pub struct ContentPreview {

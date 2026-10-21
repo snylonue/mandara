@@ -271,6 +271,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/plugins/{id}/content-options": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List selectable content files under a book ID or URL
+         * @description Requires an enabled content-list source. Returns filenames for explicit
+         *     selection without importing metadata or downloading book files. Unavailable
+         *     uploads remain visible with available=false. IDs are passed back by the UI,
+         *     never constructed by the user. A known book without files returns [].
+         */
+        get: operations["listPluginContent"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/plugins/{id}/content": {
         parameters: {
             query?: never;
@@ -1300,6 +1323,14 @@ export interface components {
             field: string;
             message: string;
         };
+        PluginContentOption: {
+            /** @description Internal content identity returned unchanged on selection */
+            id: string;
+            /** @description Human-readable filename or chapter collection name */
+            title: string;
+            /** @description Whether this content can be acquired with the current source settings */
+            available: boolean;
+        };
         PluginContentPreview: {
             /** @description Confirmed content ID, accepted by the content exports */
             id: string;
@@ -1620,7 +1651,7 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
-                    /** @description Explicit instance id (default: generated uuid) */
+                    /** @description Explicit instance id (default: component basename, then -2, -3, etc.) */
                     id?: string;
                     wasm_file: string;
                 };
@@ -1783,6 +1814,35 @@ export interface operations {
                 };
             };
             400: components["responses"]["ValidationError"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listPluginContent: {
+        parameters: {
+            query: {
+                /** @description User-facing book identifier or website URL */
+                q: string;
+            };
+            header?: never;
+            path: {
+                /** @description Plugin instance id (source id) */
+                id: components["parameters"]["PluginId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Content choices in source order */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PluginContentOption"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
             404: components["responses"]["NotFound"];
         };
     };

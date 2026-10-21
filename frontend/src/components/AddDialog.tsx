@@ -575,7 +575,9 @@ export function AddDialog({
                           </span>
                           <span className="hint">
                             {entry.kind === "plugin"
-                              ? `${entry.pick!.instance.name} · ${entry.pick!.item.id}`
+                              ? (entry.pick!.instance.capabilities.includes("content-list")
+                                ? entry.pick!.instance.name
+                                : `${entry.pick!.instance.name} · ${entry.pick!.item.id}`)
                               : ""}
                             {meta === "file" && entry.file === metadataFile ? ` · ${t("library.fileMetadataSource")}` : ""}
                           </span>
@@ -622,6 +624,7 @@ export function AddDialog({
                 <div className="field">
                   <p className="strong">{t("library.tabPlugin")}</p>
                   <SourceSearchPane
+                    purpose="content"
                     instances={instances}
                     filter={(i) =>
                       i.enabled &&

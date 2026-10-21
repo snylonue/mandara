@@ -1112,6 +1112,10 @@ impl Guest for Wenku8Plugin {
             .find(|b| b.id == book_id)
     }
 
+    fn list_content(_config: Vec<ConfigValue>, _reference: String) -> Option<Vec<ContentOption>> {
+        None
+    }
+
     fn get_content(config: Vec<ConfigValue>, content_id: String) -> Option<DeclaredContent> {
         let (book, anchor) = parse_volume_id(&content_id)?;
         let info = fetch_toc(&config, &book)?;

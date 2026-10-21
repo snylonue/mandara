@@ -9,7 +9,7 @@ The guest adapts [Novelia](https://n.novelia.cc): web novels provide searchable 
 cp plugins-built/novelia.wasm data/plugins/
 ```
 
-Restart the server, then register the component in the admin UI. Nix package discovery includes it as `mandara-plugin-novelia`. One instance can provide web metadata/chapters and Wenku content. There is no `catalog` setting: searches are exclusively web novels. To use Wenku, create/select book metadata elsewhere and attach this instance as its content source with a Wenku content ID.
+Restart the server, then register the component in the admin UI. Nix package discovery includes it as `mandara-plugin-novelia`. One instance can provide web metadata/chapters and Wenku content. There is no `catalog` setting: searches are exclusively web novels. To use Wenku, create/select book metadata elsewhere and attach this instance as its content source: enter the Wenku book ID or paste its website URL, then select a listed file.
 
 ## Configuration and login
 
@@ -28,18 +28,13 @@ The plugin posts `{app: "n", username, password}` to the configured authenticati
 
 Only use trusted site and authentication endpoints, preferably HTTPS. Credentials are stored in ordinary instance configuration, and cached Bearer tokens in instance state, **not encrypted by this plugin**; protect administrator access and database backups. The admin form masks password fields visually, which is not a storage security boundary. Real credentials are never supplied as defaults or committed to the repository; login logs omit passwords, tokens and response bodies.
 
-## IDs and content loading
+## Book and file selection
 
-- Web book metadata and content: `web:<providerId>:<novelId>`, e.g. `web:syosetu:n9669bk`.
-- Wenku content only: `wenku-volume:<novelId>:<encoded-volumeId>`. Take `novelId` from the series URL and `volumeId` exactly from `volumeJp[].volumeId` in the site's API. Each component is UTF-8 percent encoded. Plain Unicode filenames are also accepted; escape a literal percent sign as `%25`. Only the first two colons delimit the namespace and series ID; the returned ID is canonicalized.
+Users never need an upload filename, percent encoding, or a constructed content ID. In a content-source picker, enter a Wenku book ID such as `6806f70f2d549f092c9ae862`, or paste `https://n.novelia.cc/wenku/6806f70f2d549f092c9ae862`, then click **列出文件**. Every public Japanese upload appears by its original filename; files without a translation under the current configuration remain visible but disabled. Select one file for a book, or use the listed files for explicit series-volume matching. Neither listing nor selecting a draft downloads files or imports Wenku metadata.
 
-For example, this live upload can be addressed as:
+Web novels accept their website URL (`/novel/<providerId>/<novelId>`) or the existing `web:<providerId>:<novelId>` book reference and offer one chapter collection.
 
-```text
-wenku-volume:6806f70f2d549f092c9ae862:筺底のエルピス5　－迷い子たちの一歩－.epub
-```
-
-`volumeId` is the upstream upload filename, now explicitly used as identity. It is not an ASIN, inferred title, list index or filename hash. Exact filename spelling is preserved: no fuzzy, width or whitespace matching. Reordering uploads does not change an ID; renaming/removing an upload makes the old ID unavailable. The plugin only reads the upload list and translation availability, ignoring bibliographic `volumes`, ASINs, titles and covers. Admin-only Chinese uploads (`volumeZh`) are not exposed.
+The `content-list` capability calls `list-content` through `GET /api/plugins/{id}/content-options?q=...`. Returned IDs are internal selection tokens; the frontend passes the selected token unchanged to acquisition. Wenku tokens use the upstream upload filename scoped by its book ID, preserving exact spelling and stable identity across upload reordering. The plugin reads only upload lists and translation availability, ignoring bibliographic `volumes`, ASINs, titles and covers. Admin-only Chinese uploads (`volumeZh`) are not exposed.
 
 Wenku declares file-mode content and returns a translated EPUB/TXT through `get-book-file`; it does not return book or series metadata. Web novels declare chapter-mode content: TOC headings without chapter IDs are omitted, and each chapter call resolves its index to the upstream chapter ID. Prose is escaped HTML; original `<图片>URL` markers become stored-image figures (failed image downloads retain the HTTP(S) URL).
 
@@ -49,7 +44,7 @@ Translation settings are not encoded into content IDs. Changing the translator o
 
 ## Upgrade from earlier builds
 
-`catalog`, `access-token` and `volume-files` have been removed. Save the new configuration with username/password if login is needed. `wenku:<seriesId>` metadata lookups and `wenku-asin:...` IDs are no longer supported; reattach Wenku content using the actual upload's `volumeId`. Existing local metadata and cached bodies are not deleted or migrated automatically.
+`catalog`, `access-token` and `volume-files` have been removed. Save the new configuration with username/password if login is needed. Wenku metadata lookups and `wenku-asin:...` IDs are not supported; choose Wenku files through the content picker using the book ID or URL. Existing local metadata and cached bodies are not deleted or migrated automatically.
 
 ## Verification
 

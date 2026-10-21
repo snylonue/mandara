@@ -1,6 +1,6 @@
 //! Novelia's public JSON API, adapted to Mandara's stateless WIT world.
 //! Web novels provide metadata and chapters; Wenku provides content only.
-//! Wenku content uses the upstream volumeId, scoped by its series ID.
+//! Users select Wenku uploads by book ID or URL; filenames stay internal.
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -396,6 +396,55 @@ impl Id {
     }
 }
 
+#[derive(Debug, PartialEq)]
+enum BookReference {
+    Web(String, String),
+    Wenku(String),
+}
+
+impl BookReference {
+    fn parse(raw: &str) -> Option<Self> {
+        let raw = raw.trim();
+        if let Some(Id::Web(provider, novel)) = Id::parse(raw) {
+            return Some(Self::Web(provider, novel));
+        }
+        if let Some(novel) = raw.strip_prefix("wenku:") {
+            return Self::wenku(novel);
+        }
+        if let Ok(url) = Url::parse(raw) {
+            if !matches!(url.scheme(), "http" | "https") {
+                return None;
+            }
+            let parts: Vec<_> = url.path_segments()?.filter(|p| !p.is_empty()).collect();
+            return match parts.as_slice() {
+                ["wenku", novel] => Some(Self::Wenku(decode(novel)?)),
+                ["novel", provider, novel] => Some(Self::Web(decode(provider)?, decode(novel)?)),
+                _ => None,
+            };
+        }
+        Self::wenku(raw)
+    }
+
+    fn wenku(novel: &str) -> Option<Self> {
+        if novel.is_empty() || novel.contains(['/', ':', '?', '#']) {
+            return None;
+        }
+        Some(Self::Wenku(novel.into()))
+    }
+}
+
+fn content_options(settings: &Settings, novel_id: &str, novel: &WenkuNovel) -> Vec<ContentOption> {
+    novel
+        .volume_jp
+        .iter()
+        .map(|volume| ContentOption {
+            id: volume_id(novel_id, &volume.volume_id),
+            title: volume.volume_id.clone(),
+            available: file_url(settings, novel_id, volume).is_some(),
+        })
+        .collect()
+}
+
 fn web_id(p: &str, n: &str) -> String {
     format!("web:{}:{}", encode(p), encode(n))
 }
@@ -585,7 +634,7 @@ impl Guest for NoveliaPlugin {
         "Novelia（轻小说机翻）".into()
     }
     fn capabilities() -> Vec<String> {
-        ["search", "lookup", "content", "book-file"]
+        ["search", "lookup", "content", "book-file", "content-list"]
             .map(String::from)
             .to_vec()
     }
@@ -594,7 +643,7 @@ impl Guest for NoveliaPlugin {
             kind: "search".into(),
             id_kind: "opaque".into(),
             id_hint: Some(
-                "网络小说：web:来源:书号；文库仅正文：wenku-volume:系列书号:编码后的 volumeId"
+                "网络小说：web:来源:书号；文库正文：输入书籍 ID 或粘贴 /wenku/ 书籍链接后选择文件"
                     .into(),
             ),
             search_hint: Some("搜索 Novelia 书名 / 作者".into()),
@@ -727,6 +776,24 @@ impl Guest for NoveliaPlugin {
                 .book(web_id(&p, &n)),
         )
     }
+    fn list_content(config: Vec<ConfigValue>, reference: String) -> Option<Vec<ContentOption>> {
+        let settings = Settings::from_values(&config);
+        match BookReference::parse(&reference)? {
+            BookReference::Wenku(novel_id) => {
+                let novel = settings.wenku(&novel_id)?;
+                Some(content_options(&settings, &novel_id, &novel))
+            }
+            BookReference::Web(provider, novel_id) => {
+                let novel = settings.web(&provider, &novel_id)?;
+                Some(vec![ContentOption {
+                    id: web_id(&provider, &novel_id),
+                    title: preferred(&novel.title_jp, novel.title_zh.as_deref()),
+                    available: true,
+                }])
+            }
+        }
+    }
+
     fn get_content(config: Vec<ConfigValue>, content_id: String) -> Option<DeclaredContent> {
         let settings = Settings::from_values(&config);
         match Id::parse(&content_id)? {

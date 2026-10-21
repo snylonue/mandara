@@ -22,6 +22,7 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api, ApiError } from "../api";
 import { Modal } from "./Modal";
+import { ContentFilePicker } from "./ContentFilePicker";
 import type { PluginInstance, PluginSearchItem, PluginSearchResponse, PluginSeriesLookupResponse } from "../types";
 
 export const SEARCH_PAGE_SIZE = 10;
@@ -112,6 +113,7 @@ export async function searchSource(
 }
 
 type SourceSearchProps = {
+  purpose?: "metadata" | "content";
   instances: PluginInstance[];
   filter: (i: PluginInstance) => boolean;
   pickLabel?: (item: PluginSearchItem) => string;
@@ -149,8 +151,9 @@ export function SourceSearchPane(props: SourceSearchProps) {
   // Manual-id entry needs the source's `lookup` capability and is shown
   // whenever the source has it — alongside the search box when the
   // source also supports search (bangumi: search *and* direct id).
-  const showSearch = interaction?.canSearch ?? false;
-  const showManualId = interaction?.canManualId ?? false;
+  const contentList = props.purpose === "content" && selected?.capabilities.includes("content-list");
+  const showSearch = !contentList && (interaction?.canSearch ?? false);
+  const showManualId = !contentList && (interaction?.canManualId ?? false);
 
   // Keep the selection valid when the instance list changes (e.g. after
   // registration in the admin page).
@@ -259,6 +262,19 @@ export function SourceSearchPane(props: SourceSearchProps) {
         )}
       </div>
 
+      {contentList && selected && <ContentFilePicker
+        key={selected.id} instance={selected} disabled={props.disabled} multiple={props.target === "series"}
+        onClear={props.onClear} onLoadingChange={props.onLoadingChange}
+        onPick={(options, reference) => {
+          const books: PluginSeriesLookupResponse["books"] = options.map((option) => ({
+            kind: "book", id: option.id, title: option.title, authors: [], book_id: null,
+          }));
+          if (props.target === "series") {
+            return props.onPick({ instance: selected, item: { kind: "series", id: reference, title: reference, authors: [], book_id: null }, books });
+          }
+          return props.onPick({ instance: selected, item: books[0] });
+        }}
+      />}
       {error && <div className="error">{error}</div>}
       {loading && <p className="hint">{t("common.loading")}</p>}
       {!loading && !error && sel && result && items.length === 0 && (
@@ -293,7 +309,7 @@ export function SourceSearchPane(props: SourceSearchProps) {
           </div>
         </div>
       )}
-      {!loading && !error && interaction?.kind === "browse" && sel && (
+      {!contentList && !loading && !error && interaction?.kind === "browse" && sel && (
         <p className="hint">{t("plugin.browseSynced")}</p>
       )}
       <ul className="source-results">

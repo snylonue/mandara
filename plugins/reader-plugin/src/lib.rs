@@ -286,6 +286,10 @@ impl Guest for ReaderPlugin {
         }
     }
 
+    fn list_content(_config: Vec<ConfigValue>, _reference: String) -> Option<Vec<ContentOption>> {
+        None
+    }
+
     fn get_content(config: Vec<ConfigValue>, content_id: String) -> Option<DeclaredContent> {
         let base = config_string(&config, "base-url", DEFAULT_BASE_URL);
         let max = config_number(&config, "max-chapters", 3);

@@ -688,6 +688,10 @@ impl Guest for BangumiPlugin {
         Some(SeriesResult { series, books })
     }
 
+    fn list_content(_config: Vec<ConfigValue>, _reference: String) -> Option<Vec<ContentOption>> {
+        None
+    }
+
     fn get_content(_config: Vec<ConfigValue>, _content_id: String) -> Option<DeclaredContent> {
         None
     }

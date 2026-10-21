@@ -19,8 +19,8 @@ the full design. This guide is for plugin authors.
   id (the source id in `book_files.source`), stored config, and enable
   flag. One wasm file can back several instances (e.g. one "web source"
   plugin pointed at two sites). Instances are registered via the admin UI
-  or `POST /api/plugins/instances`; instance ids default to a uuid, or an
-  admin-chosen stable id (needed when metadata plugins point at content
+  or `POST /api/plugins/instances`; instance IDs default to the component
+  basename with numeric suffixes on collision, or an admin-chosen stable ID (needed when metadata plugins point at content
   plugins).
 - **Capabilities** — `capabilities()` declares which catalog patterns the
   plugin implements (see below). The host keys all policy off this list.
@@ -128,9 +128,9 @@ fn cached_index(key: &str, fetch: impl FnOnce() -> Result<Vec<u8>, String>)
 // state::delete("chapter-index:123")?;
 ```
 
-Existing v0.13.0 components remain compatible without a rebuild. Guests
-that use the new state import must be rebuilt with `./scripts/build-plugins.sh`;
-rebuilding does not deploy them to `data/plugins/` automatically.
+Protocol v0.14.0 adds the required `list-content` export. Rebuild all guests
+with `./scripts/build-plugins.sh`; unsupported sources return `none`. Rebuilding
+does not deploy components to `data/plugins/` automatically.
 
 ## Lifecycle
 
@@ -188,7 +188,7 @@ rebuilding does not deploy them to `data/plugins/` automatically.
 ## Interface (WIT)
 
 Interface file: `crates/mandara-plugin/wit/mandara.wit`, world
-`mandara:plugin/mandara-plugin@0.13.0`. Every export is **required**
+`mandara:plugin/mandara-plugin@0.14.0`. Every export is **required**
 (the WIT parser has no optional exports) — unsupported features return
 `none`/empty and are declared via `capabilities()`:
 
@@ -272,10 +272,11 @@ World exports:
 |---|---|---|
 | `name()` | always | Human-readable name |
 | `config-schema()` | always | Config fields the host renders as an admin form |
-| `capabilities()` | always | `["declare","search","lookup","identify","content","book-file"]` subset |
+| `capabilities()` | always | `["declare","search","lookup","identify","content","book-file","content-list"]` subset |
 | `declare(config)` | always | Small static catalog (`None` for large sources) |
 | `search-books(config, query, offset, limit)` | `search` | Paginated catalog browsing |
 | `get-book(config, book-id)` | `lookup` | Single book (materialize on demand, refresh) |
+| `list-content(config, reference)` | `content-list` | Filenames and selectable content IDs under a user-facing book ID or URL; no metadata import or file download |
 | `get-content(config, content-id)` | content acquisition | Identity, loading form and chapter declarations together |
 | `get-series(config, series-id)` | `lookup` | Series metadata plus independently addressable member books |
 | `get-chapter(config, content-id, index)` | `content` | One chapter body |
@@ -513,8 +514,8 @@ sessions, shares and archived original bytes. Colliding legacy items are kept.
 ## Example plugins
 
 - `plugins/novelia-plugin/` — Novelia web novels (`search` + `lookup` +
-  chapter content) and content-only Wenku downloads (`book-file`), identified by
-  upstream volumeId. Configurable providers, translation and account login. See
+  chapter content) and content-only Wenku downloads (`book-file` +
+  `content-list`). Users enter a book ID or URL and choose a listed filename. Configurable providers, translation and account login. See
   [Novelia setup and limitations](novelia-plugin.md).
 
 - `plugins/hello-plugin/` — small `declare` + `identify` + `content`

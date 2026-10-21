@@ -676,6 +676,7 @@ export function BookDetailPage() {
           <div className="field">
             <p className="hint">{t("library.pluginPublicOnly")}</p>
             <SourceSearchPane
+              purpose="content"
               instances={instances}
               filter={(i) =>
                 i.enabled &&
@@ -686,6 +687,7 @@ export function BookDetailPage() {
               onPick={(pick) => {
                 setAttachPluginPick(pick);
               }}
+              onClear={() => setAttachPluginPick(null)}
             />
             {attachPluginPick && (
               <p className="hint">

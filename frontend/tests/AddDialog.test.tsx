@@ -223,6 +223,32 @@ it("allows manual metadata-only creation and rejects removal of the local metada
   expect(submitted[0].get("metadata_only")).toBe("true");
 });
 
+it("acquires a listed Novelia file without asking for a constructed content ID", async () => {
+  const novelia: PluginInstance = { ...source, id: "novelia", name: "Novelia", capabilities: ["lookup", "content", "book-file", "content-list"] };
+  const selectedId = "wenku-volume:series:opaque-upload-filename";
+  vi.mocked(api).mockImplementation(async (path, init) => {
+    if (path.includes("/content-options?")) return [{ id: selectedId, title: "第一卷.epub", available: true }];
+    if (path === "/books") { submitted.push(init!.body as FormData); return { series: null, books: [{ book: { id: "book-1" }, files: [] }] }; }
+    throw new Error("Unexpected API call: " + path);
+  });
+  render(<AddDialog open onClose={vi.fn()} instances={[novelia]} onAdded={onAdded} />);
+  const user = userEvent.setup();
+  await user.click(screen.getByLabelText("手动填写"));
+  await user.type(screen.getByPlaceholderText("书名"), "本地书目");
+  await user.click(screen.getByText("添加其他来源或版本"));
+  await user.selectOptions(screen.getByRole("combobox"), "novelia");
+  await user.type(screen.getByLabelText("书籍 ID 或链接"), "series");
+  await user.click(screen.getByRole("button", { name: "列出文件" }));
+  await user.click(await screen.findByRole("button", { name: "选择此文件" }));
+  expect(screen.queryByText(selectedId)).toBeNull();
+  await user.click(screen.getByRole("button", { name: "添加书籍" }));
+  await waitFor(() => expect(submitted).toHaveLength(1));
+  expect(submitted[0].get("plugin_book_id")).toBe(selectedId);
+  expect(submitted[0].get("plugin_source")).toBe("novelia");
+  expect(submitted[0].get("title")).toBe("本地书目");
+  expect(submitted[0].has("meta_plugin_book_id")).toBe(false);
+});
+
 it("discards an in-flight preview after the metadata selection changes", async () => {
   let resolveOld!: (value: unknown) => void;
   vi.mocked(api).mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve; }));
