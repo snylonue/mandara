@@ -65,7 +65,7 @@ pub async fn wasm_files(
 #[derive(Deserialize)]
 pub struct RegisterInstance {
     /// Optional explicit instance id (= source id in `book_files.source`;
-    /// defaults to a generated uuid). Must be unique; selected by users.
+    /// defaults to the component basename plus a numeric suffix). Must be unique.
     pub id: Option<String>,
     pub wasm_file: String,
 }
@@ -79,18 +79,19 @@ pub async fn register_instance(
     State(st): State<St>,
     Json(req): Json<RegisterInstance>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let id = req
-        .id
-        .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
-    if id.is_empty() {
+    if req.id.as_ref().is_some_and(|id| id.is_empty()) {
         return Err(ApiError::bad_request("instance id must not be empty"));
     }
-    if id.len() > 64 {
+    if req.id.as_ref().is_some_and(|id| id.len() > 64) {
         return Err(ApiError::bad_request(
             "instance id must be at most 64 chars",
         ));
     }
-    let info = st.library.plugins().register(&id, &req.wasm_file).await?;
+    let info = st
+        .library
+        .plugins()
+        .register(req.id.as_deref().unwrap_or(""), &req.wasm_file)
+        .await?;
     // A fresh declare-capable instance is synced right away.
     if info.enabled && info.capabilities.iter().any(|c| c == "declare") {
         let _ = st.library.sync_instance(&info.id).await?;

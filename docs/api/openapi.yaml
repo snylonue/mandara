@@ -221,7 +221,7 @@ paths:
               properties:
                 id:
                   type: string
-                  description: 'Explicit instance id (default: generated uuid)'
+                  description: 'Explicit instance id (default: component basename, then -2, -3, etc.)'
                 wasm_file:
                   type: string
       responses:

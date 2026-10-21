@@ -34,6 +34,20 @@ use mandara_plugin::{
 
 use crate::error::ApiError;
 
+/// Use the component basename and a small suffix, not a random identifier.
+fn default_instance_id(wasm_file: &str, existing: &[String]) -> String {
+    let stem = wasm_file.strip_suffix(".wasm").unwrap_or(wasm_file);
+    let base: String = stem.chars().take(48).collect();
+    let base = if base.is_empty() { "plugin" } else { &base };
+    if !existing.iter().any(|id| id == base) {
+        return base.into();
+    }
+    (2_u64..)
+        .map(|n| format!("{base}-{n}"))
+        .find(|candidate| !existing.contains(candidate))
+        .expect("finite instance list")
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SearchItemKind {
@@ -390,7 +404,14 @@ impl PluginService {
         let mut instances = self.instances.write().await;
         let mut conn = self.db.get().await?;
         use diesel::ExpressionMethods as _;
+        use diesel::QueryDsl as _;
         use diesel_async::RunQueryDsl as _;
+        let existing: Vec<String> = crate::schema::plugin_instances::table
+            .select(crate::schema::plugin_instances::id)
+            .load(&mut conn)
+            .await?;
+        let generated = default_instance_id(wasm_file, &existing);
+        let id = if id.is_empty() { &generated } else { id };
         let result = diesel::insert_into(crate::schema::plugin_instances::table)
             .values((
                 crate::schema::plugin_instances::id.eq(id),
@@ -764,6 +785,16 @@ async fn run_instance<T: Send + 'static>(
 mod tests {
     use super::*;
     use mandara_plugin::{CatalogEntry, SeriesEntry};
+
+    #[test]
+    fn generated_instance_ids_are_readable_and_skip_existing_names() {
+        assert_eq!(super::default_instance_id("novelia.wasm", &[]), "novelia");
+        assert_eq!(
+            super::default_instance_id("novelia.wasm", &["novelia".into(), "novelia-2".into()]),
+            "novelia-3"
+        );
+        assert_eq!(super::default_instance_id(".wasm", &[]), "plugin");
+    }
 
     fn book() -> BookEntry {
         BookEntry {
