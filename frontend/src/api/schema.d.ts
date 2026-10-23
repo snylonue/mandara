@@ -660,7 +660,7 @@ export interface paths {
          *     File-mode retries rebuild the parsed book through the retained original or
          *     declared file provider, using the same loader as acquisition.
          *     Undeclared indices return 404 without contacting the source. Public share
-         *     reads remain storage-only and cannot initiate retries.
+         *     GETs remain storage-only; explicit share retries use the token-scoped endpoint.
          */
         post: operations["retryChapter"];
         delete?: never;
@@ -922,11 +922,42 @@ export interface paths {
          * Anonymous read: one chapter
          * @description Returns only persisted chapter content, without fetching from its source or
          *     waiting for a download. Returns 404 if the row or its body is not stored.
-         *     A stored empty body is valid. Anonymous reads cannot trigger a refresh.
+         *     A stored empty body is valid. This GET never initiates source I/O; visitors
+         *     may explicitly recover missing bodies through the share chapter retry endpoint.
          */
         get: operations["shareChapter"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/shares/{token}/chapters/{idx}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Anonymous retry: recover a missing shared chapter
+         * @description Explicit visitor action authorized by a valid, unexpired share token; no
+         *     login is required. Only files selected in this share and belonging to the
+         *     original book are accessible. The file_id query defaults to the original file.
+         *     Returns cached bodies unchanged, including empty bodies. Missing declared
+         *     chapters are recovered and persisted through the same loader as authenticated
+         *     retries, sharing in-flight downloads and the acquisition concurrency limit.
+         *     Chapter-mode retries preserve other cached bodies; file-mode retries reparse
+         *     the retained original or fetch the declared file provider. This does not
+         *     discover or refresh a directory, update metadata, or save reading progress.
+         *     Missing, expired or revoked tokens, unselected files and undeclared chapter
+         *     indices return 404 before source I/O. Ordinary share GETs remain cache-only.
+         */
+        post: operations["retryShareChapter"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3038,6 +3069,44 @@ export interface operations {
                 };
             };
             404: components["responses"]["NotFound"];
+        };
+    };
+    retryShareChapter: {
+        parameters: {
+            query?: {
+                /** @description Selected shared content id; defaults to the original file. Unselected files return 404. */
+                file_id?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Share token */
+                token: components["parameters"]["ShareToken"];
+                /** @description Zero-based stored chapter index */
+                idx: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Persisted shared chapter content */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Chapter"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            /** @description Content download failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
         };
     };
 }

@@ -22,7 +22,7 @@ interface ReaderProps {
   chapters: ChapterMeta[];
   /** Read a stored chapter by index; the request does not fetch from its source. */
   loadChapter: (idx: number) => Promise<Chapter>;
-  /** Explicit user retry may fill a missing body; public readers only reread storage. */
+  /** Explicit user retry may fill a missing body; without it, retries only reread storage. */
   retryChapter?: (idx: number) => Promise<Chapter>;
   /** Initial position to restore. */
   initialPosition?: Position;

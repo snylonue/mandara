@@ -24,6 +24,7 @@ mod chapter_retry;
 mod numbers;
 mod plugin_visibility;
 mod sessions;
+mod share_chapter_retry;
 mod shares;
 
 const SECRET: &str = "extractor-tests-only";

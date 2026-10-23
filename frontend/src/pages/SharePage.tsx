@@ -77,7 +77,8 @@ function SharedContent({ token, fileId, view }: { token: string; fileId: string;
       <div className="reader-page">
         <Reader key={`${token}:${fileId}:${search.toString()}`} title={book.book.title} chapters={book.chapters} toc={book.toc}
           initialPosition={initialPosition} backHref={overviewHref} shareLink={readHref}
-          loadChapter={(idx) => api<Chapter>(`/shares/${token}/chapters/${idx}${fileQuery}`)} readOnly />
+          loadChapter={(idx) => api<Chapter>(`/shares/${token}/chapters/${idx}${fileQuery}`)}
+          retryChapter={(idx) => api<Chapter>(`/shares/${token}/chapters/${idx}/retry${fileQuery}`, { method: "POST" })} readOnly />
       </div>
     );
   }

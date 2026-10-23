@@ -1,9 +1,9 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
-import { api } from "../src/api";
+import { api, ApiError } from "../src/api";
 import App from "../src/App";
-import type { ShareBookResponse, ShareView } from "../src/types";
+import type { Chapter, ShareBookResponse, ShareView } from "../src/types";
 
 vi.mock("../src/api", async (importOriginal) => ({
   ...await importOriginal<typeof import("../src/api")>(), api: vi.fn(),
@@ -229,4 +229,79 @@ it("discards a pending directory after changing content sources", async () => {
   await act(async () => finish(alternateBook));
   expect(screen.queryByRole("link", { name: "网络第一章" })).toBeNull();
   expect(screen.getByRole("link", { name: "第一章" })).toBeTruthy();
+});
+
+it.each(["", "?file_id=source-file"])("downloads a missing shared chapter only on explicit retry for source %s", async (query) => {
+  multipleSources();
+  const fallback = vi.mocked(api).getMockImplementation()!;
+  const read = "/shares/test/chapters/0" + query;
+  const retry = "/shares/test/chapters/0/retry" + query;
+  let finish!: (chapter: Chapter) => void;
+  vi.mocked(api).mockImplementation((path, init) => {
+    if (path === read) return Promise.reject(new ApiError(404, "stored chapter"));
+    if (path === retry && init?.method === "POST") return new Promise(resolve => { finish = resolve; });
+    return fallback(path, init);
+  });
+  sharePage("/share/test/read" + query);
+  expect((await screen.findByRole("alert")).textContent).toBe("章节正文尚未缓存，点击“重新加载章节”可补下载。");
+  const chapterCalls = () => vi.mocked(api).mock.calls.filter(([path]) => path.includes("/chapters/"));
+  expect(chapterCalls()).toEqual([[read]]);
+  fireEvent.click(screen.getByRole("button", { name: "重新加载章节" }));
+  await waitFor(() => expect(api).toHaveBeenCalledWith(retry, { method: "POST" }));
+  expect(screen.queryByRole("button", { name: "重新加载章节" })).toBeNull();
+  expect(screen.getByText("加载中…")).toBeTruthy();
+  await act(async () => finish({ idx: 0, title: "序章", content: "<p>分享补下载正文</p>" }));
+  await screen.findByText("分享补下载正文");
+  expect(screen.queryByRole("alert")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: /下一章/ }));
+  await screen.findByText(query ? "网络版第一章正文" : "第一章正文");
+  expect(chapterCalls()).toEqual([[read], [retry, { method: "POST" }], ["/shares/test/chapters/1" + query]]);
+  expect(vi.mocked(api).mock.calls.every(([path]) => path.startsWith("/shares/test"))).toBe(true);
+});
+
+it("keeps a failed share download retryable without retrying automatically", async () => {
+  const fallback = vi.mocked(api).getMockImplementation()!;
+  let attempts = 0;
+  vi.mocked(api).mockImplementation(async (path, init) => {
+    if (path === "/shares/test/chapters/0") throw new ApiError(404, "stored chapter");
+    if (path === "/shares/test/chapters/0/retry" && init?.method === "POST") {
+      if (++attempts === 1) throw new ApiError(500, "书源暂时不可用");
+      return { idx: 0, title: "序章", content: "<p>重试恢复的正文</p>" };
+    }
+    return fallback(path, init);
+  });
+  sharePage("/share/test/read");
+  await screen.findByRole("alert");
+  expect(attempts).toBe(0);
+  fireEvent.click(screen.getByRole("button", { name: "重新加载章节" }));
+  await screen.findByText("书源暂时不可用");
+  expect(attempts).toBe(1);
+  expect(screen.queryByText("加载中…")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "重新加载章节" }));
+  await screen.findByText("重试恢复的正文");
+  expect(attempts).toBe(2);
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+it("discards a pending share repair after switching content sources", async () => {
+  multipleSources();
+  const fallback = vi.mocked(api).getMockImplementation()!;
+  let finish!: (chapter: Chapter) => void;
+  vi.mocked(api).mockImplementation((path, init) => {
+    if (path === "/shares/test/chapters/0") return Promise.reject(new ApiError(404, "stored chapter"));
+    if (path === "/shares/test/chapters/0/retry" && init?.method === "POST") return new Promise(resolve => { finish = resolve; });
+    return fallback(path, init);
+  });
+  const { router } = sharePage("/share/test/read");
+  await screen.findByRole("alert");
+  fireEvent.click(screen.getByRole("button", { name: "重新加载章节" }));
+  await waitFor(() => expect(api).toHaveBeenCalledWith("/shares/test/chapters/0/retry", { method: "POST" }));
+  await act(() => router.navigate("/share/test/read?file_id=source-file"));
+  await screen.findByText("网络版序章正文");
+  await act(async () => finish({ idx: 0, title: "旧章节", content: "<p>旧来源补下载正文</p>" }));
+  expect(screen.queryByText("旧来源补下载正文")).toBeNull();
+  expect(screen.getByText("网络版序章正文")).toBeTruthy();
+  expect(vi.mocked(api).mock.calls.filter(([, init]) => init?.method)).toEqual([
+    ["/shares/test/chapters/0/retry", { method: "POST" }],
+  ]);
 });

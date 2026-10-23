@@ -420,6 +420,18 @@ pub async fn share_chapter(
     Ok(Json(st.library.get_chapter(&file, path.idx).await?))
 }
 
+// POST /api/shares/{token}/chapters/{idx}/retry --------------------------------------
+
+pub async fn retry_share_chapter(
+    State(st): State<St>,
+    Path(path): Path<ShareChapterPath>,
+    Query(query): Query<ShareFileQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let row = load_share(&st, &path.token).await?;
+    let file = selected_file(&st, &row, query.file_id.as_deref()).await?;
+    Ok(Json(st.library.retry_chapter(&file, path.idx).await?))
+}
+
 // DELETE /api/shares/{token} ------------------------------------------------------
 
 pub async fn delete_share(

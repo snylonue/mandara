@@ -177,6 +177,10 @@ pub fn router(state: St) -> Router {
             "/api/shares/{token}/chapters/{idx}",
             get(shares::share_chapter),
         )
+        .route(
+            "/api/shares/{token}/chapters/{idx}/retry",
+            post(shares::retry_share_chapter),
+        )
         .layer(DefaultBodyLimit::max(
             state.cfg.max_upload_mb as usize * 1024 * 1024,
         ))
