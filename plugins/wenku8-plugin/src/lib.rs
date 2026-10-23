@@ -32,7 +32,10 @@
 //!
 //! Images: plate URLs (插图 chapters and inline `（插图NNN）` marks) are
 //! downloaded by the plugin itself and stored through the host's
-//! `store-image` import; the chapter text references them as
+//! `store-image` import. Prose loads the plate page only when it contains
+//! an illustration mark and downloads only referenced images, once per
+//! URL per chapter; plate chapters still download all their images.
+//! The chapter text references them as
 //! `/api/images/{id}` (the canonical stored-image form). A failed
 //! download falls back to the remote URL.
 //!
@@ -749,7 +752,8 @@ fn parse_illustration_mark(text: &str, at: usize) -> Option<(u32, usize)> {
     if digits.is_empty() || !closed {
         return None;
     }
-    Some((digits.parse().ok()?, pos))
+    let number = digits.parse().ok()?;
+    (number > 0).then_some((number, pos))
 }
 
 /// Escape text for safe inclusion in HTML (text content and attribute
@@ -781,7 +785,15 @@ fn para_html(para: &str) -> String {
 /// fall back to appearance order; unresolved marks stay as literal text).
 /// The host stores `format: "html"` bodies verbatim, so this is the final
 /// markup the reader sees.
-fn prose_to_html(text: &str, urls: &[String]) -> String {
+fn prose_to_html_with_images(
+    text: &str,
+    load_urls: impl FnOnce() -> Vec<String>,
+    mut store_image: impl FnMut(&str) -> Option<String>,
+) -> String {
+    // Keep the original plate order for mark resolution, but fetch the
+    // plate page lazily and localize only URLs actually used by this chapter.
+    let urls = std::cell::LazyCell::new(load_urls);
+    let mut stored = std::collections::HashMap::<String, String>::new();
     let mut out = String::with_capacity(text.len() + 64);
     for para in text.split("\n\n") {
         // Accumulate escaped text lines; a figure flushes them as one <p>.
@@ -809,7 +821,10 @@ fn prose_to_html(text: &str, urls: &[String]) -> String {
                             seen as usize - 1
                         };
                         if let Some(url) = urls.get(idx) {
-                            out.push_str(&figure_html(url));
+                            let local = stored
+                                .entry(url.clone())
+                                .or_insert_with(|| store_image(url).unwrap_or_else(|| url.clone()));
+                            out.push_str(&figure_html(local));
                             out.push('\n');
                         } else {
                             buf.push_str(&rest[at..end]);
@@ -1168,12 +1183,10 @@ impl Guest for Wenku8Plugin {
             // host's text→HTML converter for text-format chapters so both
             // formats render identically.
             let text = tidy(&html_to_text(&inner));
-            prose_to_html(
+            prose_to_html_with_images(
                 &text,
-                &stored_urls(
-                    &config,
-                    &volume_illustration_urls(&config, &base, &book, &info.volumes, entry.volume),
-                ),
+                || volume_illustration_urls(&config, &base, &book, &info.volumes, entry.volume),
+                |url| store_image_ref(&config, url),
             )
         };
         // Content must be non-empty to be a real chapter (the host skips
@@ -1206,6 +1219,110 @@ export!(Wenku8Plugin);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn prose_to_html(text: &str, urls: &[String]) -> String {
+        prose_to_html_with_images(text, || urls.to_vec(), |url| Some(url.to_string()))
+    }
+
+    #[test]
+    fn prose_without_valid_marks_does_not_fetch_illustrations() {
+        for text in [
+            "正文没有插图。",
+            "（普通括号）[插图无数字](插图3",
+            "（插图000）",
+            "（插图4294967296）",
+        ] {
+            let out = prose_to_html_with_images(
+                text,
+                || panic!("unmarked prose must not fetch the plate page"),
+                |_| panic!("unmarked prose must not download images"),
+            );
+            assert_eq!(out, format!("<p>{text}</p>\n"));
+        }
+    }
+
+    #[test]
+    fn prose_fetches_only_referenced_plates_in_original_numbering() {
+        let mut page_fetches = 0;
+        let mut downloads = Vec::new();
+        let out = prose_to_html_with_images(
+            "前文（插图005）后文\n\n[插圖 2]\n(插画5)",
+            || {
+                page_fetches += 1;
+                (1..=16).map(|i| format!("https://a/{i}.jpg")).collect()
+            },
+            |url| {
+                downloads.push(url.to_string());
+                Some(format!("/api/images/{}", downloads.len()))
+            },
+        );
+        assert_eq!(page_fetches, 1);
+        assert_eq!(downloads, ["https://a/5.jpg", "https://a/2.jpg"]);
+        assert_eq!(
+            out,
+            "<p>前文</p>\n<figure><img src=\"/api/images/1\"/></figure>\n<p>后文</p>\n<figure><img src=\"/api/images/2\"/></figure>\n<figure><img src=\"/api/images/1\"/></figure>\n",
+        );
+    }
+
+    #[test]
+    fn prose_deduplicates_different_marks_resolving_to_the_same_url() {
+        let mut downloads = 0;
+        let out = prose_to_html_with_images(
+            "（插图001）（插图002）",
+            || vec!["https://a/shared.jpg".into(); 2],
+            |_| {
+                downloads += 1;
+                Some("/api/images/shared".into())
+            },
+        );
+        assert_eq!(downloads, 1);
+        assert_eq!(out.matches("/api/images/shared").count(), 2);
+    }
+
+    #[test]
+    fn failed_image_download_keeps_remote_url_without_repeating_it() {
+        let mut downloads = 0;
+        let out = prose_to_html_with_images(
+            "（插图001）\n\n（插图001）",
+            || vec!["https://a/1.jpg?x=1&y=2".into()],
+            |_| {
+                downloads += 1;
+                None
+            },
+        );
+        assert_eq!(downloads, 1);
+        assert_eq!(out.matches("https://a/1.jpg?x=1&amp;y=2").count(), 2);
+    }
+
+    #[test]
+    fn unavailable_plate_page_preserves_marks_without_image_downloads() {
+        let mut page_fetches = 0;
+        let out = prose_to_html_with_images(
+            "（插图005）\n（插图003）",
+            || {
+                page_fetches += 1;
+                Vec::new()
+            },
+            |_| panic!("missing plate URLs must not download images"),
+        );
+        assert_eq!(page_fetches, 1);
+        assert_eq!(out, "<p>（插图005）</p>\n<p>（插图003）</p>\n");
+    }
+
+    #[test]
+    fn fallback_marks_download_only_resolved_images() {
+        let mut downloads = Vec::new();
+        let out = prose_to_html_with_images(
+            "（插图009）（插图008）（插图007）",
+            || vec!["https://a/1.jpg".into(), "https://a/2.jpg".into()],
+            |url| {
+                downloads.push(url.to_string());
+                Some(url.to_string())
+            },
+        );
+        assert_eq!(downloads, ["https://a/1.jpg", "https://a/2.jpg"]);
+        assert!(out.contains("（插图007）"));
+    }
 
     #[test]
     fn sniffs_image_mimes() {

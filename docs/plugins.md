@@ -556,18 +556,20 @@ sessions, shares and archived original bytes. Colliding legacy items are kept.
   (color plates) chapter at the *end of every volume*; the plugin keeps it **in that
   original position** by default (`end`), or moves it to the volume
   front like the physical book / linovelib2epub (`front`), or drops it
-  (`skip`). Plates are extracted
-  as numbered image URLs, emitted one per line (`N. <url>`); the host
-  expands them into `<figure>` elements at the ingest boundary (see the
-  text chapter conventions above). Prose chapters also carry `（插图NNN）`
-  marks where the print book has a plate; the plugin resolves them to
-  the matching plate of that volume's 插图 chapter (001 → first plate,
-  `[插图005] https://…` inline, so the image appears where the text
-  references it). wenku8 rate-limits this server's IP under bursty
-  scraping (HTTP 429): transient 403/429/5xx/transport responses are
+  (`skip`). Plate chapters download all their images through `store-image`
+  and emit HTML `<figure>` elements. Prose chapters resolve `（插图NNN）`
+  marks against that volume's 插图 chapter (001 → first plate), retaining
+  the original numbering and inline position. The plate page is fetched
+  only when prose contains a valid mark, and only referenced images are
+  downloaded, once per URL per chapter. Failed downloads keep their remote
+  URL; unresolved marks remain literal text. wenku8 rate-limits this
+  server's IP under bursty scraping (HTTP 429): transient
+  403/429/5xx/transport responses are
   retried up to three times per request; a failed chapter read can be
   retried later and, once materialized, is served from the library DB.
-  Build: `./scripts/build-plugins.sh wenku8`.
+  Build: `./scripts/build-plugins.sh wenku8`. After building, run the
+  compiled-guest HTTP mock regression with
+  `cargo test -p mandara-plugin --test wenku8 -- --ignored`.
 
 ## Building & running the demos
 
