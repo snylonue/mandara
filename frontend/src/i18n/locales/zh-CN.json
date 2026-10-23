@@ -137,7 +137,14 @@
     "seriesContentEmpty": "此来源未返回可匹配的单卷，可更换来源或只创建系列书目。",
     "seriesContentPartial": "系列和书目已创建，但有 {{failed}} 卷的内容添加失败。成功的卷不会重复提交，可重试失败内容或关闭对话框。",
     "seriesRetryFailedContent": "重试失败内容",
-    "seriesCreateWithContent": "创建系列并添加内容"
+    "seriesCreateWithContent": "创建系列并添加内容",
+    "changeMetadata": "更换书目信息",
+    "metadataReady": "书目信息：已选择或填写",
+    "metadataMissing": "书目信息：尚未选择或填写",
+    "metadataFromFile": "书目信息：添加时从所选文件读取",
+    "metadataFromContent": "书目信息：添加时从所选内容读取",
+    "contentReady": "书籍内容：已选择 {{count}} 项",
+    "contentMissing": "书籍内容：尚未添加"
   },
   "book": {
     "filesTitle": "书籍内容（{{count}}）",
@@ -308,7 +315,11 @@
     "seriesSearchPlaceholder": "搜索系列名…",
     "seriesIdPlaceholder": "输入系列 ID（如网站系列书号）",
     "manualSeriesIdAlso": "输入系列 ID，查找后自动选中该系列：",
-    "noSeriesResults": "未找到系列条目，可直接输入系列 ID 查找。"
+    "noSeriesResults": "未找到系列条目，可直接输入系列 ID 查找。",
+    "lookupMethod": "获取方式",
+    "byId": "按 ID 获取",
+    "bySearch": "尝试搜索",
+    "viewDescription": "查看简介"
   },
   "series": {
     "volumes": "共 {{count}} 卷",

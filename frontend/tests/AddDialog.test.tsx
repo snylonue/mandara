@@ -141,6 +141,7 @@ it("creates from the selected metadata file even when another version was picked
 it("invalidates the selected metadata when switching plugin sources", async () => {
   dialog();
   const user = await pickMetadata();
+  await user.click(screen.getByRole("button", { name: "更换书目信息" }));
   const pane = document.querySelector(".source-search")! as HTMLElement;
   await user.selectOptions(within(pane).getByRole("combobox"), metadataOnly.id);
   expect(screen.queryByText("已选书目：《示例小说 第一卷》")).toBeNull();
@@ -194,7 +195,6 @@ it("attaches local and source content to the same selected plugin metadata", asy
   const add = screen.getByRole("button", { name: "添加此来源的内容" });
   await waitFor(() => expect((add as HTMLButtonElement).disabled).toBe(false));
   await user.click(add);
-  await user.click(screen.getByText("添加书籍内容"));
   const file = new File(["正文"], "另一版本.txt");
   fireEvent.change(screen.getByLabelText("上传文件"), { target: { files: [file] } });
   await user.click(screen.getByRole("button", { name: "添加 2 项内容" }));
@@ -235,7 +235,6 @@ it("acquires a listed Novelia file without asking for a constructed content ID",
   const user = userEvent.setup();
   await user.click(screen.getByLabelText("手动填写"));
   await user.type(screen.getByPlaceholderText("书名"), "本地书目");
-  await user.click(screen.getByText("添加书籍内容"));
   await user.selectOptions(screen.getByRole("combobox"), "novelia");
   await user.type(screen.getByLabelText("书籍 ID 或链接"), "series");
   await user.click(screen.getByRole("button", { name: "列出文件" }));
@@ -260,4 +259,19 @@ it("discards an in-flight preview after the metadata selection changes", async (
   await screen.findByText("来源提供 12 章正文，添加后在后台获取。");
   await userEvent.click(screen.getByRole("button", { name: "添加此来源的内容" }));
   expect(picked.mock.calls[0][0].item.id).toBe("3617:content1");
+});
+
+it("replaces metadata results with a compact confirmation and summarizes selected content", async () => {
+  dialog(); const user = await pickMetadata(metadataOnly);
+  expect(screen.queryByRole("button", { name: "使用此书目信息" })).toBeNull();
+  expect(screen.getByRole("button", { name: "更换书目信息" })).toBeTruthy();
+  expect(screen.getByText("书籍内容：尚未添加")).toBeTruthy();
+  expect(screen.getByText(/保存后暂时无法阅读/)).toBeTruthy();
+  const file = new File(["正文"], "本地.txt");
+  fireEvent.change(screen.getByLabelText("上传文件"), { target: { files: [file] } });
+  expect(screen.getByText("书籍内容：已选择 1 项")).toBeTruthy();
+  expect(screen.queryByText(/保存后暂时无法阅读/)).toBeNull();
+  await user.click(screen.getByRole("button", { name: "更换书目信息" }));
+  expect(screen.getByText("书籍内容：已选择 1 项")).toBeTruthy();
+  expect(screen.getByText("书目信息：尚未选择或填写")).toBeTruthy();
 });

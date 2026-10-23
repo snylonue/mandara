@@ -94,6 +94,67 @@
   border-bottom: 1px solid var(--border);
 }
 
+/* Keep identifiers readable and actions intact on narrow screens. */
+.source-result > div {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.source-result > button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.source-search select {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.source-search .row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.source-search .row button {
+  flex-shrink: 0;
+}
+
+.source-description summary {
+  cursor: pointer;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}
+
+.source-selection p,
+.add-summary p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.source-selection,
+.add-summary,
+.content-inputs {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.content-inputs h4 {
+  margin: 0;
+}
+
+.add-summary {
+  padding-block: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+
+@media (max-width: 480px) {
+  .source-result {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
 .series-match-row {
   padding: var(--space-3);
   border-bottom: 1px solid var(--border);

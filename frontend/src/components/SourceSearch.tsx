@@ -41,8 +41,8 @@ export type SourcePick = {
 /**
  * The acquisition affordances of a source. Search and manual-id entry
  * are independent: a source with both `search` and `lookup` capabilities
- * shows both (e.g. bangumi — search the catalog *and* enter an id
- * directly), while a `lookup`-only source shows just the manual entry
+ * offers ID entry first and search as an explicit alternative,
+ * while a `lookup`-only source shows just the manual entry
  * (wenku8-style) and a `declare`-only source offers nothing here.
  */
 export type SourceInteraction = {
@@ -141,6 +141,7 @@ export function SourceSearchPane(props: SourceSearchProps) {
   const [picking, setPicking] = useState<string | null>(null);
   const [pickError, setPickError] = useState<string | null>(null);
   const [manual, setManual] = useState("");
+  const [searchMode, setSearchMode] = useState(false);
   const [nextOffset, setNextOffset] = useState(0);
   const seq = useRef(0);
   useEffect(() => () => { ++seq.current; }, []);
@@ -148,12 +149,12 @@ export function SourceSearchPane(props: SourceSearchProps) {
 
   const selected = options.find((i) => i.id === sel);
   const interaction = selected ? sourceInteraction(selected) : null;
-  // Manual-id entry needs the source's `lookup` capability and is shown
-  // whenever the source has it — alongside the search box when the
-  // source also supports search (bangumi: search *and* direct id).
+  // ID lookup is primary; search is an explicit alternative when supported.
   const contentList = props.purpose === "content" && selected?.capabilities.includes("content-list");
-  const showSearch = !contentList && (interaction?.canSearch ?? false);
-  const showManualId = !contentList && (interaction?.canManualId ?? false);
+  const canSearch = !contentList && (interaction?.canSearch ?? false);
+  const canManualId = !contentList && (interaction?.canManualId ?? false);
+  const showSearch = canSearch && (searchMode || !canManualId);
+  const showManualId = canManualId && !showSearch;
 
   // Keep the selection valid when the instance list changes (e.g. after
   // registration in the admin page).
@@ -186,14 +187,16 @@ export function SourceSearchPane(props: SourceSearchProps) {
     props.onClear?.();
     setNextOffset(0);
     setPickError(null);
-    if (!sel || !showSearch) {
+    if (!sel || !showSearch || !q.trim()) {
       setLoading(false);
       setResult(null);
       setError(null);
       return;
     }
     setResult(null); // drop the previous page while the new search loads
-    void load(sel, q, 0);
+    setLoading(true);
+    const timer = window.setTimeout(() => void load(sel, q.trim(), 0), 300);
+    return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sel, q, showSearch, props.target]);
 
@@ -243,24 +246,27 @@ export function SourceSearchPane(props: SourceSearchProps) {
   return (
     <div className="source-search">
       <div className="row">
-        <select disabled={props.disabled} value={sel} onChange={(e) => setSel(e.target.value)}>
+        <select aria-label={t("plugin.chooseSource")} disabled={props.disabled || picking !== null} value={sel} onChange={(e) => {
+          ++seq.current; setSel(e.target.value); setManual(""); setQ(""); setSearchMode(false);
+        }}>
           <option value="">{t("plugin.chooseSource")}</option>
           {options.map((i) => (
             <option key={i.id} value={i.id}>
-              {i.name}（{i.id}）
+              {i.name === i.id ? i.name : `${i.name}（${i.id}）`}
             </option>
           ))}
         </select>
-        {sel && showSearch && selected && (
-          <input
-            className="search"
-            disabled={props.disabled}
-            placeholder={props.target === "series" ? t("plugin.seriesSearchPlaceholder") : searchPlaceholder(selected, t("plugin.searchPlaceholder"))}
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-          />
-        )}
       </div>
+      {canSearch && canManualId && <div className="row" role="group" aria-label={t("plugin.lookupMethod")}>
+        <button type="button" disabled={props.disabled || picking !== null} aria-pressed={!showSearch} onClick={() => setSearchMode(false)}>{t("plugin.byId")}</button>
+        <button type="button" className="btn link" disabled={props.disabled || picking !== null} aria-pressed={showSearch} onClick={() => setSearchMode(true)}>{t("plugin.bySearch")}</button>
+      </div>}
+      {showSearch && selected && <label className="field">
+        <span>{t("plugin.bySearch")}</span>
+        <input className="search" disabled={props.disabled || picking !== null}
+          placeholder={props.target === "series" ? t("plugin.seriesSearchPlaceholder") : searchPlaceholder(selected, t("plugin.searchPlaceholder"))}
+          value={q} onChange={(e) => setQ(e.target.value)} />
+      </label>}
 
       {contentList && selected && <ContentFilePicker
         key={selected.id} instance={selected} disabled={props.disabled} multiple={props.target === "series"}
@@ -275,20 +281,18 @@ export function SourceSearchPane(props: SourceSearchProps) {
           return props.onPick({ instance: selected, item: books[0] });
         }}
       />}
-      {error && <div className="error">{error}</div>}
+      {error && <div role="alert" className="error">{error}</div>}
       {loading && <p className="hint">{t("common.loading")}</p>}
       {!loading && !error && sel && result && items.length === 0 && (
         <p className="hint">{t(props.target === "series" ? "plugin.noSeriesResults" : "plugin.noResults")}</p>
       )}
       {showManualId && sel && selected && (
         <div className="field">
-          {props.target === "series" ? <p className="hint">{t("plugin.manualSeriesIdAlso")}</p> : <>
-            {!showSearch && <p className="hint">{t("plugin.noSearch")}</p>}
-            {showSearch && <p className="hint">{t("plugin.manualIdAlso")}</p>}
-          </>}
+          <p className="hint">{props.target === "series" ? t("plugin.manualSeriesIdAlso") : idHint(selected, t("plugin.manualIdAlso"))}</p>
           <div className="row">
             <input
-              disabled={props.disabled}
+              disabled={props.disabled || picking !== null}
+              onKeyDown={(event) => { if (event.key === "Enter" && !event.nativeEvent.isComposing && manual.trim() && !loading) { event.preventDefault(); void lookup(manual.trim()); } }}
               placeholder={props.target === "series" ? t("plugin.seriesIdPlaceholder") : idHint(selected, t("plugin.manualIdPlaceholder"))}
               value={manual}
               onChange={(e) => {
@@ -297,15 +301,12 @@ export function SourceSearchPane(props: SourceSearchProps) {
               }}
               aria-label={t(props.target === "series" ? "plugin.seriesIdPlaceholder" : "plugin.manualIdPlaceholder")}
             />
-            {manual.trim() && (
-              <button
-                className="btn link"
-                disabled={props.disabled || picking !== null || loading}
+            <button
+                disabled={props.disabled || picking !== null || loading || !manual.trim()}
                 onClick={() => void lookup(manual.trim())}
               >
                 {picking !== null ? t("common.loading") : t("plugin.useManualId")}
               </button>
-            )}
           </div>
         </div>
       )}
@@ -321,8 +322,8 @@ export function SourceSearchPane(props: SourceSearchProps) {
               {item.book_id && <span className="tag">{t("plugin.inLibrary")}</span>}
               <div className="hint">
                 {item.authors.join(" / ") || t("common.anonymous")}
-                {item.description ? ` · ${item.description}` : ""}
               </div>
+              {item.description && <details className="source-description"><summary>{t("plugin.viewDescription")}</summary><p className="hint">{item.description}</p></details>}
             </div>
             <button
               className="btn link"

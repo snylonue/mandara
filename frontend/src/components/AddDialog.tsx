@@ -519,20 +519,11 @@ export function AddDialog({
                 <p className="hint">{t("library.modeFileHint")}</p>
               </div>}
               {meta === "plugin" && <div className="field">
-                {metadataPane}
+                {!pluginMetaRef && metadataPane}
                 {pluginMetaRef && <div className="source-selection">
                   <p className="strong">{t("library.selectedBook", { title: pluginMetaRef.item.title })}</p>
                   <p className="hint">{pluginMetaRef.instance.name} · {pluginMetaRef.item.authors.join(" / ")}</p>
-                  {pluginMetaRef.item.description && <p className="hint">{pluginMetaRef.item.description}</p>}
-                  {(pluginMetaRef.instance.capabilities.includes("content") || pluginMetaRef.instance.capabilities.includes("book-file"))
-                    ? <PluginContentChoice
-                        key={pluginMetaRef.instance.id + ":" + pluginMetaRef.item.id}
-                        pick={pluginMetaRef}
-                        disabled={uploading}
-                        selectedIds={contents.filter((entry) => entry.pick?.instance.id === pluginMetaRef.instance.id).map((entry) => entry.pick!.item.id)}
-                        onPick={usePluginBook}
-                      />
-                    : <p className="hint">{t("library.sourceMetadataOnly")}</p>}
+                  <button className="btn link" autoFocus onClick={() => setPluginMetaRef(null)}>{t("library.changeMetadata")}</button>
                 </div>}
               </div>}
               {meta === "manual" && (
@@ -560,6 +551,16 @@ export function AddDialog({
 
             <section className="modal-section">
               <h3>{t("library.sectionAcquire")}</h3>
+              {meta === "plugin" && pluginMetaRef && (
+                (pluginMetaRef.instance.capabilities.includes("content") || pluginMetaRef.instance.capabilities.includes("book-file"))
+                  ? <PluginContentChoice
+                      key={pluginMetaRef.instance.id + ":" + pluginMetaRef.item.id}
+                      pick={pluginMetaRef} disabled={uploading}
+                      selectedIds={contents.filter((entry) => entry.pick?.instance.id === pluginMetaRef.instance.id).map((entry) => entry.pick!.item.id)}
+                      onPick={usePluginBook}
+                    />
+                  : <p className="hint">{t("library.sourceMetadataOnly")}</p>
+              )}
 
               {/* Per-item list with individual file settings */}
               {contents.length > 0 && (
@@ -595,8 +596,8 @@ export function AddDialog({
                 </div>
               )}
 
-              <details className="additional-content">
-                <summary>{t("library.otherContents")}</summary>
+              <div className="content-inputs">
+                <h4>{t("library.tabUpload")}</h4>
                 {/* Additional uploads share the same selected metadata. */}
                 <div className="field">
                   <label className="file-picker">
@@ -636,9 +637,8 @@ export function AddDialog({
                     onPick={(pick) => usePluginBook(pick)}
                   />
                 </div>
-              </details>
+              </div>
               <p className="hint">{t("library.contentBothHint")}</p>
-              {contentCount === 0 && <p className="hint">{t("library.tabMetaOnlyHint")}</p>}
             </section>
           </>
         ) : (
@@ -728,7 +728,14 @@ export function AddDialog({
           </>
         )}
 
-        {dialogError && <div className="error">{dialogError}</div>}
+        {inBookMode && <div className="add-summary" role="status" aria-live="polite">
+          <p>{meta === "plugin" ? t(pluginMetaRef ? "library.metadataReady" : "library.metadataMissing")
+            : meta === "file" ? t(metadataFile ? "library.metadataFromFile" : "library.metadataMissing")
+            : title.trim() ? t("library.metadataReady") : t(contentCount ? "library.metadataFromContent" : "library.metadataMissing")}</p>
+          <p>{t(contentCount ? "library.contentReady" : "library.contentMissing", { count: contentCount })}</p>
+          {contentCount === 0 && <p className="hint">{t("library.tabMetaOnlyHint")}</p>}
+        </div>}
+        {dialogError && <div role="alert" className="error">{dialogError}</div>}
         <div className="modal-actions">
           <button onClick={close}>{t("library.cancel")}</button>
           {inBookMode ? (
