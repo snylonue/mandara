@@ -93,8 +93,8 @@ export async function renderReaderScreenshot(options: ScreenshotOptions): Promis
   if (!ctx) throw new Error("canvas-unavailable");
   const { style } = options;
   const sections = await Promise.all([
-    { text: options.title, size: 30, lineHeight: 44, color: style.foreground, weight: 600 },
-    { text: options.chapter, size: 22, lineHeight: 34, color: style.muted, weight: 400 },
+    { text: options.title, size: 20, lineHeight: 30, color: style.foreground, weight: 600 },
+    { text: options.chapter, size: 18, lineHeight: 28, color: style.muted, weight: 400 },
     { text: passage ? undefined : options.text, image: passage, size: 28, lineHeight: 48, color: style.foreground, weight: 400 },
     { text: options.link, size: 20, lineHeight: 30, color: style.muted, weight: 400 },
   ].filter((section) => section.text || section.image).map(async (section) => {

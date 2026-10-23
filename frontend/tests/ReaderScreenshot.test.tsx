@@ -62,6 +62,22 @@ it("renders opaque PNG text with optional metadata and rejects excessive height 
   await expect(renderReaderScreenshot({ text: "行\n".repeat(300), style })).rejects.toThrow("selection-size");
 });
 
+it("keeps screenshot headings compact without resizing the EPUB passage", async () => {
+  const passage = document.createElement("canvas");
+  passage.width = 772;
+  passage.height = 600;
+  vi.spyOn(epubScreenshot, "renderEpubScreenshot").mockResolvedValue(passage);
+  const ctx = HTMLCanvasElement.prototype.getContext.call(document.createElement("canvas"), "2d")!;
+  const fonts: string[] = [];
+  drawn.mockImplementation(() => fonts.push(ctx.font));
+  try {
+    await renderReaderScreenshot({ text: "正文", document: "<p>正文</p>", title: "书名", chapter: "第 13 章", style });
+    expect(fonts).toEqual(["600 20px serif", "400 18px serif"]);
+    expect(drawn.mock.calls).toEqual([["书名", 64, 96], ["第 13 章", 64, 150]]);
+    expect(ctx.drawImage).toHaveBeenCalledWith(passage, 64, 202, 772, 600);
+  } finally { drawn.mockReset(); }
+});
+
 it("loads all selected font subsets before measuring and drawing a screenshot", async () => {
   let complete!: () => void;
   const pending = new Promise<FontFace[]>(resolve => { complete = () => resolve([]); });
@@ -74,7 +90,7 @@ it("loads all selected font subsets before measuring and drawing a screenshot", 
     const render = renderReaderScreenshot({ text: "罕见的选段文字", title: "书名", chapter: "章节", link: "https://example.com", style });
     await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(4));
     expect(load.mock.calls).toEqual([
-      ["600 30px serif", "书名"], ["400 22px serif", "章节"],
+      ["600 20px serif", "书名"], ["400 18px serif", "章节"],
       ["400 28px serif", "罕见的选段文字"], ["400 20px serif", "https://example.com"],
     ]);
     expect(measure).not.toHaveBeenCalled();
