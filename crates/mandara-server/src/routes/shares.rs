@@ -417,7 +417,7 @@ pub async fn share_chapter(
 ) -> Result<impl IntoResponse, ApiError> {
     let row = load_share(&st, &path.token).await?;
     let file = selected_file(&st, &row, query.file_id.as_deref()).await?;
-    Ok(Json(st.library.get_stored_chapter(&file, path.idx).await?))
+    Ok(Json(st.library.get_chapter(&file, path.idx).await?))
 }
 
 // DELETE /api/shares/{token} ------------------------------------------------------
