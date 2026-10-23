@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { Reader } from "../src/components/Reader";
+import * as epubScreenshot from "../src/epubScreenshot";
 import { MAX_SCREENSHOT_TEXT, renderReaderScreenshot, selectedChapterText, wrapScreenshotText } from "../src/readerScreenshot";
 
 const style = { background: "#fff", foreground: "#111", muted: "#666", accent: "#369", fontFamily: "serif" };
@@ -9,7 +10,7 @@ beforeEach(() => {
   localStorage.clear();
   HTMLElement.prototype.scrollTo = vi.fn();
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
-  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({ measureText: (s: string) => ({ width: s.length * 28 }), fillRect: vi.fn(), fillText: drawn } as unknown as CanvasRenderingContext2D);
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({ measureText: (s: string) => ({ width: s.length * 28 }), fillRect: vi.fn(), fillText: drawn, drawImage: vi.fn() } as unknown as CanvasRenderingContext2D);
   vi.spyOn(HTMLCanvasElement.prototype, "toBlob").mockImplementation(callback => callback(new Blob(["png"], { type: "image/png" })));
   Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => "blob:preview") });
   Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
@@ -106,16 +107,25 @@ it("captures just selected TXT text and clears stale selections after chapter na
   expect(screen.queryByRole("dialog")).toBeNull();
 });
 
-it("captures selected EPUB frame text without injecting publisher markup", async () => {
+it("captures styled EPUB markup without injecting publisher CSS into the app", async () => {
+  const passage = document.createElement("canvas");
+  passage.width = 772;
+  passage.height = 600;
+  const rasterize = vi.spyOn(epubScreenshot, "renderEpubScreenshot").mockResolvedValue(passage);
   const content = '<!doctype html><html><head><style>p{writing-mode:vertical-rl}</style></head><body><p>纵排正文摘录</p></body></html>';
   const { container } = render(<Reader title="测试书籍" chapters={[{ idx: 0, title: "第一章", linear: true }]} loadChapter={async () => ({ idx: 0, title: "第一章", content })} readOnly />);
   await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
   const frame = container.querySelector("iframe")!;
   const doc = frame.contentDocument!;
-  doc.body.innerHTML = "<p>纵排正文摘录</p>";
+  doc.head.innerHTML = "<style>p{writing-mode:vertical-rl;color:red}</style>";
+  doc.body.innerHTML = '<section class="publication"><p>纵排正文摘录</p><p>不应出现在截图</p></section>';
   fireEvent.load(frame);
   act(() => select(doc.querySelector("p")!.firstChild!, 2, 6));
   fireEvent.click(screen.getByRole("button", { name: "选段截图" }));
   await screen.findByAltText("所选文字截图预览");
-  expect(drawn.mock.calls.map(call => call[0])).toEqual(["测试书籍", "第一章", "正文摘录"]);
+  expect(drawn.mock.calls.map(call => call[0])).toEqual(["测试书籍", "第一章"]);
+  const snapshot = new DOMParser().parseFromString(rasterize.mock.lastCall![0], "text/html");
+  expect(snapshot.body.innerHTML).toBe('<section class="publication"><p>正文摘录</p></section>');
+  expect(snapshot.head.textContent).toContain("writing-mode:vertical-rl;color:red");
+  expect(document.head.textContent).not.toContain("writing-mode:vertical-rl;color:red");
 });
