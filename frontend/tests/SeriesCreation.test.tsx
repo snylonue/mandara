@@ -72,7 +72,7 @@ it("matches by returned order and submits independent confirmed content IDs with
   expect((screen.getByLabelText("元数据卷一对应的内容") as HTMLSelectElement).value).toBe("wenku8:candidate:1");
   expect(submissions).toHaveLength(0); expect(imports).toHaveLength(0);
   expect(screen.queryByLabelText("元数据卷一内容的可见性")).toBeNull();
-  expect(screen.getAllByText("插件内容始终公开，所有登录用户均可阅读。")).toHaveLength(2);
+  expect(screen.getAllByText("插件源提供的书籍内容始终公开，所有登录用户均可阅读。")).toHaveLength(2);
   await user.type(screen.getByLabelText("元数据卷一内容的备注"), "精校版");
   await user.click(screen.getByRole("button", { name: "创建系列并添加内容" }));
   await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
@@ -122,7 +122,7 @@ it("leaves missing volumes unmatched and ignores extra content", async () => {
   contentBooks = [book("candidate:1", "正文卷甲")];
   dialog(); const user = await pickMetadata(); await pickContent();
   expect((screen.getByLabelText("元数据卷二对应的内容") as HTMLSelectElement).value).toBe("");
-  expect(screen.getByText(/内容源有 1 卷/)).toBeTruthy();
+  expect(screen.getByText(/内容来源有 1 卷/)).toBeTruthy();
   await user.click(screen.getByRole("button", { name: "创建系列并添加内容" }));
   await waitFor(() => expect(onClose).toHaveBeenCalledOnce()); expect(submissions).toHaveLength(1);
 });
@@ -141,9 +141,9 @@ it("allows uploading local volume files and adjusting their order", async () => 
   await user.click(screen.getByLabelText("上传文件"));
   const first = new File(["正文甲"], "甲.epub", { type: "application/epub+zip" });
   const second = new File(["正文乙"], "乙.txt", { type: "text/plain" });
-  fireEvent.change(screen.getByLabelText("选择系列正文文件"), { target: { files: [first, second] } });
+  fireEvent.change(screen.getByLabelText("选择系列书籍文件"), { target: { files: [first, second] } });
   await user.selectOptions(screen.getByLabelText("元数据卷一对应的内容"), "file:1");
-  expect(screen.queryByText("插件内容始终公开，所有登录用户均可阅读。")).toBeNull();
+  expect(screen.queryByText("插件源提供的书籍内容始终公开，所有登录用户均可阅读。")).toBeNull();
   await user.selectOptions(screen.getByLabelText("元数据卷一内容的可见性"), "public");
   await user.click(screen.getByRole("button", { name: "创建系列并添加内容" }));
   await waitFor(() => expect(onClose).toHaveBeenCalledOnce());

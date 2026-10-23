@@ -212,7 +212,7 @@ it("supports reloading a deep reading URL for a non-default source", async () =>
 it("does not request an unselected source from a manipulated URL", async () => {
   sharePage("/share/test/read?file_id=private-file");
   await screen.findByRole("alert");
-  expect(screen.getByText("此内容源未包含在分享中")).toBeTruthy();
+  expect(screen.getByText("此书籍内容未包含在分享中")).toBeTruthy();
   expect(vi.mocked(api).mock.calls.map(([path]) => path)).toEqual(["/shares/test"]);
 });
 

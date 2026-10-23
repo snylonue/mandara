@@ -65,7 +65,7 @@ it("uses content discovery instead of metadata lookup in the content pane", asyn
   render(<SourceSearchPane purpose="content" instances={[source]} filter={() => true} onPick={onPick} />);
   await user.selectOptions(screen.getByRole("combobox"), source.id);
   expect(api).not.toHaveBeenCalled();
-  expect(screen.queryByLabelText("输入书目 ID")).toBeNull();
+  expect(screen.queryByLabelText("输入书籍 ID")).toBeNull();
   await user.type(screen.getByLabelText("书籍 ID 或链接"), "series");
   await user.click(screen.getByRole("button", { name: "列出文件" }));
   await screen.findByText(options[0].title);

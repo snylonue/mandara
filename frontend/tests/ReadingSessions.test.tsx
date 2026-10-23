@@ -137,12 +137,12 @@ it("refreshes sync sources without moving the current reading position", async (
   await screen.findByTestId("position");
   expect((screen.getByLabelText("选择同步来源") as HTMLSelectElement).disabled).toBe(false);
   expect((screen.getByRole("option", { name: "手机 · 本书暂无进度" }) as HTMLOptionElement).disabled).toBe(true);
-  expect(screen.getByText(/其他档案尚无当前书籍文件/).id).toBe(screen.getByLabelText("选择同步来源").getAttribute("aria-describedby"));
+  expect(screen.getByText(/其他档案尚无当前书籍内容/).id).toBe(screen.getByLabelText("选择同步来源").getAttribute("aria-describedby"));
   expect((screen.getByText("同步本书进度") as HTMLButtonElement).disabled).toBe(true);
   saved = [...saved, progress("phone", position(1, 0.1))];
   fireEvent.click(screen.getByText("刷新同步来源"));
   await waitFor(() => expect((screen.getByRole("option", { name: "手机 · 第 2 章" }) as HTMLOptionElement).disabled).toBe(false));
-  expect(screen.queryByText(/其他档案尚无当前书籍文件/)).toBeNull();
+  expect(screen.queryByText(/其他档案尚无当前书籍内容/)).toBeNull();
   fireEvent.change(screen.getByLabelText("选择同步来源"), { target: { value: "phone" } });
   expect((screen.getByText("同步本书进度") as HTMLButtonElement).disabled).toBe(false);
   expect(shown()).toEqual(position(4, 0.4));

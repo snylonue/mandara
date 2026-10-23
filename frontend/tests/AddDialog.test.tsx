@@ -42,9 +42,9 @@ async function pickMetadata(instance = source) {
   await user.click(screen.getByLabelText("从插件源选择"));
   const pane = document.querySelector(".source-search")! as HTMLElement;
   await user.selectOptions(within(pane).getByRole("combobox"), instance.id);
-  await user.type(within(pane).getByLabelText("输入书目 ID"), "3617");
+  await user.type(within(pane).getByLabelText("输入书籍 ID"), "3617");
   await user.click(within(pane).getByRole("button", { name: "查找" }));
-  await user.click(await within(pane).findByRole("button", { name: "作为元数据来源" }));
+  await user.click(await within(pane).findByRole("button", { name: "使用此书目信息" }));
   return user;
 }
 
@@ -58,7 +58,7 @@ it("adds confirmed source content without searching a second time and keeps per-
   await user.type(note, "精校版");
   expect(document.activeElement).toBe(note);
   expect(screen.queryByLabelText("可见性")).toBeNull();
-  expect(screen.getByText("插件内容始终公开，所有登录用户均可阅读。")).toBeTruthy();
+  expect(screen.getByText("插件源提供的书籍内容始终公开，所有登录用户均可阅读。")).toBeTruthy();
   expect((screen.getByRole("button", { name: "已选择此内容" }) as HTMLButtonElement).disabled).toBe(true);
   await user.click(screen.getByRole("button", { name: "添加书籍" }));
   await waitFor(() => expect(onAdded).toHaveBeenCalledOnce());
@@ -145,7 +145,7 @@ it("invalidates the selected metadata when switching plugin sources", async () =
   await user.selectOptions(within(pane).getByRole("combobox"), metadataOnly.id);
   expect(screen.queryByText("已选书目：《示例小说 第一卷》")).toBeNull();
   await user.click(screen.getByRole("button", { name: "仅添加书目" }));
-  expect(await screen.findByText("请先从插件源选择一本书作为元数据来源")).toBeTruthy();
+  expect(await screen.findByText("请先从插件源获取并选择书目信息")).toBeTruthy();
   expect(submitted).toHaveLength(0);
 });
 
@@ -174,7 +174,7 @@ it("can select a different content ID and retry after a transient error", async 
   await screen.findByText("来源暂时不可用");
   await user.click(screen.getByRole("button", { name: "重新确认" }));
   await screen.findByText("来源提供 12 章正文，添加后在后台获取。");
-  await user.click(screen.getByText("正文使用不同 ID？"));
+  await user.click(screen.getByText("书籍内容使用不同 ID？"));
   const input = screen.getByLabelText("内容 ID");
   await user.clear(input);
   await user.type(input, "independent-id");
@@ -194,7 +194,7 @@ it("attaches local and source content to the same selected plugin metadata", asy
   const add = screen.getByRole("button", { name: "添加此来源的内容" });
   await waitFor(() => expect((add as HTMLButtonElement).disabled).toBe(false));
   await user.click(add);
-  await user.click(screen.getByText("添加其他来源或版本"));
+  await user.click(screen.getByText("添加书籍内容"));
   const file = new File(["正文"], "另一版本.txt");
   fireEvent.change(screen.getByLabelText("上传文件"), { target: { files: [file] } });
   await user.click(screen.getByRole("button", { name: "添加 2 项内容" }));
@@ -235,7 +235,7 @@ it("acquires a listed Novelia file without asking for a constructed content ID",
   const user = userEvent.setup();
   await user.click(screen.getByLabelText("手动填写"));
   await user.type(screen.getByPlaceholderText("书名"), "本地书目");
-  await user.click(screen.getByText("添加其他来源或版本"));
+  await user.click(screen.getByText("添加书籍内容"));
   await user.selectOptions(screen.getByRole("combobox"), "novelia");
   await user.type(screen.getByLabelText("书籍 ID 或链接"), "series");
   await user.click(screen.getByRole("button", { name: "列出文件" }));

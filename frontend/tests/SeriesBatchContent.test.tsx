@@ -83,7 +83,7 @@ it("selects empty volumes by default and attaches confirmed content using local 
   const before = structuredClone(books.map((entry) => entry.book));
   const user = await chooseContent();
   expect(screen.queryByLabelText("第2卷 · 卷二内容的可见性")).toBeNull();
-  expect(screen.getAllByText("插件内容始终公开，所有登录用户均可阅读。")).toHaveLength(2);
+  expect(screen.getAllByText("插件源提供的书籍内容始终公开，所有登录用户均可阅读。")).toHaveLength(2);
   await user.type(screen.getByLabelText(names[1] + "内容的备注"), " 精校版 ");
   expect(submitted).toHaveLength(0);
   await user.click(screen.getByRole("button", { name: "添加 2 卷内容" }));
@@ -124,7 +124,7 @@ it("skips unmatched existing volumes without importing metadata", async () => {
 it("maps uploaded files to existing members and preserves their titles and order", async () => {
   dialog(); const user = userEvent.setup(); await user.click(screen.getByLabelText("上传文件"));
   const files = [new File(["甲"], "甲.txt"), new File(["乙"], "乙.txt")];
-  fireEvent.change(screen.getByLabelText("选择系列正文文件"), { target: { files } });
+  fireEvent.change(screen.getByLabelText("选择系列书籍文件"), { target: { files } });
   await user.selectOptions(match(2), "file:0"); await user.selectOptions(match(3), "file:1");
   await user.click(screen.getByRole("button", { name: "添加 2 卷内容" }));
   await waitFor(() => expect(onClose).toHaveBeenCalledOnce());

@@ -143,7 +143,7 @@ it("only offers visibility editing for uploads, including when a plugin provides
   fireEvent.click(screen.getByRole("button", { name: "添加内容" }));
   const modal = await screen.findByRole("dialog", { name: "添加内容到本书" });
   expect((within(modal).getByLabelText("可见性") as HTMLSelectElement).value).toBe("private");
-  fireEvent.click(within(modal).getByLabelText("从插件源"));
+  fireEvent.click(within(modal).getByLabelText("从插件源获取"));
   expect(within(modal).queryByLabelText("可见性")).toBeNull();
-  expect(within(modal).getByText("插件内容始终公开，所有登录用户均可阅读。")).toBeTruthy();
+  expect(within(modal).getByText("插件源提供的书籍内容始终公开，所有登录用户均可阅读。")).toBeTruthy();
 });
