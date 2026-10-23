@@ -21,7 +21,7 @@ it("lists filenames from only a book reference and returns the exact selected id
   const onPick = vi.fn();
   const user = userEvent.setup();
   render(<ContentFilePicker instance={source} onPick={onPick} />);
-  await user.type(screen.getByLabelText("书籍 ID 或链接"), "https://n.novelia.cc/wenku/series");
+  await user.type(screen.getByLabelText("书籍 ID"), "https://n.novelia.cc/wenku/series");
   await user.click(screen.getByRole("button", { name: "列出文件" }));
   await screen.findByText(options[0].title);
   expect(screen.queryByText(options[0].id)).toBeNull();
@@ -38,7 +38,7 @@ it("ignores stale results after editing the book reference", async () => {
   let finish!: (value: PluginContentOption[]) => void;
   vi.mocked(api).mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
   render(<ContentFilePicker instance={source} onPick={vi.fn()} />);
-  const input = screen.getByLabelText("书籍 ID 或链接");
+  const input = screen.getByLabelText("书籍 ID");
   fireEvent.change(input, { target: { value: "old" } });
   fireEvent.click(screen.getByRole("button", { name: "列出文件" }));
   fireEvent.change(input, { target: { value: "new" } });
@@ -51,7 +51,7 @@ it("distinguishes an empty book from lookup failure and permits retry", async ()
   vi.mocked(api).mockRejectedValueOnce(new ApiError(404, "missing")).mockResolvedValueOnce([]);
   const user = userEvent.setup();
   render(<ContentFilePicker instance={source} onPick={vi.fn()} />);
-  await user.type(screen.getByLabelText("书籍 ID 或链接"), "series");
+  await user.type(screen.getByLabelText("书籍 ID"), "series");
   await user.click(screen.getByRole("button", { name: "列出文件" }));
   await screen.findByRole("alert");
   await user.click(screen.getByRole("button", { name: "列出文件" }));
@@ -66,7 +66,7 @@ it("uses content discovery instead of metadata lookup in the content pane", asyn
   await user.selectOptions(screen.getByRole("combobox"), source.id);
   expect(api).not.toHaveBeenCalled();
   expect(screen.queryByLabelText("输入书籍 ID")).toBeNull();
-  await user.type(screen.getByLabelText("书籍 ID 或链接"), "series");
+  await user.type(screen.getByLabelText("书籍 ID"), "series");
   await user.click(screen.getByRole("button", { name: "列出文件" }));
   await screen.findByText(options[0].title);
   await user.click(within(screen.getAllByRole("listitem")[0]).getByRole("button"));
@@ -93,7 +93,7 @@ it("matches listed files to local volumes without exposing internal IDs", async 
   render(<SeriesContentMatch targets={[{ id: "local-1", title: "本地第一卷" }, { id: "local-2", title: "本地第二卷" }]}
     selectedIds={["local-1", "local-2"]} instances={[source]} disabled={false} completedIds={[]} failures={{}} onChange={onChange} />);
   await user.selectOptions(screen.getAllByRole("combobox")[0], source.id);
-  await user.type(screen.getByLabelText("书籍 ID 或链接"), "series");
+  await user.type(screen.getByLabelText("书籍 ID"), "series");
   await user.click(screen.getByRole("button", { name: "列出文件" }));
   await user.click(await screen.findByRole("button", { name: "使用这些文件并匹配卷册" }));
   await waitFor(() => expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ ready: true, assignments: [
@@ -109,9 +109,33 @@ it("offers all available files for explicit series matching without metadata imp
   const onPick = vi.fn();
   render(<SourceSearchPane purpose="content" target="series" instances={[source]} filter={() => true} onPick={onPick} onClear={vi.fn()} />);
   await user.selectOptions(screen.getByRole("combobox"), source.id);
-  await user.type(screen.getByLabelText("书籍 ID 或链接"), "series");
+  await user.type(screen.getByLabelText("书籍 ID"), "series");
   await user.click(screen.getByRole("button", { name: "列出文件" }));
   await user.click(await screen.findByRole("button", { name: "使用这些文件并匹配卷册" }));
   expect(onPick.mock.calls[0][0].books.map((book: { id: string }) => book.id)).toEqual(options.slice(0, 2).map((option) => option.id));
   expect(api).toHaveBeenCalledOnce();
+});
+
+it.each([404, 403, 502])("preserves API details for HTTP %s and retries the same reference", async (status) => {
+  const message = "插件返回的具体错误";
+  vi.mocked(api).mockRejectedValueOnce(new ApiError(status, message)).mockResolvedValueOnce(options);
+  const user = userEvent.setup();
+  render(<ContentFilePicker instance={source} onPick={vi.fn()} />);
+  await user.type(screen.getByLabelText("书籍 ID"), "series{Enter}");
+  const alert = await screen.findByRole("alert");
+  expect(within(alert).getByText(message)).toBeTruthy();
+  await user.click(within(alert).getByRole("button", { name: "重试" }));
+  await screen.findByText(options[0].title);
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(vi.mocked(api).mock.calls.map(([path]) => path)).toEqual([
+    "/plugins/novelia/content-options?q=series", "/plugins/novelia/content-options?q=series",
+  ]);
+});
+
+it("uses provider hints without promising universal link or web-ID support", () => {
+  const view = render(<ContentFilePicker instance={source} onPick={vi.fn()} />);
+  expect(screen.queryByText(/web:来源:书号/)).toBeNull();
+  const hint = "此来源支持书籍 ID 和本站书籍链接";
+  view.rerender(<ContentFilePicker instance={{ ...source, source_info: { kind: "manual-id", id_hint: hint } }} onPick={vi.fn()} />);
+  expect(screen.getByText(hint)).toBeTruthy();
 });

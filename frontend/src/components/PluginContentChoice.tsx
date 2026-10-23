@@ -1,7 +1,7 @@
 // Confirm candidate content independently of metadata before offering acquisition.
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { api, ApiError } from "../api";
+import { api } from "../api";
 import type { PluginContentPreview } from "../types";
 import type { SourcePick } from "./SourceSearch";
 import { ContentFilePicker } from "./ContentFilePicker";
@@ -50,9 +50,7 @@ function DeclaredContentChoice({ pick, disabled, selectedIds, onPick }: {
         { signal: controller.signal },
       ).then((value) => { if (!controller.signal.aborted) setPreview(value); })
         .catch((err) => {
-          if (!controller.signal.aborted) setError(err instanceof ApiError && err.status === 404
-            ? t("library.sourceContentUnavailable")
-            : err instanceof Error ? err.message : t("common.failed"));
+          if (!controller.signal.aborted) setError(err instanceof Error && err.message ? err.message : t("common.failed"));
         })
         .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     }, 250);

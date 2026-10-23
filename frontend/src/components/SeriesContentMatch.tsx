@@ -1,7 +1,7 @@
 // Match independent content candidates to explicitly selected metadata members.
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { api, ApiError } from "../api";
+import { api } from "../api";
 import type { BookMeta, PluginContentPreview, PluginInstance, Visibility } from "../types";
 import { SourceSearchPane, type SeriesSourcePick } from "./SourceSearch";
 
@@ -48,8 +48,7 @@ function CandidatePreview({ candidate, disabled, patch, load }: {
         .catch((error) => {
           if (!controller.signal.aborted) patch(candidate.key, {
             loading: false,
-            error: error instanceof ApiError && error.status === 404 ? t("library.sourceContentUnavailable")
-              : error instanceof Error ? error.message : t("common.failed"),
+            error: error instanceof Error && error.message ? error.message : t("common.failed"),
           }, candidate);
         });
     }, 250);

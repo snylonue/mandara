@@ -1,7 +1,7 @@
 // Enumerate source-owned content choices; users never construct content IDs.
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { api, ApiError } from "../api";
+import { api } from "../api";
 import type { PluginContentOption, PluginInstance } from "../types";
 
 export function ContentFilePicker({ instance, initialReference = "", disabled = false, selectedIds = [], multiple = false, onPick, onClear, onLoadingChange }: {
@@ -34,8 +34,7 @@ export function ContentFilePicker({ instance, initialReference = "", disabled = 
       const options = await api<PluginContentOption[]>("/plugins/" + encodeURIComponent(instance.id) + "/content-options?" + params, { signal: controller.signal });
       if (!controller.signal.aborted) setItems(options);
     } catch (err) {
-      if (!controller.signal.aborted) setError(err instanceof ApiError && err.status === 404
-        ? t("plugin.contentBookUnavailable") : err instanceof Error ? err.message : t("common.failed"));
+      if (!controller.signal.aborted) setError(err instanceof Error && err.message ? err.message : t("common.failed"));
     } finally {
       if (!controller.signal.aborted) setLoading(false);
     }
@@ -56,17 +55,22 @@ export function ContentFilePicker({ instance, initialReference = "", disabled = 
   }
   const available = (items ?? []).filter((item) => item.available);
   return <div className="content-file-picker">
-    <p className="hint">{t("plugin.contentBookHint")}</p>
+    <p className="hint">{instance.source_info?.id_hint?.trim() || t("plugin.contentBookHint")}</p>
     <div className="row">
       <input aria-label={t("plugin.contentBookReference")} placeholder={t("plugin.contentBookReference")}
-        value={reference} disabled={disabled || picking} onChange={(event) => {
+        value={reference} disabled={disabled || picking}
+        onKeyDown={(event) => { if (event.key === "Enter" && !event.nativeEvent.isComposing && reference.trim() && !loading) { event.preventDefault(); void load(reference); } }} onChange={(event) => {
           request.current?.abort(); setLoading(false); setItems(null); setError(null);
           setReference(event.target.value); onClear?.();
         }} />
       <button disabled={disabled || picking || loading || !reference.trim()} onClick={() => void load(reference)}>{t("plugin.listContentFiles")}</button>
     </div>
     {loading && <p role="status" className="hint">{t("common.loading")}</p>}
-    {error && <p role="alert" className="error">{error}</p>}
+    {error && <div role="alert" className="error">
+      <p>{t("plugin.contentRequestFailed")}</p>
+      <p>{error}</p>
+      <button disabled={disabled || picking || loading || !reference.trim()} onClick={() => void load(reference)}>{t("common.retry")}</button>
+    </div>}
     {items?.length === 0 && <p className="hint">{t("plugin.noContentFiles")}</p>}
     {multiple && available.length > 0 && <button disabled={disabled || picking} onClick={() => void choose(available)}>{t("plugin.useContentFiles")}</button>}
     <ul className="source-results">

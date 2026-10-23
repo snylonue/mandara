@@ -156,7 +156,7 @@ it("allows metadata-only submission when a content candidate is unavailable", as
     ? Promise.reject(new ApiError(404, "not found")) : implementation(path, init));
   dialog();
   const user = await pickMetadata();
-  await screen.findByText(/此 ID 暂无可用内容/);
+  await screen.findByText("not found");
   expect((screen.getByRole("button", { name: "添加此来源的内容" }) as HTMLButtonElement).disabled).toBe(true);
   await user.click(screen.getByRole("button", { name: "仅添加书目" }));
   await waitFor(() => expect(submitted).toHaveLength(1));
@@ -236,7 +236,7 @@ it("acquires a listed Novelia file without asking for a constructed content ID",
   await user.click(screen.getByLabelText("手动填写"));
   await user.type(screen.getByPlaceholderText("书名"), "本地书目");
   await user.selectOptions(screen.getByRole("combobox"), "novelia");
-  await user.type(screen.getByLabelText("书籍 ID 或链接"), "series");
+  await user.type(screen.getByLabelText("书籍 ID"), "series");
   await user.click(screen.getByRole("button", { name: "列出文件" }));
   await user.click(await screen.findByRole("button", { name: "选择此文件" }));
   expect(screen.queryByText(selectedId)).toBeNull();

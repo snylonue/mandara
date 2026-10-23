@@ -15,7 +15,8 @@
     "chapters": "章",
     "chaptersTotal": "共 {{count}} 章",
     "anonymous": "佚名",
-    "close": "关闭"
+    "close": "关闭",
+    "retry": "重试"
   },
   "auth": {
     "loginTitle": "登录",
@@ -64,7 +65,6 @@
     "sourceMetadataOnly": "此插件源仅提供书目信息，可在下方添加书籍内容，也可仅保存书目。",
     "sourceContentHint": "此插件源也提供书籍内容，可选择添加，或仅保存书目。",
     "checkingSourceContent": "正在确认此条目的内容…",
-    "sourceContentUnavailable": "此 ID 暂无可用内容。书目信息仍可添加；如果书籍内容使用不同 ID，可修改内容 ID，或选择其他来源。",
     "sourceContentFile": "来源提供整本文件，添加时读取正文。",
     "sourceContentChapters": "来源提供 {{count}} 章正文，添加后在后台获取。",
     "addSourceContent": "添加此来源的内容",
@@ -271,14 +271,13 @@
     "unsharedFile": "此书籍内容未包含在分享中"
   },
   "plugin": {
-    "contentBookReference": "书籍 ID 或链接",
-    "contentBookHint": "输入文库书籍 ID 或粘贴书籍链接，列出文件后直接选择；网络小说也可使用 web:来源:书号。",
+    "contentBookReference": "书籍 ID",
+    "contentBookHint": "输入当前插件源中的书籍 ID，获取列表后选择书籍内容。其他输入格式以插件源说明为准。",
     "listContentFiles": "列出文件",
     "chooseContentFile": "选择此文件",
     "useContentFiles": "使用这些文件并匹配卷册",
     "noContentFiles": "这本书下还没有文件。",
-    "contentBookUnavailable": "未找到书籍或无法读取文件列表，请检查 ID、链接和来源配置。",
-    "contentFileUnavailable": "当前译文设置下不可用",
+    "contentFileUnavailable": "此书籍内容暂不可用",
     "chooseSource": "选择插件源…",
     "searchPlaceholder": "搜索书名 / 作者…",
     "noResults": "没有更多结果",
@@ -319,7 +318,8 @@
     "lookupMethod": "获取方式",
     "byId": "按 ID 获取",
     "bySearch": "尝试搜索",
-    "viewDescription": "查看简介"
+    "viewDescription": "查看简介",
+    "contentRequestFailed": "未能获取书籍内容列表。可重试，或按上方插件源说明修改输入。"
   },
   "series": {
     "volumes": "共 {{count}} 卷",

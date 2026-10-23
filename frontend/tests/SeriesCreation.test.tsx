@@ -155,9 +155,9 @@ it("allows uploading local volume files and adjusting their order", async () => 
 
 it("blocks unconfirmed content but permits skipping an unavailable candidate", async () => {
   const original = handler;
-  handler = (path, init) => path.includes("/content?") ? Promise.reject(new ApiError(404, { error: "Unavailable" })) : original(path, init);
+  handler = (path, init) => path.includes("/content?") ? Promise.reject(new ApiError(404, "not found")) : original(path, init);
   dialog(); const user = await pickMetadata(); await pickSeries(contentPane(), contentSource);
-  await screen.findAllByText(/此 ID 暂无可用内容/);
+  await screen.findAllByText("not found");
   expect((screen.getByRole("button", { name: "新建系列", exact: true }) as HTMLButtonElement).disabled).toBe(true);
   await user.click(screen.getByRole("button", { name: "不添加内容", exact: true }));
   await user.click(screen.getByRole("button", { name: "新建系列", exact: true }));

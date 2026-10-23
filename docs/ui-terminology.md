@@ -21,3 +21,11 @@ This glossary is the shared vocabulary for all zh-CN product surfaces. UI copy l
 - Use 仅添加书目 when no content is selected; explain that reading is not yet available.
 - Prefer source + ID as the primary acquisition path when lookup is supported. Search is an optional capability, not a universal prerequisite.
 - Preserve API error messages; do not infer a cause from an HTTP status alone. Plugin failures that provide no details cannot be diagnosed by frontend copy. Do not expose private server logs to compensate.
+
+## Current plugin error boundary
+
+The WIT `list-content` export returns an optional list, not a structured error. Novelia returns no list for several failures (including invalid references and failed upstream requests), with some details available only in server logs. The HTTP content-options route converts that absence into a 404 with `plugin content list`. Runtime errors remain sanitized internal errors.
+
+The frontend must retain the HTTP API error message, including on 404, and offer retry without inventing a more specific cause. Empty successful lists are a separate state. Source-specific accepted ID or URL formats come from `source_info.id_hint`, not a shared Novelia-specific hint.
+
+Detailed end-user plugin diagnostics would require a separate error contract across the plugin interface, host and HTTP API; this UI does not claim to provide them.
