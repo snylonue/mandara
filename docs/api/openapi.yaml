@@ -1202,6 +1202,52 @@ paths:
           $ref: "#/components/responses/NotFound"
 
 
+  /api/files/{id}/chapters/{idx}/retry:
+    post:
+      tags: [files]
+      summary: Retry a missing chapter body
+      description: |
+        Explicit user action, available to authenticated users who can read the file.
+        Returns an already stored body unchanged (including empty bodies). Otherwise
+        downloads and persists the declared chapter before returning it, sharing
+        in-flight downloads and the acquisition concurrency limit. Chapter-mode
+        retries preserve other cached bodies without refreshing metadata or titles.
+        File-mode retries rebuild the parsed book through the retained original or
+        declared file provider, using the same loader as acquisition.
+        Undeclared indices return 404 without contacting the source. Public share
+        reads remain storage-only and cannot initiate retries.
+      operationId: retryChapter
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/FileId"
+        - name: idx
+          in: path
+          required: true
+          description: Zero-based stored chapter index
+          schema:
+            type: integer
+            minimum: 0
+      responses:
+        "200":
+          description: Persisted chapter content
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Chapter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          description: Content download failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /api/images/{id}:
     get:
       tags: [files]

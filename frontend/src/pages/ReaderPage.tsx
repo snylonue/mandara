@@ -161,6 +161,7 @@ export function ReaderPage() {
         return new URL(share.url.replace(/\/$/, "") + "/read", location.origin).href;
       }}
       loadChapter={idx => api<Chapter>("/files/" + id + "/chapters/" + idx)}
+      retryChapter={idx => api<Chapter>("/files/" + id + "/chapters/" + idx + "/retry", { method: "POST" })}
       initialPosition={initialPosition} onProgress={save}
     />
   </div>;

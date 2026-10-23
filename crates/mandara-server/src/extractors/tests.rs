@@ -20,6 +20,7 @@ use crate::service::{Library, plugins::PluginService};
 use crate::state::{AppState, St};
 use crate::test_support::tempdir;
 
+mod chapter_retry;
 mod numbers;
 mod plugin_visibility;
 mod sessions;

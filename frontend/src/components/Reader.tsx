@@ -10,6 +10,7 @@ import {
   useReaderSettings,
 } from "./ReaderSettings";
 import type { Chapter, ChapterMeta, Position, TocNode } from "../types";
+import { ApiError } from "../api";
 
 // Keep native selections intact when reader controls or scroll progress rerender.
 const TextChapterContent = memo(function TextChapterContent({ content }: { content: string }) {
@@ -21,6 +22,8 @@ interface ReaderProps {
   chapters: ChapterMeta[];
   /** Read a stored chapter by index; the request does not fetch from its source. */
   loadChapter: (idx: number) => Promise<Chapter>;
+  /** Explicit user retry may fill a missing body; public readers only reread storage. */
+  retryChapter?: (idx: number) => Promise<Chapter>;
   /** Initial position to restore. */
   initialPosition?: Position;
   /** Called (debounced) with the reader's current scroll fraction. */
@@ -42,6 +45,7 @@ export function Reader({
   chapters,
   toc,
   loadChapter,
+  retryChapter,
   initialPosition,
   onProgress,
   readOnly,
@@ -141,13 +145,16 @@ export function Reader({
     if (cached) display(cached);
     else {
       setLoading(true);
-      void loadChapter(idx).then((c) => {
+      const load = loadAttempt > 0 && retryChapter ? retryChapter : loadChapter;
+      void load(idx).then((c) => {
         loadedRef.current.set(idx, c);
         display(c);
       }).catch((error: unknown) => {
         if (cancelled) return;
         setLoading(false);
-        setLoadError(error instanceof Error ? error.message : t("common.failed"));
+        setLoadError(error instanceof ApiError && error.status === 404
+          ? t(retryChapter ? "reader.chapterNotCached" : "reader.sharedChapterNotCached")
+          : error instanceof Error ? error.message : t("common.failed"));
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -190,6 +197,7 @@ export function Reader({
       setSelection(null);
       setScreenshotHint(false);
       setIdx(clamped);
+      setLoadAttempt(0);
       setFraction(0);
       pendingFragRef.current = frag ?? null;
     },
