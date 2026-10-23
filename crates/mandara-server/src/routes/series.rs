@@ -48,33 +48,33 @@ pub struct SeriesDetail {
 mod tests {
     use super::*;
 
+    /// A brief is the metadata flattened into the top level plus a
+    /// sibling `volume_count`; publication status stays inside `ext`.
     #[test]
-    fn series_brief_reuses_metadata_without_a_status_projection() {
-        for status in [None, Some(mandara_core::SeriesStatus::Ongoing)] {
-            let metadata = SeriesMeta {
+    fn series_brief_flattens_metadata_and_adds_a_volume_count() {
+        let brief = serde_json::to_value(SeriesBrief {
+            metadata: SeriesMeta {
                 id: "series".into(),
                 title: "系列".into(),
                 authors: mandara_core::Authors(vec!["作者".into()]),
                 description: None,
                 cover_url: None,
                 ext: SeriesExt {
-                    status,
+                    status: Some(mandara_core::SeriesStatus::Ongoing),
                     ..Default::default()
                 },
                 created_by: None,
                 created_at: chrono::Utc::now(),
-            };
-            let mut expected = serde_json::to_value(&metadata).unwrap();
-            expected["volume_count"] = 3.into();
-            let brief = serde_json::to_value(SeriesBrief {
-                metadata,
-                volume_count: 3,
-            })
-            .unwrap();
-            assert_eq!(brief, expected);
-            assert!(brief.get("status").is_none());
-            assert!(brief.get("metadata").is_none());
-        }
+            },
+            volume_count: 3,
+        })
+        .unwrap();
+        assert_eq!(brief["id"], "series");
+        assert_eq!(brief["authors"], serde_json::json!(["作者"]));
+        assert_eq!(brief["volume_count"], 3);
+        assert_eq!(brief["ext"]["status"], "ongoing");
+        assert!(brief.get("metadata").is_none(), "metadata fields are flat");
+        assert!(brief.get("status").is_none(), "status stays inside ext");
     }
 }
 

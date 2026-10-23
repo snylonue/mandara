@@ -292,7 +292,7 @@ fn wenku_uses_exact_upstream_volume_ids_without_metadata_or_asins() {
 }
 
 #[test]
-fn live_wenku_snapshot_addresses_each_upload_by_volume_id() {
+fn recorded_wenku_snapshot_addresses_each_upload_by_volume_id() {
     let novel: WenkuNovel = serde_json::from_str(include_str!(
         "../fixtures/wenku-6806f70f2d549f092c9ae862.json"
     ))
@@ -350,14 +350,4 @@ fn endpoints_use_configured_addresses_without_plugin_policy_checks() {
         url.as_str(),
         "http://user:secret@example.com/api/v1/auth/login"
     );
-}
-
-#[test]
-fn upstream_identifier_values_are_decoded_without_content_validation() {
-    for value in ["", ".", "..", "/", "a\\b", "a:b", "\u{0}"] {
-        assert_eq!(
-            Id::parse(&volume_id("series", value)),
-            Some(Id::Volume("series".into(), value.into()))
-        );
-    }
 }

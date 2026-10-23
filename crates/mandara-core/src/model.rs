@@ -315,7 +315,7 @@ mod tests {
     /// `in_chapter` is `{"fraction": 0.5}` or `{"offset": 120}`, never a
     /// bare number (which cannot tell the two channels apart).
     #[test]
-    fn legacy_chapter_metadata_defaults_to_linear() {
+    fn chapter_metadata_defaults_to_linear() {
         let meta: ChapterMeta = serde_json::from_str(r#"{"idx":0,"title":"正文"}"#).unwrap();
         assert!(meta.linear);
         let aux: ChapterMeta =

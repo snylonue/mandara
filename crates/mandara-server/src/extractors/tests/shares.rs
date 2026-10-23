@@ -36,7 +36,7 @@ async fn selected_versions_are_public_but_unselected_content_never_leaks() {
     let f = fixture().await;
     let image = crate::service::library::store_image(
         &f.state.diesel_db,
-        &f.dir.join("files"),
+        &f.dir.path().join("files"),
         b"illustration-fixture",
         "image/png",
     )

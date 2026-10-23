@@ -35,7 +35,7 @@ fn book(id: &str) -> CatalogEntry {
 
 #[tokio::test]
 async fn metadata_only_acquisition_returns_one_book_without_a_file() {
-    let (library, _, dir) = download_fixture().await;
+    let (library, _, _dir) = download_fixture().await;
     library.diesel_db.get().await.unwrap().batch_execute(
         "INSERT INTO users (id, username, password_hash, role) VALUES ('admin', '管理员', '', 'admin');",
     ).await.unwrap();
@@ -74,12 +74,11 @@ async fn metadata_only_acquisition_returns_one_book_without_a_file() {
         serde_json::to_value(outcome.book).unwrap()
     );
     assert!(entry.files.is_empty());
-    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[tokio::test]
 async fn series_by_ids_preserves_order_duplicates_and_missing_ids_across_batches() {
-    let (library, _, dir) = download_fixture().await;
+    let (library, _, _dir) = download_fixture().await;
     library
         .diesel_db
         .get()
@@ -117,12 +116,11 @@ async fn series_by_ids_preserves_order_duplicates_and_missing_ids_across_batches
     let mut empty = std::pin::pin!(library.series_by_ids([]));
     assert!(empty.try_next().await.unwrap().is_none());
     assert_eq!(queries.as_ref().load(Ordering::SeqCst), 0);
-    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[tokio::test]
 async fn files_of_books_preserves_order_visibility_and_duplicates_across_batches() {
-    let (library, _, dir) = download_fixture().await;
+    let (library, _, _dir) = download_fixture().await;
     library
         .diesel_db
         .get()
@@ -204,12 +202,11 @@ async fn files_of_books_preserves_order_visibility_and_duplicates_across_batches
     let mut empty = std::pin::pin!(library.files_of_books([], &user));
     assert!(empty.try_next().await.unwrap().is_none());
     assert_eq!(queries.as_ref().load(Ordering::SeqCst), 0);
-    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[tokio::test]
 async fn book_entries_share_one_read_model_and_reuse_the_resolved_series() {
-    let (library, file, dir) = download_fixture().await;
+    let (library, file, _dir) = download_fixture().await;
     library
         .diesel_db
         .get()
@@ -267,12 +264,11 @@ async fn book_entries_share_one_read_model_and_reuse_the_resolved_series() {
         Err(ApiError::NotFound(_))
     ));
     assert_eq!(queries.as_ref().load(Ordering::SeqCst), 2);
-    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[tokio::test]
 async fn list_books_aligns_streams_across_batches_and_propagates_errors() {
-    let (library, _, dir) = download_fixture().await;
+    let (library, _, _dir) = download_fixture().await;
     library
         .diesel_db
         .get()
@@ -359,12 +355,11 @@ async fn list_books_aligns_streams_across_batches_and_propagates_errors() {
         .await
         .unwrap();
     assert!(library.list_books(Some("批次"), None, &user).await.is_err());
-    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[tokio::test]
 async fn list_books_preserves_visibility_and_attaches_all_visible_sources() {
-    let (library, _, dir) = download_fixture().await;
+    let (library, _, _dir) = download_fixture().await;
     library.diesel_db.get().await.unwrap().batch_execute(
         "INSERT INTO users (id, username, password_hash) VALUES ('viewer', '读者', '');
          INSERT INTO books (id, title, created_by, created_at)
@@ -428,12 +423,11 @@ async fn list_books_preserves_visibility_and_attaches_all_visible_sources() {
     assert_eq!(entries[0].book.id, "mixed");
     assert_eq!(entries[0].files.len(), 3);
     assert_eq!(entries[1].book.id, "hidden");
-    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[tokio::test]
 async fn series_stream_queries_on_demand_and_reports_later_batch_errors() {
-    let (library, _, dir) = download_fixture().await;
+    let (library, _, _dir) = download_fixture().await;
     let queries = count_selects(&library.diesel_db).await;
     let consumed = Arc::new(AtomicUsize::new(0));
     let observed = consumed.clone();
@@ -476,12 +470,11 @@ async fn series_stream_queries_on_demand_and_reports_later_batch_errors() {
         assert!(series.try_next().await.is_err());
         assert_eq!(queries.as_ref().load(Ordering::SeqCst), 2);
     }
-    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[tokio::test]
 async fn file_stream_does_not_prefetch_later_batches() {
-    let (library, _, dir) = download_fixture().await;
+    let (library, _, _dir) = download_fixture().await;
     let user = User {
         id: "viewer".into(),
         username: "读者".into(),
@@ -504,12 +497,11 @@ async fn file_stream_does_not_prefetch_later_batches() {
     }
     assert_eq!(queries.as_ref().load(Ordering::SeqCst), 1);
     assert_eq!(consumed.as_ref().load(Ordering::SeqCst), QUERY_BATCH_SIZE);
-    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[tokio::test]
 async fn search_annotations_batch_matches_and_preserve_mixed_result_order() {
-    let (library, _, dir) = download_fixture().await;
+    let (library, _, _dir) = download_fixture().await;
     library
         .diesel_db
         .get()
@@ -627,7 +619,6 @@ async fn search_annotations_batch_matches_and_preserve_mixed_result_order() {
         .unwrap();
     assert_eq!(items[0].book_id, None);
     assert_eq!(queries.as_ref().load(Ordering::SeqCst), 0);
-    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
@@ -651,7 +642,7 @@ fn image_ids_borrow_html_and_preserve_reference_order_and_duplicates() {
 
 #[tokio::test]
 async fn image_dimensions_stream_queries_lazily_without_cross_batch_deduplication() {
-    let (library, _, dir) = download_fixture().await;
+    let (library, _, _dir) = download_fixture().await;
     library
         .diesel_db
         .get()
@@ -711,12 +702,11 @@ async fn image_dimensions_stream_queries_lazily_without_cross_batch_deduplicatio
     let mut empty = std::pin::pin!(stored_image_dimensions(&library.diesel_db, []));
     assert!(empty.try_next().await.unwrap().is_none());
     assert_eq!(queries.as_ref().load(Ordering::SeqCst), 0);
-    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[tokio::test]
 async fn cached_book_batches_shared_images_without_reordering_chapters() {
-    let (library, mut file, dir) = download_fixture().await;
+    let (library, mut file, _dir) = download_fixture().await;
     library
         .diesel_db
         .get()
@@ -794,12 +784,11 @@ async fn cached_book_batches_shared_images_without_reordering_chapters() {
     with_stored_dims_many(&library.diesel_db, &mut chapters).await;
     assert_eq!(chapters[0].content, html);
     assert_eq!(chapters[1].content, "");
-    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[tokio::test]
 async fn plugin_collections_keep_creation_order_and_skip_disabled_catalogs() {
-    let (library, _, dir) = download_fixture().await;
+    let (library, _, _dir) = download_fixture().await;
     let plugins = library.plugins();
     for id in ["last", "first"] {
         plugins.register(id, "fixture.wasm").await.unwrap();
@@ -853,5 +842,4 @@ async fn plugin_collections_keep_creation_order_and_skip_disabled_catalogs() {
     for id in ["last", "missing", "unknown"] {
         assert!(plugins.declared_catalog(id).await.unwrap().is_none());
     }
-    std::fs::remove_dir_all(dir).unwrap();
 }

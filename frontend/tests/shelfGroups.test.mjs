@@ -8,7 +8,6 @@ const entry = (id, title, parent = series) => ({ book: { id, title }, series: pa
 test("a single visible volume is a series card using only the series name", () => {
   const volume = entry("book-1", "第一卷");
   assert.deepEqual(groupBySeries([volume]), [{ kind: "series", series, volumes: [volume] }]);
-  assert.equal(groupBySeries([volume])[0].series.title, "在那开满花的山丘，我想见到你。");
 });
 
 test("groups multiple volumes under the same unchanged series title", () => {

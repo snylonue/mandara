@@ -109,16 +109,15 @@ impl StateStore for DbPluginState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::tempdir;
     use diesel_async::SimpleAsyncConnection;
-    use std::path::PathBuf;
 
-    async fn fixture() -> (PathBuf, DieselDb) {
-        let dir = std::env::temp_dir().join(format!("mandara-state-{}", uuid::Uuid::new_v4()));
-        crate::db::run_migrations(&dir.join("test.db"))
+    async fn fixture() -> (tempfile::TempDir, DieselDb) {
+        let dir = tempdir("mandara-state-");
+        crate::db::run_migrations(&dir.path().join("test.db"))
             .await
             .unwrap();
-        let dir = dir.canonicalize().unwrap();
-        let db = crate::db::connect_diesel(&dir.join("test.db")).unwrap();
+        let db = crate::db::connect_diesel(&dir.path().join("test.db")).unwrap();
         db.get().await.unwrap().batch_execute(
             "INSERT INTO plugin_instances (id, wasm_file) VALUES ('first','hello.wasm'), ('second','hello.wasm');",
         ).await.unwrap();
@@ -148,7 +147,7 @@ mod tests {
         .unwrap();
         drop(db);
         // A new pool and state handle simulate opening the persisted DB again.
-        let db = crate::db::connect_diesel(&dir.join("test.db")).unwrap();
+        let db = crate::db::connect_diesel(&dir.path().join("test.db")).unwrap();
         let first = DbPluginState::new(db.clone(), "first".into());
         let second = DbPluginState::new(db.clone(), "second".into());
         tokio::task::spawn_blocking(move || {
@@ -161,12 +160,11 @@ mod tests {
         .await
         .unwrap();
         drop(db);
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn value_size_limit_is_enforced_by_sqlite_store() {
-        let (dir, db) = fixture().await;
+        let (_dir, db) = fixture().await;
         let state = DbPluginState::new(db.clone(), "first".into());
         tokio::task::spawn_blocking(move || {
             let bytes = vec![1; DbPluginState::MAX_STATE_VALUE_BYTES];
@@ -184,12 +182,11 @@ mod tests {
         .await
         .unwrap();
         drop(db);
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn quotas_rollback_and_delete_reclaims_space() {
-        let (dir, db) = fixture().await;
+        let (_dir, db) = fixture().await;
         let first = DbPluginState::new(db.clone(), "first".into());
         tokio::task::spawn_blocking(move || {
             let large = vec![1; DbPluginState::MAX_STATE_VALUE_BYTES];
@@ -232,12 +229,11 @@ mod tests {
         .await
         .unwrap();
         drop(db);
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn concurrent_writes_do_not_overshoot_quota() {
-        let (dir, db) = fixture().await;
+        let (_dir, db) = fixture().await;
         let state = DbPluginState::new(db.clone(), "first".into());
         let seed = state.clone();
         tokio::task::spawn_blocking(move || {
@@ -269,7 +265,6 @@ mod tests {
         assert_eq!(successes, 1);
         drop(state);
         drop(db);
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     struct NoImages;
@@ -304,7 +299,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn plugin_information_uses_state_only_after_registration() {
-        let (dir, db) = fixture().await;
+        let (_dir, db) = fixture().await;
         let first = DbPluginState::new(db.clone(), "first".into());
         let second = DbPluginState::new(db.clone(), "second".into());
         let plugins = service(db.clone()).await;
@@ -356,12 +351,11 @@ mod tests {
         assert!(plugins.register("new", "hello.wasm").await.is_err());
         drop(plugins);
         drop(db);
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn service_binds_instance_state_and_unregister_cascades() {
-        let (dir, db) = fixture().await;
+        let (_dir, db) = fixture().await;
         let plugins = service(db.clone()).await;
         assert_eq!(
             plugins
@@ -443,6 +437,5 @@ mod tests {
         );
         drop(plugins);
         drop(db);
-        std::fs::remove_dir_all(dir).unwrap();
     }
 }

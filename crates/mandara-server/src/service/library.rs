@@ -2930,16 +2930,18 @@ fn sha256_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::tempdir;
     use mandara_formats::ParsedImage;
 
     mod collections;
 
-    async fn download_fixture() -> (Library, FileMeta, PathBuf) {
-        let dir = std::env::temp_dir().join(format!("mandara-download-{}", uuid::Uuid::new_v4()));
-        let path = dir.join("library.db");
+    async fn download_fixture() -> (Library, FileMeta, tempfile::TempDir) {
+        let dir = tempdir("mandara-download-");
+        let path = dir.path().join("library.db");
         crate::db::run_migrations(&path).await.unwrap();
         let db = crate::db::connect_diesel(&path).unwrap();
-        let images = crate::service::images::DbImageStore::new(db.clone(), dir.join("files"));
+        let images =
+            crate::service::images::DbImageStore::new(db.clone(), dir.path().join("files"));
         let runtime = Arc::new(
             mandara_plugin::PluginRuntime::new(mandara_plugin::FetchPolicy::default(), images)
                 .unwrap(),
@@ -2960,7 +2962,7 @@ mod tests {
             .set_config("fixture", serde_json::json!({"site-name": "示例"}))
             .await
             .unwrap();
-        let library = Library::new(db, plugins, dir.join("files"));
+        let library = Library::new(db, plugins, dir.path().join("files"));
         let book = SourceBook {
             id: "hello-1".into(),
             title: "示例".into(),
@@ -3029,7 +3031,7 @@ mod tests {
     async fn content_attachment_does_not_require_book_metadata_from_its_provider() {
         use diesel_async::SimpleAsyncConnection as _;
 
-        let (library, fixture, dir) = download_fixture().await;
+        let (library, fixture, _dir) = download_fixture().await;
         diesel::insert_into(schema::users::table)
             .values((
                 schema::users::created_at.eq(chrono::Utc::now()),
@@ -3091,13 +3093,11 @@ mod tests {
         assert_eq!(library.get_chapter(&content, 2).await.unwrap().content, "");
         library.delete_file(&content.id).await.unwrap();
         library.delete_file(&fixture.id).await.unwrap();
-        assert_eq!(dir.parent(), Some(std::env::temp_dir().as_path()));
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]
     async fn downloads_use_the_supplied_content_form_without_reloading_metadata() {
-        let (library, mut file, dir) = download_fixture().await;
+        let (library, mut file, _dir) = download_fixture().await;
         assert_eq!(file.content_mode, ContentMode::Chapters);
         file.content_mode = ContentMode::File;
         // The fixture offers chapters but no book file: no host fallback or requery.
@@ -3116,13 +3116,11 @@ mod tests {
                 .contains("插件")
         );
         library.delete_file(&file.id).await.unwrap();
-        assert_eq!(dir.parent(), Some(std::env::temp_dir().as_path()));
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn uploaded_files_use_the_same_materialization_path() {
-        let (library, fixture, dir) = download_fixture().await;
+        let (library, fixture, _dir) = download_fixture().await;
         diesel::insert_into(schema::users::table)
             .values((
                 schema::users::created_at.eq(chrono::Utc::now()),
@@ -3181,13 +3179,11 @@ mod tests {
         );
         library.delete_file(&file.id).await.unwrap();
         library.delete_file(&fixture.id).await.unwrap();
-        assert_eq!(dir.parent(), Some(std::env::temp_dir().as_path()));
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]
     async fn declared_bodies_preserve_presence_through_ingestion() {
-        let (library, file, dir) = download_fixture().await;
+        let (library, file, _dir) = download_fixture().await;
         let catalog = library
             .plugins
             .declared_catalog("fixture")
@@ -3293,13 +3289,11 @@ mod tests {
         }
         assert_eq!(library.get_chapter(&file, 0).await.unwrap().content, "");
         library.delete_file(&file.id).await.unwrap();
-        assert_eq!(dir.parent(), Some(std::env::temp_dir().as_path()));
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]
     async fn chapter_reads_recover_missing_bodies_and_do_not_cache_failures() {
-        let (library, file, dir) = download_fixture().await;
+        let (library, file, _dir) = download_fixture().await;
         let mut unavailable = file.clone();
         unavailable.source = "unavailable".into();
         assert!(library.get_chapter(&unavailable, 0).await.is_err());
@@ -3327,13 +3321,12 @@ mod tests {
 
         library.delete_file(&file.id).await.unwrap();
         drop(library);
-        tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 
     #[tokio::test]
     async fn empty_cached_bodies_are_distinct_from_null_placeholders() {
         use super::super::downloads::{CacheKey, DownloadError};
-        let (library, file, dir) = download_fixture().await;
+        let (library, file, _dir) = download_fixture().await;
         assert!(library.cached_chapter(&file.id, 0).await.unwrap().is_none());
         assert_eq!(cached_count(&library, &file).await, 0);
         for (idx, body) in [(0_i64, ""), (1_i64, " \n\t")] {
@@ -3418,13 +3411,11 @@ mod tests {
             .complete(&second, Err(DownloadError::NotFound));
         library.delete_file(&file.id).await.unwrap();
         drop(library);
-        assert_eq!(dir.parent(), Some(std::env::temp_dir().as_path()));
-        tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 
     #[tokio::test]
     async fn cached_reads_bypass_inflight_fetches_and_other_chapters_can_load() {
-        let (library, file, dir) = download_fixture().await;
+        let (library, file, _dir) = download_fixture().await;
         let key = super::super::downloads::CacheKey::Chapter(file.id.clone(), 0);
         let (pending, start) = library.downloads.join(key.clone());
         assert!(start);
@@ -3478,13 +3469,11 @@ mod tests {
         library.delete_file(&file.id).await.unwrap();
         assert!(library.get_file(&file.id).await.unwrap().is_none());
         drop(library);
-        assert_eq!(dir.parent(), Some(std::env::temp_dir().as_path()));
-        tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 
     #[tokio::test]
     async fn background_downloads_reuse_cache_and_keep_content_items_independent() {
-        let (library, first, dir) = download_fixture().await;
+        let (library, first, _dir) = download_fixture().await;
         assert_eq!(first.content_mode, ContentMode::Chapters);
         diesel::update(schema::chapters::table.find((&first.id, 0_i64)))
             .set(schema::chapters::content.eq("<p>保留缓存</p>"))
@@ -3546,14 +3535,12 @@ mod tests {
             alternate
         );
         drop(library);
-        assert_eq!(dir.parent(), Some(std::env::temp_dir().as_path()));
-        tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 
     #[tokio::test]
     async fn explicit_series_groups_books_by_instance_and_opaque_series_id() {
-        let dir = std::env::temp_dir().join(format!("mandara-series-{}", uuid::Uuid::new_v4()));
-        let path = dir.join("library.db");
+        let dir = tempdir("mandara-series-");
+        let path = dir.path().join("library.db");
         crate::db::run_migrations(&path).await.unwrap();
         let db = crate::db::connect_diesel(&path).unwrap();
         let library = Library::new(
@@ -3566,7 +3553,7 @@ mod tests {
                             mandara_plugin::FetchPolicy::default(),
                             crate::service::images::DbImageStore::new(
                                 db.clone(),
-                                dir.join("files"),
+                                dir.path().join("files"),
                             ),
                         )
                         .unwrap(),
@@ -3576,7 +3563,7 @@ mod tests {
                 .await
                 .unwrap(),
             ),
-            dir.join("files"),
+            dir.path().join("files"),
         );
         let mut book = SourceBook {
             id: "opaque-volume-alpha".into(),
@@ -3650,10 +3637,8 @@ mod tests {
     #[tokio::test]
     async fn chapter_linear_migration_preserves_legacy_rows_and_auxiliary_flags() {
         use diesel_async::SimpleAsyncConnection as _;
-        let dir =
-            std::env::temp_dir().join(format!("mandara-linear-test-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let db = crate::db::connect_diesel(&dir.join("test.db")).unwrap();
+        let dir = tempdir("mandara-linear-test-");
+        let db = crate::db::connect_diesel(&dir.path().join("test.db")).unwrap();
         let mut conn = db.get().await.unwrap();
         conn.batch_execute("CREATE TABLE chapters (file_id TEXT NOT NULL, idx INTEGER NOT NULL, title TEXT NOT NULL, content TEXT NOT NULL, PRIMARY KEY(file_id,idx)); INSERT INTO chapters VALUES ('f',0,'正文','<p>正文</p>');").await.unwrap();
         conn.batch_execute(include_str!("../../migrations/0015_chapter_linear.sql"))
@@ -3686,32 +3671,14 @@ mod tests {
         );
         drop(conn);
         drop(db);
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]
     async fn ingest_stores_images_and_rewrites_placeholders() {
-        let dir = std::env::temp_dir().join(format!(
-            "mandara-ingest-test-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let db = crate::db::connect_diesel(&dir.join("t.db")).unwrap();
-        {
-            use diesel_async::SimpleAsyncConnection as _;
-            let mut conn = db.get().await.unwrap();
-            conn.batch_execute(
-                "CREATE TABLE images (id TEXT PRIMARY KEY NOT NULL, mime TEXT NOT NULL, \
-                 size INTEGER NOT NULL, width INTEGER, height INTEGER, \
-                 created_at TEXT NOT NULL DEFAULT '');",
-            )
-            .await
-            .unwrap();
-        }
+        let dir = tempdir("mandara-ingest-test-");
+        let path = dir.path().join("t.db");
+        crate::db::run_migrations(&path).await.unwrap();
+        let db = crate::db::connect_diesel(&path).unwrap();
 
         // Two distinct images; the first is referenced twice (dedup by id).
         let img_a = vec![1u8, 2, 3, 4];
@@ -3742,7 +3709,9 @@ mod tests {
             }],
             toc: vec![],
         };
-        ingest_parsed_book(&db, &dir, &mut parsed).await.unwrap();
+        ingest_parsed_book(&db, dir.path(), &mut parsed)
+            .await
+            .unwrap();
 
         // Both placeholders rewritten to the canonical reference form.
         let content = &parsed.chapters[0].content;
@@ -3764,12 +3733,10 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert!(rows.iter().all(|(_, _, size)| *size > 0));
         for row in &rows {
-            assert!(dir.join("images").join(&row.0).exists());
+            assert!(dir.path().join("images").join(&row.0).exists());
         }
         let id_a = sha256_hex(&img_a);
         assert!(content.contains(&format!("/api/images/{id_a}")));
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
