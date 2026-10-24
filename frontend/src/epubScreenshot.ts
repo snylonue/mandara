@@ -80,6 +80,9 @@ export function renderEpubScreenshot(source: string, width: number, maxHeight: n
       await screenshotStep("loadFonts", () => doc.fonts?.ready, signal);
       await screenshotStep("loadImages", () => Promise.all(Array.from(doc.images, image => image.decode())), signal);
       const root = doc.documentElement;
+      // HTML accepts unbound epub: attributes, but the SVG image must be valid XML.
+      // Declare the prefix instead of dropping semantics or changing CSS selectors.
+      root.setAttribute("xmlns:epub", "http://www.idpf.org/2007/ops");
       const vertical = getComputedStyle(doc.body).writingMode.startsWith("vertical");
       // Let the excerpt grow on its block axis, not inside the reader's scroll viewport.
       root.style.setProperty("transform", "none", "important");

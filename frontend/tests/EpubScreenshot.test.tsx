@@ -66,6 +66,9 @@ async function loadCapture(width = 772, height = 400) {
   const parsed = new DOMParser().parseFromString(frame.srcdoc, "text/html");
   doc.head.innerHTML = parsed.head.innerHTML;
   doc.body.innerHTML = parsed.body.innerHTML;
+  for (const [target, original] of [[doc.documentElement, parsed.documentElement], [doc.body, parsed.body]]) {
+    for (const attribute of Array.from(original.attributes)) target.setAttribute(attribute.name, attribute.value);
+  }
   Object.defineProperties(doc.documentElement, { scrollWidth: { value: width }, scrollHeight: { value: height } });
   vi.spyOn(doc.documentElement, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, width, height));
   fireEvent.load(frame);
@@ -84,6 +87,25 @@ it("rasterizes in a sandbox with embedded font CSS and removes the temporary fra
   expect(toCanvas).toHaveBeenCalledWith(doc.documentElement, expect.objectContaining({ width: 772, height: 400, pixelRatio: 1, fontEmbedCSS: expect.stringContaining("@font-face") }));
   expect(document.body.contains(frame)).toBe(false);
   expect(document.head.textContent).not.toContain("font-family:book");
+});
+
+it.each([false, true])("serializes EPUB semantic attributes as valid XML with an existing declaration: %s", async existing => {
+  const namespace = "http://www.idpf.org/2007/ops";
+  const chapter = '<!doctype html><html' + (existing ? ' xmlns:epub="' + namespace + '"' : '') + '><head><style>section{color:red}</style></head><body epub:type="bodymatter"><section epub:type="chapter"><p>所选正文</p></section></body></html>';
+  const canvas = document.createElement("canvas");
+  vi.mocked(toCanvas).mockImplementationOnce(async node => {
+    expect(node.querySelector("section")!.getAttribute("epub:type")).toBe("chapter");
+    expect(getComputedStyle(node.querySelector("section")!).color).toBe("rgb(255, 0, 0)");
+    const xml = new XMLSerializer().serializeToString(node);
+    const parsed = new DOMParser().parseFromString(xml, "application/xhtml+xml");
+    expect(parsed.querySelector("parsererror")).toBeNull();
+    expect(parsed.querySelector("section")!.getAttributeNS(namespace, "type")).toBe("chapter");
+    expect(parsed.querySelector("body")!.getAttributeNS(namespace, "type")).toBe("bodymatter");
+    return canvas;
+  });
+  const rendering = renderEpubScreenshot(chapter, 390, 12000);
+  await loadCapture(390, 400);
+  expect(await rendering).toBe(canvas);
 });
 
 it("allows and embeds self-hosted reader fonts before rasterizing", async () => {
