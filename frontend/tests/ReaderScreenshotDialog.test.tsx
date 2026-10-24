@@ -132,3 +132,27 @@ it("shows translated size and rendering errors without exporting stale images", 
   fireEvent.click(screen.getByLabelText("书名"));
   await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("截图生成失败"));
 });
+
+it("reports timeouts and retries without losing the selection", async () => {
+  renderer.mockRejectedValueOnce(new Error("screenshot-timeout"));
+  render(<ReaderScreenshotDialog excerpt={excerpt} onClose={vi.fn()} />);
+  expect((await screen.findByRole("alert")).textContent).toContain("截图生成超时");
+  expect(screen.queryByText("正在生成截图…")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "重新生成" }));
+  await screen.findByAltText("所选文字截图预览");
+  expect(renderer).toHaveBeenCalledTimes(2);
+  expect(renderer.mock.lastCall![0].text).toBe(excerpt.text);
+});
+
+it("aborts obsolete render work when options change and when the dialog closes", async () => {
+  renderer.mockImplementation(() => new Promise(() => {}));
+  const { unmount } = render(<ReaderScreenshotDialog excerpt={excerpt} onClose={vi.fn()} />);
+  const first = renderer.mock.lastCall![1]!;
+  expect(first.aborted).toBe(false);
+  fireEvent.click(screen.getByLabelText("书名"));
+  expect(first.aborted).toBe(true);
+  const second = renderer.mock.lastCall![1]!;
+  expect(second.aborted).toBe(false);
+  unmount();
+  expect(second.aborted).toBe(true);
+});

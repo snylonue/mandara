@@ -25,6 +25,7 @@ export function ReaderScreenshotDialog({ excerpt, shareLink, createShareLink, on
   const submitting = useRef(false);
   const [shareError, setShareError] = useState("");
   const [renderError, setRenderError] = useState("");
+  const [attempt, setAttempt] = useState(0);
   const [actionError, setActionError] = useState("");
   const [status, setStatus] = useState("");
   const [copying, setCopying] = useState(false);
@@ -34,7 +35,7 @@ export function ReaderScreenshotDialog({ excerpt, shareLink, createShareLink, on
     const url = showLink && link ? new URL(link, location.origin) : null;
     url?.searchParams.set("chapter", String(excerpt.chapterIdx));
     return {
-      text: excerpt.text, document: excerpt.document, style: excerpt.style,
+      text: excerpt.text, document: excerpt.document, viewport: excerpt.viewport, style: excerpt.style,
       title: showTitle ? excerpt.title : undefined,
       chapter: showChapter ? excerpt.chapter : undefined,
       link: url?.href,
@@ -44,21 +45,22 @@ export function ReaderScreenshotDialog({ excerpt, shareLink, createShareLink, on
   const image = rendered?.options === options && (!showLink || link) ? rendered : null;
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
     let url: string | undefined;
     setRenderError("");
     setStatus("");
     setActionError("");
     if (!showLink || link) {
-      void renderReaderScreenshot(options).then((blob) => {
+      void renderReaderScreenshot(options, controller.signal).then((blob) => {
         if (cancelled) return;
         url = URL.createObjectURL(blob);
         setRendered({ options, blob, url });
       }).catch((err: unknown) => {
-        if (!cancelled) setRenderError(t(err instanceof Error && err.message === "selection-size" ? "screenshot.tooLong" : "screenshot.renderFailed"));
+        if (!cancelled) setRenderError(t(err instanceof Error && err.message === "selection-size" ? "screenshot.tooLong" : err instanceof Error && err.message === "screenshot-timeout" ? "screenshot.timedOut" : "screenshot.renderFailed"));
       });
     }
-    return () => { cancelled = true; if (url) URL.revokeObjectURL(url); };
-  }, [options, showLink, link, t]);
+    return () => { cancelled = true; controller.abort(); if (url) URL.revokeObjectURL(url); };
+  }, [options, showLink, link, t, attempt]);
 
   async function generateLink() {
     if (!createShareLink || submitting.current) return;
@@ -107,7 +109,8 @@ export function ReaderScreenshotDialog({ excerpt, shareLink, createShareLink, on
       {shareError && <p className="error" role="alert">{shareError}</p>}
     </div>}
     {showLink && link && <p className="hint screenshot-link">{options.link}</p>}
-    {renderError && <p className="error" role="alert">{renderError}</p>}
+    {renderError && <div><p className="error" role="alert">{renderError}</p>
+      <button className="btn" onClick={() => setAttempt(value => value + 1)}>{t("screenshot.retry")}</button></div>}
     {image ? <div className="screenshot-preview"><img src={image.url} alt={t("screenshot.preview")} /></div> : !renderError && (!showLink || link) && <p role="status">{t("screenshot.rendering")}</p>}
     {!canCopy && <p className="hint">{t("screenshot.clipboardUnavailable")}</p>}
     {actionError && <p className="error" role="alert">{actionError}</p>}

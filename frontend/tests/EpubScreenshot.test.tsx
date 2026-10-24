@@ -3,9 +3,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import { toCanvas } from "html-to-image";
 import { renderEpubScreenshot } from "../src/epubScreenshot";
 import { MAX_SCREENSHOT_TEXT, selectedEpubContent } from "../src/readerScreenshot";
+import { SCREENSHOT_TIMEOUT } from "../src/screenshotTask";
 
 vi.mock("html-to-image", () => ({ toCanvas: vi.fn() }));
-afterEach(() => { document.querySelectorAll("iframe").forEach(frame => frame.remove()); vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.clearAllMocks(); });
+afterEach(() => { document.querySelectorAll("iframe").forEach(frame => frame.remove()); vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.clearAllMocks(); vi.mocked(toCanvas).mockReset(); vi.useRealTimers(); });
 
 function chapter() {
   const frame = document.createElement("iframe");
@@ -16,6 +17,7 @@ function chapter() {
 it("keeps publication styles, ancestor attributes, ruby and inline formatting only for the selected range", () => {
   const doc = chapter();
   doc.documentElement.lang = "zh-CN";
+  Object.defineProperties(doc.documentElement, { clientWidth: { value: 390 }, clientHeight: { value: 740 } });
   doc.head.innerHTML = '<style>@font-face{font-family:book;src:url(data:font/woff2;base64,AA==)} body.book{writing-mode:vertical-rl} #chapter .passage{color:red;text-align:center}</style>';
   doc.body.className = "book";
   doc.body.innerHTML = '<section id="chapter"><p>未选择的前文</p><p class="passage">开头<strong>强调</strong><ruby>汉字<rt>かんじ</rt></ruby>结尾</p><p>未选择的后文</p></section>';
@@ -25,6 +27,7 @@ it("keeps publication styles, ancestor attributes, ruby and inline formatting on
   range.setEnd(passage.lastChild!, 1);
   doc.getSelection()!.addRange(range);
   const excerpt = selectedEpubContent(doc, doc.getSelection());
+  expect(excerpt.viewport).toEqual({ width: 390, height: 740 });
   const snapshot = new DOMParser().parseFromString(excerpt.document!, "text/html");
   expect(snapshot.documentElement.lang).toBe("zh-CN");
   expect(snapshot.body.className).toBe("book");
@@ -97,7 +100,7 @@ it("allows and embeds self-hosted reader fonts before rasterizing", async () => 
   const { frame } = await loaded;
   expect(frame.srcdoc).toContain("font-src data: " + location.origin);
   await rendering;
-  expect(fetchFont).toHaveBeenCalledWith(location.origin + "/assets/reader.woff2");
+  expect(fetchFont).toHaveBeenCalledWith(location.origin + "/assets/reader.woff2", { signal: expect.any(AbortSignal) });
   const options = vi.mocked(toCanvas).mock.lastCall![1]!;
   expect(options.fontEmbedCSS).toContain("data:font/woff2;base64,Zm9udA==");
   expect(options.fontEmbedCSS).not.toContain("/assets/reader.woff2");
@@ -130,4 +133,80 @@ it("removes the temporary frame if rasterization fails", async () => {
   const { frame } = await loadCapture();
   await rejected;
   expect(document.body.contains(frame)).toBe(false);
+});
+
+it("embeds only used families and Unicode subsets, with deduplicated parallel requests", async () => {
+  const faces = [
+    ['book', '/assets/zh.woff2', 'U+6B63,U+6587'],
+    ['book', '/assets/zh.woff2', 'U+6B??'],
+    ['book', '/assets/other.woff2', 'U+0000-00FF'],
+    ['unused', '/assets/unused.woff2', 'U+0-10FFFF'],
+    ['book', '/assets/wen.woff2', 'U+6587'],
+  ];
+  const css = faces.map(([family, url, range]) => '@font-face{font-family:' + family + ';src:url("' + url + '");unicode-range:' + range + '}').join('');
+  let finish!: () => void;
+  const response = new Promise(resolve => { finish = () => resolve({ ok: true, blob: async () => new Blob(["font"], { type: "font/woff2" }) }); });
+  const fetchFont = vi.fn(() => response);
+  vi.stubGlobal("fetch", fetchFont);
+  vi.mocked(toCanvas).mockResolvedValueOnce(document.createElement("canvas"));
+  const rendering = renderEpubScreenshot(source.replace(/<style>[\s\S]*?<\/style>/, '<style>' + css + 'p{font-family:book}</style>'), 390, 12000);
+  const loaded = loadCapture(390, 400);
+  const doc = document.querySelector<HTMLIFrameElement>('iframe[aria-hidden="true"]')!.contentDocument!;
+  faces.forEach(([family, url, range], i) => {
+    const rule = doc.styleSheets[0].cssRules[i] as CSSFontFaceRule;
+    // jsdom drops src and unicode-range descriptors; retain browser CSSOM behavior.
+    Object.defineProperty(rule, "cssText", {
+      value: '@font-face{font-family:' + family + ';src:url("' + url + '");unicode-range:' + range + '}',
+    });
+    const original = rule.style.getPropertyValue.bind(rule.style);
+    vi.spyOn(rule.style, "getPropertyValue").mockImplementation(name => name === "unicode-range" ? range : original(name));
+  });
+  await loaded;
+  try {
+    await vi.waitFor(() => expect(fetchFont).toHaveBeenCalledTimes(2));
+    expect(fetchFont.mock.calls.map(call => call[0])).toEqual([location.origin + '/assets/zh.woff2', location.origin + '/assets/wen.woff2']);
+    expect(toCanvas).not.toHaveBeenCalled();
+  } finally {
+    finish();
+    await rendering;
+  }
+  const embedded = vi.mocked(toCanvas).mock.lastCall![1]!.fontEmbedCSS;
+  expect(embedded).toContain('U+6B??');
+  expect(embedded).not.toContain('unused');
+  expect(embedded).not.toContain('U+0000-00FF');
+});
+
+it("preserves the original reading viewport instead of using a fixed capture height", async () => {
+  vi.mocked(toCanvas).mockResolvedValueOnce(document.createElement("canvas"));
+  const rendering = renderEpubScreenshot(source, 390, 12000, 740);
+  const { frame } = await loadCapture(390, 400);
+  expect(frame.style.width).toBe("390px");
+  expect(frame.style.height).toBe("740px");
+  await rendering;
+  expect(toCanvas).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ width: 390 }));
+});
+
+it("times out stalled rasterization and removes its isolated document", async () => {
+  vi.useFakeTimers();
+  vi.mocked(toCanvas).mockImplementationOnce(() => new Promise(() => {}));
+  const rendering = renderEpubScreenshot(source, 772, 12000);
+  const rejected = expect(rendering).rejects.toThrow("screenshot-timeout");
+  const { frame } = await loadCapture();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(toCanvas).toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(SCREENSHOT_TIMEOUT);
+  await rejected;
+  expect(frame.isConnected).toBe(false);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it("cancels pending frame loads without waiting for the timeout", async () => {
+  const controller = new AbortController();
+  const rendering = renderEpubScreenshot(source, 772, 12000, 600, controller.signal);
+  const rejected = expect(rendering).rejects.toThrow("cancelled");
+  const frame = document.querySelector('iframe[aria-hidden="true"]')!;
+  controller.abort(new Error("cancelled"));
+  await rejected;
+  expect(frame.isConnected).toBe(false);
+  expect(toCanvas).not.toHaveBeenCalled();
 });

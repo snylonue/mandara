@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { IconArrowLeft, IconChevronLeft, IconChevronRight, IconList, IconType, IconCamera } from "./icons";
 import { EpubDocument, type EpubDocumentHandle } from "./EpubDocument";
 import { ReaderScreenshotDialog, type ReaderExcerpt } from "./ReaderScreenshotDialog";
-import { selectedChapterText, type ScreenshotSelection } from "../readerScreenshot";
+import { selectedChapterText, selectedTextContent, type ScreenshotSelection } from "../readerScreenshot";
 import {
   ReaderSettingsPanel,
   useReaderSettings,
@@ -79,6 +79,7 @@ export function Reader({
   const epubRef = useRef<EpubDocumentHandle>(null);
   const articleRef = useRef<HTMLElement>(null);
   const screenshotButtonRef = useRef<HTMLButtonElement>(null);
+  const textRangeRef = useRef<Range | null>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const renderTarget = useRef<{ fragment: string | null; fraction: number }>({ fragment: null, fraction: 0 });
   const isDocument = chapter?.content.startsWith("<!doctype html>") ?? false;
@@ -88,7 +89,10 @@ export function Reader({
     const root = articleRef.current?.querySelector(".epub-content");
     if (!root) return;
     function updateSelection() {
-      setSelection({ text: selectedChapterText(root!, document.getSelection()), chapterIdx: idx });
+      const current = document.getSelection();
+      const text = selectedChapterText(root!, current);
+      textRangeRef.current = text ? current!.getRangeAt(0).cloneRange() : null;
+      setSelection({ text, chapterIdx: idx });
     }
     document.addEventListener("selectionchange", updateSelection);
     return () => document.removeEventListener("selectionchange", updateSelection);
@@ -100,12 +104,15 @@ export function Reader({
       return;
     }
     const style = getComputedStyle(articleRef.current);
+    const root = articleRef.current.querySelector<HTMLElement>(".epub-content");
+    const selected = !isDocument && root && textRangeRef.current
+      ? selectedTextContent(root, textRangeRef.current) : selection;
     setExcerpt({
-      ...selection, title, chapter: chapter.title, chapterIdx: idx,
+      ...selected, title, chapter: chapter.title, chapterIdx: idx,
       style: {
-        background: style.getPropertyValue("--bg").trim(),
-        foreground: style.getPropertyValue("--text-1").trim(),
-        muted: style.getPropertyValue("--text-2").trim(),
+        background: style.backgroundColor === "rgba(0, 0, 0, 0)" ? style.getPropertyValue("--bg").trim() : style.backgroundColor,
+        foreground: style.getPropertyValue("--fg").trim() || style.color,
+        muted: style.getPropertyValue("--reader-muted").trim(),
         accent: style.getPropertyValue("--accent").trim(),
         fontFamily: style.fontFamily,
       },
