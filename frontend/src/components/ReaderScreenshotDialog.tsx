@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { renderReaderScreenshot, type ScreenshotOptions, type ScreenshotStyle, type ScreenshotSelection } from "../readerScreenshot";
 import { Modal } from "./Modal";
+import { ScreenshotStepError } from "../screenshotTask";
 
 export interface ReaderExcerpt extends ScreenshotSelection {
   title: string;
@@ -25,6 +26,7 @@ export function ReaderScreenshotDialog({ excerpt, shareLink, createShareLink, on
   const submitting = useRef(false);
   const [shareError, setShareError] = useState("");
   const [renderError, setRenderError] = useState("");
+  const [renderDetail, setRenderDetail] = useState("");
   const [attempt, setAttempt] = useState(0);
   const [actionError, setActionError] = useState("");
   const [status, setStatus] = useState("");
@@ -48,6 +50,7 @@ export function ReaderScreenshotDialog({ excerpt, shareLink, createShareLink, on
     const controller = new AbortController();
     let url: string | undefined;
     setRenderError("");
+    setRenderDetail("");
     setStatus("");
     setActionError("");
     if (!showLink || link) {
@@ -56,7 +59,15 @@ export function ReaderScreenshotDialog({ excerpt, shareLink, createShareLink, on
         url = URL.createObjectURL(blob);
         setRendered({ options, blob, url });
       }).catch((err: unknown) => {
-        if (!cancelled) setRenderError(t(err instanceof Error && err.message === "selection-size" ? "screenshot.tooLong" : err instanceof Error && err.message === "screenshot-timeout" ? "screenshot.timedOut" : "screenshot.renderFailed"));
+        if (cancelled) return;
+        console.error("Reader screenshot rendering failed", err);
+        const code = err && typeof err === "object" && "message" in err ? String(err.message) : String(err);
+        setRenderError(t(code === "selection-size" ? "screenshot.tooLong" : code === "screenshot-timeout" ? "screenshot.timedOut" : "screenshot.renderFailed"));
+        if (err instanceof ScreenshotStepError) {
+          setRenderDetail(t("screenshot.errorDetail", { step: t("screenshot.steps." + err.step), detail: err.detail }));
+        } else if (code && code !== "selection-size" && code !== "screenshot-timeout") {
+          setRenderDetail(t("screenshot.errorDetail", { step: t("screenshot.steps.unknown"), detail: code }));
+        }
       });
     }
     return () => { cancelled = true; controller.abort(); if (url) URL.revokeObjectURL(url); };
@@ -109,7 +120,7 @@ export function ReaderScreenshotDialog({ excerpt, shareLink, createShareLink, on
       {shareError && <p className="error" role="alert">{shareError}</p>}
     </div>}
     {showLink && link && <p className="hint screenshot-link">{options.link}</p>}
-    {renderError && <div><p className="error" role="alert">{renderError}</p>
+    {renderError && <div><p className="error" role="alert">{renderError}{renderDetail && <><br />{renderDetail}</>}</p>
       <button className="btn" onClick={() => setAttempt(value => value + 1)}>{t("screenshot.retry")}</button></div>}
     {image ? <div className="screenshot-preview"><img src={image.url} alt={t("screenshot.preview")} /></div> : !renderError && (!showLink || link) && <p role="status">{t("screenshot.rendering")}</p>}
     {!canCopy && <p className="hint">{t("screenshot.clipboardUnavailable")}</p>}

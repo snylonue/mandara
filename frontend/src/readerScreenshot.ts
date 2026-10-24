@@ -1,4 +1,4 @@
-import { screenshotTask, waitForScreenshot } from "./screenshotTask";
+import { screenshotStep, screenshotTask } from "./screenshotTask";
 import textStyles from "./styles/epub-content.css?raw";
 import serifFontStyles from "@fontsource-variable/noto-serif-sc/index.css?inline";
 
@@ -125,7 +125,7 @@ export function renderReaderScreenshot(options: ScreenshotOptions, parent?: Abor
     if (!options.text.trim() || options.text.length > MAX_SCREENSHOT_TEXT) throw new Error("selection-size");
     const width = options.viewport?.width ? Math.ceil(options.viewport.width) + PADDING * 2 : WIDTH;
     const passage = options.document
-      ? await (await waitForScreenshot(import("./epubScreenshot"), signal)).renderEpubScreenshot(options.document, width - PADDING * 2, MAX_HEIGHT, options.viewport?.height, signal)
+      ? await (await screenshotStep("loadRenderer", () => import("./epubScreenshot"), signal)).renderEpubScreenshot(options.document, width - PADDING * 2, MAX_HEIGHT, options.viewport?.height, signal)
       : null;
     const passageHeight = passage ? Math.ceil(passage.height * Math.min(1, (width - PADDING * 2) / passage.width)) : 0;
     const canvas = document.createElement("canvas");
@@ -140,7 +140,7 @@ export function renderReaderScreenshot(options: ScreenshotOptions, parent?: Abor
     ].filter((section) => section.text || section.image).map(async (section) => {
       const font = section.weight + " " + section.size + "px " + style.fontFamily;
       // Canvas does not wait for unused unicode-range subsets to download.
-      if (section.text) await waitForScreenshot(document.fonts?.load(font, section.text), signal);
+      if (section.text) await screenshotStep("metadataFonts", () => document.fonts?.load(font, section.text!), signal);
       ctx.font = font;
       return { ...section, font, lines: section.image ? [] : wrapScreenshotText(section.text!, width - PADDING * 2, (line) => ctx.measureText(line).width) };
     }));
@@ -169,7 +169,7 @@ export function renderReaderScreenshot(options: ScreenshotOptions, parent?: Abor
       }
       y += 24;
     }
-    return await waitForScreenshot(new Promise<Blob>((resolve, reject) => canvas.toBlob((blob) => {
+    return await screenshotStep("encodePng", () => new Promise<Blob>((resolve, reject) => canvas.toBlob((blob) => {
       if (blob) resolve(blob);
       else reject(new Error("png-unavailable"));
     }, "image/png")), signal);

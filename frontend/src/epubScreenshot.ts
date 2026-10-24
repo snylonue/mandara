@@ -1,5 +1,5 @@
 import { toCanvas } from "html-to-image";
-import { screenshotTask, waitForScreenshot } from "./screenshotTask";
+import { screenshotStep, screenshotTask, waitForScreenshot } from "./screenshotTask";
 
 function fontFamilies(value: string): string[] {
   return value.split(",").map(family => family.trim().replace(/^['"]|['"]$/g, "").toLowerCase());
@@ -71,14 +71,14 @@ export function renderEpubScreenshot(source: string, width: number, maxHeight: n
     // Install CSP before any publication markup, as in the reader frame.
     frame.srcdoc = source.replace(/<!doctype html>/i, '<!doctype html><meta http-equiv="Content-Security-Policy" content="' + csp + '">');
     try {
-      await waitForScreenshot(new Promise<void>((resolve, reject) => {
+      await screenshotStep("loadDocument", () => new Promise<void>((resolve, reject) => {
         frame.onload = () => resolve();
         frame.onerror = () => reject(new Error("epub-load-failed"));
         document.body.append(frame);
       }), signal);
       const doc = frame.contentDocument!;
-      await waitForScreenshot(doc.fonts?.ready, signal);
-      await waitForScreenshot(Promise.all(Array.from(doc.images, image => image.decode())), signal);
+      await screenshotStep("loadFonts", () => doc.fonts?.ready, signal);
+      await screenshotStep("loadImages", () => Promise.all(Array.from(doc.images, image => image.decode())), signal);
       const root = doc.documentElement;
       const vertical = getComputedStyle(doc.body).writingMode.startsWith("vertical");
       // Let the excerpt grow on its block axis, not inside the reader's scroll viewport.
@@ -94,11 +94,12 @@ export function renderEpubScreenshot(source: string, width: number, maxHeight: n
       // scrollHeight is at least the iframe viewport height even for a short passage.
       const captureHeight = Math.ceil(Math.max(1, doc.body.scrollHeight, root.scrollHeight > viewportHeight ? root.scrollHeight : 0, ...bounds.map(rect => rect.bottom)) - top);
       if (captureWidth > maxHeight || captureHeight > maxHeight || captureWidth * captureHeight > width * maxHeight) throw new Error("selection-size");
-      return await waitForScreenshot(toCanvas(root, {
+      const fontEmbedCSS = await screenshotStep("embedFonts", () => fontFaces(doc, signal), signal);
+      return await screenshotStep("rasterize", () => toCanvas(root, {
         width: captureWidth, height: captureHeight, pixelRatio: 1,
         // Preserve the measured layout while expanding the SVG viewport to include overflow.
         style: { width: root.getBoundingClientRect().width + "px", height: root.getBoundingClientRect().height + "px", transform: "translate(" + -left + "px," + -top + "px)" },
-        fontEmbedCSS: await fontFaces(doc, signal),
+        fontEmbedCSS,
         // The computed clone has all presentation; source rules need not be rendered again.
         filter: node => !["HEAD", "STYLE", "SCRIPT"].includes(node.nodeName),
       }), signal);

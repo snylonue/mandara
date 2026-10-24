@@ -1,5 +1,26 @@
 export const SCREENSHOT_TIMEOUT = 20000;
 
+export type ScreenshotStep = "loadRenderer" | "loadDocument" | "loadFonts" | "loadImages" | "embedFonts" | "rasterize" | "metadataFonts" | "encodePng";
+
+export class ScreenshotStepError extends Error {
+  constructor(readonly step: ScreenshotStep, readonly detail: string) {
+    super(step + ": " + detail);
+    this.name = "ScreenshotStepError";
+  }
+}
+
+/** Preserve the failing stage without recording the selected text or document. */
+export async function screenshotStep<T>(step: ScreenshotStep, work: () => PromiseLike<T> | T, signal: AbortSignal): Promise<T> {
+  try { return await waitForScreenshot(work(), signal); }
+  catch (error) {
+    if (signal.aborted || error instanceof ScreenshotStepError) throw error;
+    const detail = error && typeof error === "object" && "message" in error
+      ? String(error.message)
+      : error && typeof error === "object" && "type" in error ? String(error.type) : String(error);
+    throw new ScreenshotStepError(step, detail);
+  }
+}
+
 /** Bound every asynchronous stage, including browser APIs that may never settle. */
 export function waitForScreenshot<T>(work: PromiseLike<T> | T, signal: AbortSignal): Promise<T> {
   return new Promise((resolve, reject) => {

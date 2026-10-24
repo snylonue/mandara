@@ -392,6 +392,18 @@
     "preview": "所选文字截图预览",
     "rendering": "正在生成截图…",
     "renderFailed": "截图生成失败，请重试。",
+    "errorDetail": "失败环节：{{step}}；错误详情：{{detail}}",
+    "steps": {
+      "loadRenderer": "加载截图模块",
+      "loadDocument": "加载选段文档",
+      "loadFonts": "加载正文字体",
+      "loadImages": "解码书内图片",
+      "embedFonts": "嵌入字体资源",
+      "rasterize": "绘制选段图片",
+      "metadataFonts": "加载书名及章节字体",
+      "encodePng": "编码 PNG",
+      "unknown": "生成截图"
+    },
     "timedOut": "截图生成超时，请检查网络或缩短选段后重试。",
     "retry": "重新生成",
     "tooLong": "所选内容过长，请减少文字或段落后重试（最多 6000 字）。",
