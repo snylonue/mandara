@@ -24,6 +24,53 @@ export function waitForScreenshotImage(image: HTMLImageElement, signal: AbortSig
   });
 }
 
+/** Embed SVG image references while their owner document is still connected.
+ * The clone library otherwise waits for load on detached SVGImageElements.
+ */
+export async function embedScreenshotSvgImages(root: ParentNode, signal: AbortSignal): Promise<void> {
+  const xlink = "http://www.w3.org/1999/xlink";
+  const resources = new Map<string, Promise<string>>();
+  await Promise.all(Array.from(root.querySelectorAll<SVGImageElement>("svg image"), async image => {
+    const reference = image.getAttribute("href") ?? image.getAttributeNS(xlink, "href") ?? image.getAttribute("xlink:href");
+    if (!reference || reference.startsWith("data:")) return;
+    signal.throwIfAborted();
+    const url = new URL(reference, location.href);
+    // Match the export frame's image CSP instead of fetching arbitrary book URLs.
+    if (url.origin !== location.origin || !url.pathname.startsWith("/api/images/")) throw new Error("image-origin");
+    const fragment = url.hash;
+    url.hash = "";
+    let data = resources.get(url.href);
+    if (!data) {
+      data = (async () => {
+        const response = await fetch(url.href, { signal });
+        if (!response.ok) throw new Error("image-load");
+        const blob = await response.blob();
+        return new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          const aborted = () => reader.abort();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = () => reject(reader.error);
+          reader.onabort = () => reject(signal.reason);
+          reader.onloadend = () => signal.removeEventListener("abort", aborted);
+          if (signal.aborted) { reject(signal.reason); return; }
+          signal.addEventListener("abort", aborted, { once: true });
+          try { reader.readAsDataURL(blob); }
+          catch (error) { signal.removeEventListener("abort", aborted); reject(error); }
+        });
+      })();
+      resources.set(url.href, data);
+    }
+    const embedded = await waitForScreenshot(data, signal) + fragment;
+    signal.throwIfAborted();
+    if (image.hasAttribute("href")) image.setAttribute("href", embedded);
+    if (image.hasAttributeNS(xlink, "href") || image.hasAttribute("xlink:href")) {
+      image.removeAttributeNS(xlink, "href");
+      image.removeAttribute("xlink:href");
+      image.setAttributeNS(xlink, "xlink:href", embedded);
+    }
+  }));
+}
+
 /** Allow SVG font painting a frame without depending on foreground-only rAF. */
 function paintReady(signal: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {

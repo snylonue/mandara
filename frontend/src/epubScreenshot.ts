@@ -1,4 +1,4 @@
-import { rasterizeScreenshot, waitForScreenshotImage } from "./screenshotImage";
+import { embedScreenshotSvgImages, rasterizeScreenshot, waitForScreenshotImage } from "./screenshotImage";
 import { screenshotPixelRatio } from "./screenshotCanvas";
 import { screenshotStep, screenshotTask, waitForScreenshot } from "./screenshotTask";
 
@@ -79,10 +79,13 @@ export function renderEpubScreenshot(source: string, width: number, maxHeight: n
       }), signal);
       const doc = frame.contentDocument!;
       await screenshotStep("loadFonts", () => doc.fonts?.ready, signal);
-      await screenshotStep("loadImages", () => Promise.all(Array.from(doc.images, image => {
-        image.loading = "eager";
-        return waitForScreenshotImage(image, signal);
-      })), signal);
+      await screenshotStep("loadImages", () => Promise.all([
+        embedScreenshotSvgImages(doc, signal),
+        ...Array.from(doc.images, image => {
+          image.loading = "eager";
+          return waitForScreenshotImage(image, signal);
+        }),
+      ]), signal);
       const root = doc.documentElement;
       // HTML accepts unbound epub: attributes, but the SVG image must be valid XML.
       // Declare the prefix instead of dropping semantics or changing CSS selectors.

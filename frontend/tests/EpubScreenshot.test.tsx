@@ -153,6 +153,27 @@ it("loads book illustrations without waiting for a pending SVG decode", async ()
   expect(image.loading).toBe("eager");
 });
 
+it.each(["href", "xlink:href", "both"])("embeds SVG %s image references before cloning without detached load events", async attribute => {
+  const attributes = attribute === "both" ? 'href="/api/images/note" xlink:href="/api/images/note"' : attribute + '="/api/images/note"';
+  const picture = '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="20" height="20"><image width="20" height="20" ' + attributes + '/><image width="20" height="20" href="/api/images/note"/></svg>';
+  const fetchImage = vi.fn().mockResolvedValue({ ok: true, blob: async () => new Blob(["image"], { type: "image/png" }) });
+  vi.stubGlobal("fetch", fetchImage);
+  const canvas = document.createElement("canvas");
+  vi.mocked(rasterizeScreenshot).mockImplementationOnce(async node => {
+    for (const image of node.querySelectorAll("svg image")) {
+      const reference = image.getAttribute("href") || image.getAttributeNS("http://www.w3.org/1999/xlink", "href");
+      expect(reference).toMatch(/^data:image\/png;base64,/);
+    }
+    const xml = new XMLSerializer().serializeToString(node);
+    expect(new DOMParser().parseFromString(xml, "application/xhtml+xml").querySelector("parsererror")).toBeNull();
+    return canvas;
+  });
+  const rendering = renderEpubScreenshot(source.replace("</p>", picture + "</p>"), 390, 12000);
+  await loadCapture(390, 400);
+  expect(await rendering).toBe(canvas);
+  expect(fetchImage).toHaveBeenCalledExactlyOnceWith(location.origin + "/api/images/note", { signal: expect.any(AbortSignal) });
+});
+
 it("rejects excessive dimensions without truncating or allocating a canvas", async () => {
   const rendering = renderEpubScreenshot(source, 772, 12000);
   const rejected = expect(rendering).rejects.toThrow("selection-size");
