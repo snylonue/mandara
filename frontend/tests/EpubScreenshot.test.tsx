@@ -84,7 +84,7 @@ it("rasterizes in a sandbox with embedded font CSS and removes the temporary fra
   expect(frame.getAttribute("sandbox")).toBe("allow-same-origin");
   expect(frame.srcdoc).toContain("script-src 'none'");
   expect(await rendering).toBe(canvas);
-  expect(toCanvas).toHaveBeenCalledWith(doc.documentElement, expect.objectContaining({ width: 772, height: 400, pixelRatio: 1, fontEmbedCSS: expect.stringContaining("@font-face") }));
+  expect(toCanvas).toHaveBeenCalledWith(doc.documentElement, expect.objectContaining({ width: 772, height: 400, pixelRatio: 2, fontEmbedCSS: expect.stringContaining("@font-face") }));
   expect(document.body.contains(frame)).toBe(false);
   expect(document.head.textContent).not.toContain("font-family:book");
 });
@@ -126,6 +126,17 @@ it("allows and embeds self-hosted reader fonts before rasterizing", async () => 
   const options = vi.mocked(toCanvas).mock.lastCall![1]!;
   expect(options.fontEmbedCSS).toContain("data:font/woff2;base64,Zm9udA==");
   expect(options.fontEmbedCSS).not.toContain("/assets/reader.woff2");
+});
+
+it("limits raster pixels for a long excerpt without changing its CSS dimensions", async () => {
+  vi.mocked(toCanvas).mockResolvedValueOnce(document.createElement("canvas"));
+  const rendering = renderEpubScreenshot(source, 772, 12000);
+  await loadCapture(772, 11000);
+  await rendering;
+  const options = vi.mocked(toCanvas).mock.lastCall![1]!;
+  expect([options.width, options.height]).toEqual([772, 11000]);
+  expect(options.pixelRatio).toBeLessThan(2);
+  expect(Math.floor(772 * options.pixelRatio!) * Math.floor(11000 * options.pixelRatio!)).toBeLessThanOrEqual(16000000);
 });
 
 it("rejects excessive dimensions without truncating or allocating a canvas", async () => {

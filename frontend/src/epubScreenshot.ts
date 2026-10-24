@@ -1,4 +1,5 @@
 import { toCanvas } from "html-to-image";
+import { screenshotPixelRatio } from "./screenshotCanvas";
 import { screenshotStep, screenshotTask, waitForScreenshot } from "./screenshotTask";
 
 function fontFamilies(value: string): string[] {
@@ -99,7 +100,7 @@ export function renderEpubScreenshot(source: string, width: number, maxHeight: n
       if (captureWidth > maxHeight || captureHeight > maxHeight || captureWidth * captureHeight > width * maxHeight) throw new Error("selection-size");
       const fontEmbedCSS = await screenshotStep("embedFonts", () => fontFaces(doc, signal), signal);
       return await screenshotStep("rasterize", () => toCanvas(root, {
-        width: captureWidth, height: captureHeight, pixelRatio: 1,
+        width: captureWidth, height: captureHeight, pixelRatio: screenshotPixelRatio(captureWidth, captureHeight),
         // Preserve the measured layout while expanding the SVG viewport to include overflow.
         style: { width: root.getBoundingClientRect().width + "px", height: root.getBoundingClientRect().height + "px", transform: "translate(" + -left + "px," + -top + "px)" },
         fontEmbedCSS,

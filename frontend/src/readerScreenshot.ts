@@ -1,4 +1,5 @@
 import { screenshotStep, screenshotTask } from "./screenshotTask";
+import { screenshotPixelRatio } from "./screenshotCanvas";
 import textStyles from "./styles/epub-content.css?raw";
 import serifFontStyles from "@fontsource-variable/noto-serif-sc/index.css?inline";
 
@@ -11,8 +12,8 @@ export function selectedChapterText(root: Element, selection: Selection | null):
 }
 
 export const MAX_SCREENSHOT_TEXT = 6000;
-const WIDTH = 900;
-const PADDING = 64;
+const PADDING = 16;
+const WIDTH = 772 + PADDING * 2;
 const MAX_HEIGHT = 12000;
 
 export interface ScreenshotStyle {
@@ -132,11 +133,12 @@ export function renderReaderScreenshot(options: ScreenshotOptions, parent?: Abor
     const ctx = canvas.getContext("2d");
     if (!ctx) throw new Error("canvas-unavailable");
     const { style } = options;
+    // Keep the passage first; optional attribution is a small, shared footer.
+    const metadata = [options.title, options.chapter].filter(Boolean).join(" · ");
     const sections = await Promise.all([
-      { text: options.title, size: 20, lineHeight: 30, color: style.foreground, weight: 600 },
-      { text: options.chapter, size: 18, lineHeight: 28, color: style.muted, weight: 400 },
-      { text: passage ? undefined : options.text, image: passage, size: 28, lineHeight: 48, color: style.foreground, weight: 400 },
-      { text: options.link, size: 20, lineHeight: 30, color: style.muted, weight: 400 },
+      { text: passage ? undefined : options.text, image: passage, size: 17, lineHeight: 34, color: style.foreground, weight: 400, gap: 0 },
+      { text: metadata, size: 12, lineHeight: 18, color: style.muted, weight: 400, gap: 10 },
+      { text: options.link, size: 11, lineHeight: 16, color: style.muted, weight: 400, gap: 6 },
     ].filter((section) => section.text || section.image).map(async (section) => {
       const font = section.weight + " " + section.size + "px " + style.fontFamily;
       // Canvas does not wait for unused unicode-range subsets to download.
@@ -144,21 +146,22 @@ export function renderReaderScreenshot(options: ScreenshotOptions, parent?: Abor
       ctx.font = font;
       return { ...section, font, lines: section.image ? [] : wrapScreenshotText(section.text!, width - PADDING * 2, (line) => ctx.measureText(line).width) };
     }));
-    const height = PADDING * 2 + 16 + sections.reduce((sum, section) => sum + (section.image ? passageHeight : section.lines.length * section.lineHeight) + 24, 0);
+    const height = PADDING * 2 + sections.reduce((sum, section) => sum + section.gap + (section.image ? passageHeight : section.lines.length * section.lineHeight), 0);
     // Never silently truncate long selections or exceed mobile canvas limits.
     if (height > MAX_HEIGHT) throw new Error("selection-size");
-    canvas.width = width;
-    canvas.height = height;
+    const ratio = screenshotPixelRatio(width, height);
+    canvas.width = Math.floor(width * ratio);
+    canvas.height = Math.floor(height * ratio);
+    ctx.scale(ratio, ratio);
     ctx.fillStyle = style.background;
     ctx.fillRect(0, 0, width, height);
-    ctx.fillStyle = style.accent;
-    ctx.fillRect(PADDING, PADDING, 48, 4);
     ctx.textBaseline = "top";
-    let y = PADDING + 32;
+    let y = PADDING;
     for (const section of sections) {
+      y += section.gap;
       if (section.image) {
         ctx.drawImage(section.image, PADDING, y, Math.min(section.image.width, width - PADDING * 2), passageHeight);
-        y += passageHeight + 24;
+        y += passageHeight;
         continue;
       }
       ctx.font = section.font;
@@ -167,7 +170,6 @@ export function renderReaderScreenshot(options: ScreenshotOptions, parent?: Abor
         ctx.fillText(line, PADDING, y);
         y += section.lineHeight;
       }
-      y += 24;
     }
     return await screenshotStep("encodePng", () => new Promise<Blob>((resolve, reject) => canvas.toBlob((blob) => {
       if (blob) resolve(blob);
