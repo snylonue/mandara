@@ -4,7 +4,7 @@ export type ScreenshotStep = "loadRenderer" | "loadDocument" | "loadFonts" | "lo
 
 export class ScreenshotStepError extends Error {
   constructor(readonly step: ScreenshotStep, readonly detail: string) {
-    super(step + ": " + detail);
+    super(detail === "screenshot-timeout" ? detail : step + ": " + detail);
     this.name = "ScreenshotStepError";
   }
 }
@@ -13,7 +13,11 @@ export class ScreenshotStepError extends Error {
 export async function screenshotStep<T>(step: ScreenshotStep, work: () => PromiseLike<T> | T, signal: AbortSignal): Promise<T> {
   try { return await waitForScreenshot(work(), signal); }
   catch (error) {
-    if (signal.aborted || error instanceof ScreenshotStepError) throw error;
+    if (error instanceof ScreenshotStepError) throw error;
+    if (signal.aborted) {
+      if (signal.reason?.message === "screenshot-timeout") throw new ScreenshotStepError(step, "screenshot-timeout");
+      throw error;
+    }
     const detail = error && typeof error === "object" && "message" in error
       ? String(error.message)
       : error && typeof error === "object" && "type" in error ? String(error.type) : String(error);

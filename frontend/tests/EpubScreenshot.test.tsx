@@ -1,12 +1,12 @@
 import { fireEvent } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import { toCanvas } from "html-to-image";
+import { rasterizeScreenshot } from "../src/screenshotImage";
 import { renderEpubScreenshot } from "../src/epubScreenshot";
 import { MAX_SCREENSHOT_TEXT, selectedEpubContent } from "../src/readerScreenshot";
 import { SCREENSHOT_TIMEOUT } from "../src/screenshotTask";
 
-vi.mock("html-to-image", () => ({ toCanvas: vi.fn() }));
-afterEach(() => { document.querySelectorAll("iframe").forEach(frame => frame.remove()); vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.clearAllMocks(); vi.mocked(toCanvas).mockReset(); vi.useRealTimers(); });
+vi.mock("../src/screenshotImage", async importOriginal => ({ ...await importOriginal<typeof import("../src/screenshotImage")>(), rasterizeScreenshot: vi.fn() }));
+afterEach(() => { document.querySelectorAll("iframe").forEach(frame => frame.remove()); vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.clearAllMocks(); vi.mocked(rasterizeScreenshot).mockReset(); vi.useRealTimers(); });
 
 function chapter() {
   const frame = document.createElement("iframe");
@@ -78,13 +78,13 @@ const source = '<!doctype html><html><head><style>@font-face{font-family:book;sr
 
 it("rasterizes in a sandbox with embedded font CSS and removes the temporary frame", async () => {
   const canvas = document.createElement("canvas");
-  vi.mocked(toCanvas).mockResolvedValueOnce(canvas);
+  vi.mocked(rasterizeScreenshot).mockResolvedValueOnce(canvas);
   const rendering = renderEpubScreenshot(source, 772, 12000);
   const { frame, doc } = await loadCapture();
   expect(frame.getAttribute("sandbox")).toBe("allow-same-origin");
   expect(frame.srcdoc).toContain("script-src 'none'");
   expect(await rendering).toBe(canvas);
-  expect(toCanvas).toHaveBeenCalledWith(doc.documentElement, expect.objectContaining({ width: 772, height: 400, pixelRatio: 2, fontEmbedCSS: expect.stringContaining("@font-face") }));
+  expect(rasterizeScreenshot).toHaveBeenCalledWith(doc.documentElement, expect.objectContaining({ width: 772, height: 400, pixelRatio: 2, fontEmbedCSS: expect.stringContaining("@font-face") }));
   expect(document.body.contains(frame)).toBe(false);
   expect(document.head.textContent).not.toContain("font-family:book");
 });
@@ -93,7 +93,7 @@ it.each([false, true])("serializes EPUB semantic attributes as valid XML with an
   const namespace = "http://www.idpf.org/2007/ops";
   const chapter = '<!doctype html><html' + (existing ? ' xmlns:epub="' + namespace + '"' : '') + '><head><style>section{color:red}</style></head><body epub:type="bodymatter"><section epub:type="chapter"><p>所选正文</p></section></body></html>';
   const canvas = document.createElement("canvas");
-  vi.mocked(toCanvas).mockImplementationOnce(async node => {
+  vi.mocked(rasterizeScreenshot).mockImplementationOnce(async node => {
     expect(node.querySelector("section")!.getAttribute("epub:type")).toBe("chapter");
     expect(getComputedStyle(node.querySelector("section")!).color).toBe("rgb(255, 0, 0)");
     const xml = new XMLSerializer().serializeToString(node);
@@ -109,7 +109,7 @@ it.each([false, true])("serializes EPUB semantic attributes as valid XML with an
 });
 
 it("allows and embeds self-hosted reader fonts before rasterizing", async () => {
-  vi.mocked(toCanvas).mockResolvedValueOnce(document.createElement("canvas"));
+  vi.mocked(rasterizeScreenshot).mockResolvedValueOnce(document.createElement("canvas"));
   const fetchFont = vi.fn().mockResolvedValue({ ok: true, blob: async () => new Blob(["font"], { type: "font/woff2" }) });
   vi.stubGlobal("fetch", fetchFont);
   const rendering = renderEpubScreenshot(source.replace("data:font/woff2;base64,AA==", "/assets/reader.woff2"), 772, 12000);
@@ -123,20 +123,34 @@ it("allows and embeds self-hosted reader fonts before rasterizing", async () => 
   expect(frame.srcdoc).toContain("font-src data: " + location.origin);
   await rendering;
   expect(fetchFont).toHaveBeenCalledWith(location.origin + "/assets/reader.woff2", { signal: expect.any(AbortSignal) });
-  const options = vi.mocked(toCanvas).mock.lastCall![1]!;
+  const options = vi.mocked(rasterizeScreenshot).mock.lastCall![1]!;
   expect(options.fontEmbedCSS).toContain("data:font/woff2;base64,Zm9udA==");
   expect(options.fontEmbedCSS).not.toContain("/assets/reader.woff2");
 });
 
 it("limits raster pixels for a long excerpt without changing its CSS dimensions", async () => {
-  vi.mocked(toCanvas).mockResolvedValueOnce(document.createElement("canvas"));
+  vi.mocked(rasterizeScreenshot).mockResolvedValueOnce(document.createElement("canvas"));
   const rendering = renderEpubScreenshot(source, 772, 12000);
   await loadCapture(772, 11000);
   await rendering;
-  const options = vi.mocked(toCanvas).mock.lastCall![1]!;
+  const options = vi.mocked(rasterizeScreenshot).mock.lastCall![1]!;
   expect([options.width, options.height]).toEqual([772, 11000]);
   expect(options.pixelRatio).toBeLessThan(2);
   expect(Math.floor(772 * options.pixelRatio!) * Math.floor(11000 * options.pixelRatio!)).toBeLessThanOrEqual(16000000);
+});
+
+it("loads book illustrations without waiting for a pending SVG decode", async () => {
+  const canvas = document.createElement("canvas");
+  vi.mocked(rasterizeScreenshot).mockResolvedValueOnce(canvas);
+  const rendering = renderEpubScreenshot(source.replace("</p>", '<img src="data:image/svg+xml,%3Csvg%2F%3E"></p>'), 390, 12000);
+  const loaded = loadCapture(390, 400);
+  const image = document.querySelector<HTMLIFrameElement>('iframe[aria-hidden="true"]')!.contentDocument!.querySelector("img")!;
+  Object.defineProperties(image, { complete: { value: true }, naturalWidth: { value: 16 } });
+  image.decode = vi.fn(() => new Promise(() => {}));
+  await loaded;
+  expect(await rendering).toBe(canvas);
+  expect(image.decode).not.toHaveBeenCalled();
+  expect(image.loading).toBe("eager");
 });
 
 it("rejects excessive dimensions without truncating or allocating a canvas", async () => {
@@ -144,23 +158,23 @@ it("rejects excessive dimensions without truncating or allocating a canvas", asy
   const rejected = expect(rendering).rejects.toThrow("selection-size");
   const { frame } = await loadCapture(772, 12001);
   await rejected;
-  expect(toCanvas).not.toHaveBeenCalled();
+  expect(rasterizeScreenshot).not.toHaveBeenCalled();
   expect(document.body.contains(frame)).toBe(false);
 });
 
 it("includes leftward vertical overflow without changing the measured layout", async () => {
-  vi.mocked(toCanvas).mockResolvedValueOnce(document.createElement("canvas"));
+  vi.mocked(rasterizeScreenshot).mockResolvedValueOnce(document.createElement("canvas"));
   const rendering = renderEpubScreenshot(source, 772, 12000);
   const loaded = loadCapture();
   const frame = document.querySelector<HTMLIFrameElement>('iframe[aria-hidden="true"]')!;
   vi.spyOn(frame.contentDocument!.querySelector("p")!, "getBoundingClientRect").mockReturnValue(new DOMRect(-300, 0, 500, 400));
   await loaded;
   await rendering;
-  expect(toCanvas).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ width: 1072, style: expect.objectContaining({ width: "772px", transform: "translate(300px,0px)" }) }));
+  expect(rasterizeScreenshot).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ width: 1072, style: expect.objectContaining({ width: "772px", transform: "translate(300px,0px)" }) }));
 });
 
 it("removes the temporary frame if rasterization fails", async () => {
-  vi.mocked(toCanvas).mockRejectedValueOnce(new Error("render-failed"));
+  vi.mocked(rasterizeScreenshot).mockRejectedValueOnce(new Error("render-failed"));
   const rendering = renderEpubScreenshot(source, 772, 12000);
   const rejected = expect(rendering).rejects.toThrow("render-failed");
   const { frame } = await loadCapture();
@@ -181,7 +195,7 @@ it("embeds only used families and Unicode subsets, with deduplicated parallel re
   const response = new Promise(resolve => { finish = () => resolve({ ok: true, blob: async () => new Blob(["font"], { type: "font/woff2" }) }); });
   const fetchFont = vi.fn(() => response);
   vi.stubGlobal("fetch", fetchFont);
-  vi.mocked(toCanvas).mockResolvedValueOnce(document.createElement("canvas"));
+  vi.mocked(rasterizeScreenshot).mockResolvedValueOnce(document.createElement("canvas"));
   const rendering = renderEpubScreenshot(source.replace(/<style>[\s\S]*?<\/style>/, '<style>' + css + 'p{font-family:book}</style>'), 390, 12000);
   const loaded = loadCapture(390, 400);
   const doc = document.querySelector<HTMLIFrameElement>('iframe[aria-hidden="true"]')!.contentDocument!;
@@ -198,35 +212,35 @@ it("embeds only used families and Unicode subsets, with deduplicated parallel re
   try {
     await vi.waitFor(() => expect(fetchFont).toHaveBeenCalledTimes(2));
     expect(fetchFont.mock.calls.map(call => call[0])).toEqual([location.origin + '/assets/zh.woff2', location.origin + '/assets/wen.woff2']);
-    expect(toCanvas).not.toHaveBeenCalled();
+    expect(rasterizeScreenshot).not.toHaveBeenCalled();
   } finally {
     finish();
     await rendering;
   }
-  const embedded = vi.mocked(toCanvas).mock.lastCall![1]!.fontEmbedCSS;
+  const embedded = vi.mocked(rasterizeScreenshot).mock.lastCall![1]!.fontEmbedCSS;
   expect(embedded).toContain('U+6B??');
   expect(embedded).not.toContain('unused');
   expect(embedded).not.toContain('U+0000-00FF');
 });
 
 it("preserves the original reading viewport instead of using a fixed capture height", async () => {
-  vi.mocked(toCanvas).mockResolvedValueOnce(document.createElement("canvas"));
+  vi.mocked(rasterizeScreenshot).mockResolvedValueOnce(document.createElement("canvas"));
   const rendering = renderEpubScreenshot(source, 390, 12000, 740);
   const { frame } = await loadCapture(390, 400);
   expect(frame.style.width).toBe("390px");
   expect(frame.style.height).toBe("740px");
   await rendering;
-  expect(toCanvas).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ width: 390 }));
+  expect(rasterizeScreenshot).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ width: 390 }));
 });
 
 it("times out stalled rasterization and removes its isolated document", async () => {
   vi.useFakeTimers();
-  vi.mocked(toCanvas).mockImplementationOnce(() => new Promise(() => {}));
+  vi.mocked(rasterizeScreenshot).mockImplementationOnce(() => new Promise(() => {}));
   const rendering = renderEpubScreenshot(source, 772, 12000);
   const rejected = expect(rendering).rejects.toThrow("screenshot-timeout");
   const { frame } = await loadCapture();
   await vi.advanceTimersByTimeAsync(1);
-  expect(toCanvas).toHaveBeenCalled();
+  expect(rasterizeScreenshot).toHaveBeenCalled();
   await vi.advanceTimersByTimeAsync(SCREENSHOT_TIMEOUT);
   await rejected;
   expect(frame.isConnected).toBe(false);
@@ -241,5 +255,5 @@ it("cancels pending frame loads without waiting for the timeout", async () => {
   controller.abort(new Error("cancelled"));
   await rejected;
   expect(frame.isConnected).toBe(false);
-  expect(toCanvas).not.toHaveBeenCalled();
+  expect(rasterizeScreenshot).not.toHaveBeenCalled();
 });

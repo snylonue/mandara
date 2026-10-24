@@ -64,7 +64,7 @@ export function ReaderScreenshotDialog({ excerpt, shareLink, createShareLink, on
         const code = err && typeof err === "object" && "message" in err ? String(err.message) : String(err);
         setRenderError(t(code === "selection-size" ? "screenshot.tooLong" : code === "screenshot-timeout" ? "screenshot.timedOut" : "screenshot.renderFailed"));
         if (err instanceof ScreenshotStepError) {
-          setRenderDetail(t("screenshot.errorDetail", { step: t("screenshot.steps." + err.step), detail: err.detail }));
+          setRenderDetail(t("screenshot.errorDetail", { step: t("screenshot.steps." + err.step), detail: err.detail === "screenshot-timeout" ? t("screenshot.timeoutDetail") : err.detail }));
         } else if (code && code !== "selection-size" && code !== "screenshot-timeout") {
           setRenderDetail(t("screenshot.errorDetail", { step: t("screenshot.steps.unknown"), detail: code }));
         }

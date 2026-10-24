@@ -11,11 +11,21 @@ const excerpt: ReaderExcerpt = {
   text: "只截取这句话。", title: "测试书名", chapter: "第二章", chapterIdx: 1,
   style: { background: "#fff", foreground: "#111", muted: "#666", accent: "#369", fontFamily: "serif" },
 };
+it("shows the timed-out stage without exposing an untranslated timeout code", async () => {
+  renderer.mockRejectedValueOnce(new ScreenshotStepError("rasterize", "screenshot-timeout"));
+  render(<ReaderScreenshotDialog excerpt={excerpt} onClose={vi.fn()} />);
+  const alert = await screen.findByRole("alert");
+  expect(alert.textContent).toContain("截图生成超时");
+  expect(alert.textContent).toContain("失败环节：绘制选段图片");
+  expect(alert.textContent).toContain("该环节未在时限内完成");
+  expect(alert.textContent).not.toContain("screenshot-timeout");
+});
+
 it("shows the actual failure stage and clears diagnostics after a successful retry", async () => {
   renderer.mockRejectedValueOnce(new ScreenshotStepError("loadImages", "The source image cannot be decoded."));
   render(<ReaderScreenshotDialog excerpt={excerpt} onClose={vi.fn()} />);
   const alert = await screen.findByRole("alert");
-  expect(alert.textContent).toContain("失败环节：解码书内图片");
+  expect(alert.textContent).toContain("失败环节：加载书内图片");
   expect(alert.textContent).toContain("The source image cannot be decoded.");
   fireEvent.click(screen.getByRole("button", { name: "重新生成" }));
   await screen.findByAltText("所选文字截图预览");

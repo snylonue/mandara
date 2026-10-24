@@ -1,4 +1,4 @@
-import { toCanvas } from "html-to-image";
+import { rasterizeScreenshot, waitForScreenshotImage } from "./screenshotImage";
 import { screenshotPixelRatio } from "./screenshotCanvas";
 import { screenshotStep, screenshotTask, waitForScreenshot } from "./screenshotTask";
 
@@ -79,7 +79,10 @@ export function renderEpubScreenshot(source: string, width: number, maxHeight: n
       }), signal);
       const doc = frame.contentDocument!;
       await screenshotStep("loadFonts", () => doc.fonts?.ready, signal);
-      await screenshotStep("loadImages", () => Promise.all(Array.from(doc.images, image => image.decode())), signal);
+      await screenshotStep("loadImages", () => Promise.all(Array.from(doc.images, image => {
+        image.loading = "eager";
+        return waitForScreenshotImage(image, signal);
+      })), signal);
       const root = doc.documentElement;
       // HTML accepts unbound epub: attributes, but the SVG image must be valid XML.
       // Declare the prefix instead of dropping semantics or changing CSS selectors.
@@ -99,7 +102,8 @@ export function renderEpubScreenshot(source: string, width: number, maxHeight: n
       const captureHeight = Math.ceil(Math.max(1, doc.body.scrollHeight, root.scrollHeight > viewportHeight ? root.scrollHeight : 0, ...bounds.map(rect => rect.bottom)) - top);
       if (captureWidth > maxHeight || captureHeight > maxHeight || captureWidth * captureHeight > width * maxHeight) throw new Error("selection-size");
       const fontEmbedCSS = await screenshotStep("embedFonts", () => fontFaces(doc, signal), signal);
-      return await screenshotStep("rasterize", () => toCanvas(root, {
+      return await screenshotStep("rasterize", () => rasterizeScreenshot(root, {
+        signal,
         width: captureWidth, height: captureHeight, pixelRatio: screenshotPixelRatio(captureWidth, captureHeight),
         // Preserve the measured layout while expanding the SVG viewport to include overflow.
         style: { width: root.getBoundingClientRect().width + "px", height: root.getBoundingClientRect().height + "px", transform: "translate(" + -left + "px," + -top + "px)" },

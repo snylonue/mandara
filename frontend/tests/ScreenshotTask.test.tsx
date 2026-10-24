@@ -17,10 +17,17 @@ it("identifies image error events and cross-realm errors instead of hiding their
     .rejects.toMatchObject({ step: "loadImages", detail: "Cannot decode image" });
 });
 
+it.each(["loadFonts", "rasterize", "encodePng"] as const)("retains %s when a deadline expires", async step => {
+  const controller = new AbortController();
+  const pending = screenshotStep(step, () => new Promise(() => {}), controller.signal);
+  controller.abort(new Error("screenshot-timeout"));
+  await expect(pending).rejects.toMatchObject({ message: "screenshot-timeout", step, detail: "screenshot-timeout" });
+});
+
 it("preserves cancellation reasons and the original failing stage", async () => {
   const controller = new AbortController();
   const pending = screenshotStep("rasterize", () => new Promise(() => {}), controller.signal);
-  const reason = new Error("screenshot-timeout");
+  const reason = new Error("cancelled");
   controller.abort(reason);
   await expect(pending).rejects.toBe(reason);
   const original = new ScreenshotStepError("embedFonts", "font-load");
