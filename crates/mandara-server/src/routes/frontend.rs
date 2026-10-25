@@ -1,5 +1,8 @@
 //! Static frontend files with content-derived ETags.
 
+#[cfg(test)]
+mod tests;
+
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
