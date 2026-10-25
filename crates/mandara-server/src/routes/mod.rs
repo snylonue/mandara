@@ -65,7 +65,7 @@ pub struct ListParams {
     pub source: Option<String>,
 }
 
-pub fn router(state: St) -> Router {
+pub fn router(state: St) -> std::io::Result<Router> {
     let api = Router::new()
         .route("/api/health", get(health))
         .route("/api/auth/register", post(auth::register))
@@ -190,8 +190,8 @@ pub fn router(state: St) -> Router {
     // Serve the built frontend (frontend/dist) at `/` when present.
     let dist = state.cfg.frontend_dir.join("dist");
     if dist.is_dir() {
-        app = app.fallback_service(frontend::router(&dist));
+        app = app.fallback_service(frontend::router(&dist)?);
     }
 
-    app
+    Ok(app)
 }

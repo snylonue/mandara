@@ -109,7 +109,7 @@ impl Fixture {
     }
 
     fn app(&self) -> Router {
-        crate::routes::router(self.state.clone())
+        crate::routes::router(self.state.clone()).unwrap()
     }
 
     fn token(&self, id: &str, role: Role) -> String {

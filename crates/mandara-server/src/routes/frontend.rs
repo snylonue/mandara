@@ -1,28 +1,100 @@
-//! Static frontend files with content-derived ETags.
+//! Static frontend files snapshotted with content-derived ETags at construction.
 
 #[cfg(test)]
 mod tests;
 
+use std::collections::{HashMap, HashSet};
+use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 use axum::Router;
-use axum::body::Body;
+use axum::body::{Body, Bytes};
 use axum::extract::State;
-use axum::http::{HeaderMap, Method, StatusCode, Uri, header};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header};
 use axum::response::Response;
 use axum::routing::get;
 use headers::{ETag, HeaderMapExt, IfMatch, IfNoneMatch};
 use percent_encoding::percent_decode_str;
 use sha2::{Digest, Sha256};
-use tokio::fs;
 
-pub(super) fn router(dist: &Path) -> Router {
-    Router::new().fallback_service(get(serve).with_state(dist.to_path_buf()))
+struct Asset {
+    bytes: Bytes,
+    etag: ETag,
+    content_type: HeaderValue,
+}
+
+#[derive(Default)]
+struct Frontend {
+    files: HashMap<PathBuf, Asset>,
+    blocked: HashSet<PathBuf>,
+}
+
+impl Frontend {
+    fn load(
+        &mut self,
+        root: &Path,
+        relative: &Path,
+        parents: &mut HashSet<PathBuf>,
+    ) -> io::Result<()> {
+        let path = match fs::canonicalize(root.join(relative)) {
+            Ok(path) => path,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        if !path.starts_with(root) {
+            self.blocked.insert(relative.to_path_buf());
+            return Ok(());
+        }
+        let metadata = fs::metadata(&path)?;
+        if metadata.is_dir() {
+            // Internal directory links are allowed, but must not create cycles.
+            if !parents.insert(path.clone()) {
+                self.blocked.insert(relative.to_path_buf());
+                return Ok(());
+            }
+            for entry in fs::read_dir(&path)? {
+                self.load(root, &relative.join(entry?.file_name()), parents)?;
+            }
+            parents.remove(&path);
+        } else if metadata.is_file() {
+            let bytes = Bytes::from(fs::read(&path)?);
+            let digest: String = Sha256::digest(&bytes)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect();
+            self.files.insert(
+                relative.to_path_buf(),
+                Asset {
+                    bytes,
+                    etag: format!("\"sha256-{digest}\"").parse().unwrap(),
+                    content_type: mime_guess::from_path(&path)
+                        .first_or_octet_stream()
+                        .as_ref()
+                        .parse()
+                        .unwrap(),
+                },
+            );
+        }
+        Ok(())
+    }
+}
+
+pub(super) fn router(dist: &Path) -> io::Result<Router> {
+    let root = fs::canonicalize(dist)?;
+    if !root.is_dir() {
+        return Err(io::ErrorKind::NotADirectory.into());
+    }
+    // Keep bytes and validators together: later filesystem changes must not
+    // produce a new response body with an old ETag. Rebuild to refresh files.
+    let mut frontend = Frontend::default();
+    frontend.load(&root, Path::new(""), &mut HashSet::new())?;
+    Ok(Router::new().fallback_service(get(serve).with_state(Arc::new(frontend))))
 }
 
 async fn serve(
-    State(dist): State<PathBuf>,
+    State(frontend): State<Arc<Frontend>>,
     uri: Uri,
     method: Method,
     headers: HeaderMap,
@@ -38,28 +110,34 @@ async fn serve(
     {
         return Err(StatusCode::NOT_FOUND);
     }
-
-    let root = fs::canonicalize(dist).await.map_err(file_error)?;
-    let (path, status) = match resolve_file(&root, relative).await {
-        Ok(path) => (path, StatusCode::OK),
-        Err(error)
-            if matches!(
-                error.kind(),
-                io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
-            ) =>
-        {
+    let relative: PathBuf = relative
+        .components()
+        .filter(|part| !matches!(part, Component::CurDir))
+        .collect();
+    let index = relative.join("index.html");
+    if relative
+        .ancestors()
+        .chain(index.ancestors())
+        .any(|path| frontend.blocked.contains(path))
+    {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let file = if decoded.ends_with('/') {
+        None
+    } else {
+        frontend.files.get(&relative)
+    };
+    let (file, status) = match file.or_else(|| frontend.files.get(&index)) {
+        Some(file) => (file, StatusCode::OK),
+        None => {
             // Preserve the existing index.html fallback's 404 status.
-            let index = resolve_file(&root, Path::new("index.html"))
-                .await
-                .map_err(file_error)?;
+            let index = frontend
+                .files
+                .get(Path::new("index.html"))
+                .ok_or(StatusCode::NOT_FOUND)?;
             (index, StatusCode::NOT_FOUND)
         }
-        Err(error) => return Err(file_error(error)),
     };
-
-    // The same bytes supply the hash and body. Frontend files are small enough
-    // to buffer; range requests intentionally receive the full representation.
-    let bytes = fs::read(&path).await.map_err(file_error)?;
     let cache_control = if status == StatusCode::OK && uri.path().starts_with("/assets/") {
         "public, max-age=31536000, immutable"
     } else {
@@ -70,17 +148,12 @@ async fn serve(
         .header(header::CACHE_CONTROL, cache_control);
 
     if status == StatusCode::OK {
-        let digest: String = Sha256::digest(&bytes)
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
-        let etag: ETag = format!("\"sha256-{digest}\"").parse().unwrap();
+        let etag = &file.etag;
         response.headers_mut().unwrap().typed_insert(etag.clone());
-
         let if_match = headers
             .typed_try_get::<IfMatch>()
             .map_err(|_| StatusCode::BAD_REQUEST)?;
-        if if_match.is_some_and(|condition| !condition.precondition_passes(&etag)) {
+        if if_match.is_some_and(|condition| !condition.precondition_passes(etag)) {
             response
                 .headers_mut()
                 .unwrap()
@@ -93,60 +166,24 @@ async fn serve(
         let if_none_match = headers
             .typed_try_get::<IfNoneMatch>()
             .map_err(|_| StatusCode::BAD_REQUEST)?;
-        if if_none_match.is_some_and(|condition| !condition.precondition_passes(&etag)) {
+        if if_none_match.is_some_and(|condition| !condition.precondition_passes(etag)) {
             // A 304 Content-Length describes the full representation, not its empty body.
             return Ok(response
                 .status(StatusCode::NOT_MODIFIED)
-                .header(header::CONTENT_LENGTH, bytes.len())
+                .header(header::CONTENT_LENGTH, file.bytes.len())
                 .body(Body::empty())
                 .unwrap());
         }
     }
 
     Ok(response
-        .header(
-            header::CONTENT_TYPE,
-            mime_guess::from_path(&path)
-                .first_or_octet_stream()
-                .as_ref(),
-        )
-        .header(header::CONTENT_LENGTH, bytes.len())
+        .header(header::CONTENT_TYPE, file.content_type.clone())
+        .header(header::CONTENT_LENGTH, file.bytes.len())
         .header(header::ACCEPT_RANGES, "none")
         .body(if method == Method::HEAD {
             Body::empty()
         } else {
-            Body::from(bytes)
+            Body::from(file.bytes.clone())
         })
         .unwrap())
-}
-
-async fn resolve_file(root: &Path, relative: &Path) -> io::Result<PathBuf> {
-    let mut path = fs::canonicalize(root.join(relative)).await?;
-    if !path.starts_with(root) {
-        return Err(io::ErrorKind::PermissionDenied.into());
-    }
-    let mut metadata = fs::metadata(&path).await?;
-    if metadata.is_dir() {
-        path = fs::canonicalize(path.join("index.html")).await?;
-        if !path.starts_with(root) {
-            return Err(io::ErrorKind::PermissionDenied.into());
-        }
-        metadata = fs::metadata(&path).await?;
-    }
-    if !metadata.is_file() {
-        return Err(io::ErrorKind::NotFound.into());
-    }
-    Ok(path)
-}
-
-fn file_error(error: io::Error) -> StatusCode {
-    match error.kind() {
-        io::ErrorKind::NotFound
-        | io::ErrorKind::NotADirectory
-        | io::ErrorKind::PermissionDenied => StatusCode::NOT_FOUND,
-        _ => {
-            tracing::error!(%error, "failed to read static frontend file");
-            StatusCode::INTERNAL_SERVER_ERROR
-        }
-    }
 }
