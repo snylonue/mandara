@@ -7,6 +7,8 @@
 # frontend
 /frontend/node_modules
 /frontend/dist
+/frontend/tests/screenshot-lab/node_modules
+/frontend/tests/screenshot-lab/results*/
 
 # wasm plugin build output
 /plugins-built
