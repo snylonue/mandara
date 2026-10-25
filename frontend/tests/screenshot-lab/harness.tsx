@@ -29,6 +29,7 @@ let current: any;
 let doc: Document;
 let target: HTMLElement;
 let excerpt: any;
+let selectedRange: Range;
 const bitmap = async (blob: Blob) => {
   const url = URL.createObjectURL(blob);
   try {
@@ -79,12 +80,21 @@ const descriptor = (el: Element) => {
 
 (window as any).lab = {
   boundaries: checkBoundaries,
-  fixtures: fixtures.map(({ id, selection, format, broken }: any) => ({
+  fixtures: fixtures.map(({ id, selection, format, broken, range }: any) => ({
     id,
     selection,
     format,
     broken,
+    range,
   })),
+  nativeRange() {
+    const bounds = selectedRange.getBoundingClientRect();
+    const x = Math.floor(bounds.left), y = Math.floor(bounds.top);
+    return {
+      clip: { x, y, width: Math.ceil(bounds.right) - x, height: Math.ceil(bounds.bottom) - y },
+      mask: Array.from(selectedRange.getClientRects(), rect => ({ x: rect.left - x, y: rect.top - y, width: rect.width, height: rect.height })),
+    };
+  },
   async setup(id: string, width: number, height: number) {
     current = fixtures.find((f: any) => f.id === id);
     const content =
@@ -165,8 +175,12 @@ const descriptor = (el: Element) => {
       Math.ceil(target.getBoundingClientRect().height) + "px";
     // Snapshot before opening a dialog or moving scroll position, as the reader does.
     const range = doc.createRange();
-    if (current.selection) range.selectNode(target);
+    if (current.range) {
+      range.setStart(doc.querySelector(current.range.start)!.firstChild!, current.range.startOffset);
+      range.setEnd(doc.querySelector(current.range.end)!.firstChild!, current.range.endOffset);
+    } else if (current.selection) range.selectNode(target);
     else range.selectNodeContents(target);
+    selectedRange = range;
     if (current.format === "txt") excerpt = selectedTextContent(target, range);
     else {
       const selection = doc.getSelection()!;
@@ -241,6 +255,8 @@ const descriptor = (el: Element) => {
         excerpt.viewport.width,
         12000,
         excerpt.viewport.height,
+        undefined,
+        excerpt.capture,
       );
     else if (name === "current-png")
       canvas = await bitmap(

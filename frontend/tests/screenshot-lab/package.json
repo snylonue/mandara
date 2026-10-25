@@ -8,11 +8,12 @@
   },
   "dependencies": {
     "@zumer/snapdom": "3.4.0",
-    "modern-screenshot": "4.7.0",
     "dom-to-image-more": "3.11.0",
+    "html-to-image": "1.11.13",
     "html2canvas": "1.4.1",
+    "modern-screenshot": "4.7.0",
     "pixelmatch": "7.1.0",
-    "pngjs": "7.0.0",
-    "playwright": "1.63.0"
+    "playwright": "1.63.0",
+    "pngjs": "7.0.0"
   }
 }

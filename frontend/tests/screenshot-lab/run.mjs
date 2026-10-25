@@ -130,6 +130,17 @@ function compare(reference, actual) {
 // Capture long iframe content as visible native tiles. Enlarging the frame would
 // change media queries and vh units; locator.screenshot alone can clip its content.
 async function nativeScreenshot(page, fixture, profile) {
+  if (fixture.range) {
+    const { clip, mask } = await page.evaluate(() => window.lab.nativeRange());
+    const viewport = fixture.format === "txt" ? { x: 0, y: 0 } : await page.locator("iframe").boundingBox();
+    const png = PNG.sync.read(await page.screenshot({ clip: { ...clip, x: clip.x + viewport.x, y: clip.y + viewport.y }, animations: "disabled", caret: "hide" }));
+    // Native browser pixels are the oracle; the range mask defines only what may be disclosed.
+    for (let y = 0; y < png.height; y++) for (let x = 0; x < png.width; x++) {
+      const cssX = (x + 0.5) / profile.dpr, cssY = (y + 0.5) / profile.dpr;
+      if (!mask.some(rect => cssX >= rect.x && cssX < rect.x + rect.width && cssY >= rect.y && cssY < rect.y + rect.height)) png.data.fill(255, (y * png.width + x) * 4, (y * png.width + x + 1) * 4);
+    }
+    return PNG.sync.write(png);
+  }
   if (fixture.format === "txt")
     return page
       .locator(fixture.selection || "#capture")
@@ -227,7 +238,7 @@ async function save() {
             .dependencies,
           "html-to-image": JSON.parse(
             await readFile(
-              join(dir, "../../node_modules/html-to-image/package.json"),
+              join(dir, "node_modules/html-to-image/package.json"),
               "utf8",
             ),
           ).version,
@@ -511,20 +522,7 @@ try {
                 ]).finally(() => clearTimeout(timer));
                 const png = Buffer.from(result.png.split(",")[1], "base64"),
                   actual = PNG.sync.read(png);
-                const passageReference = white(
-                  Math.ceil(metadata.viewport.width) * profile.dpr,
-                  reference.height,
-                );
-                PNG.bitblt(
-                  reference,
-                  passageReference,
-                  0,
-                  0,
-                  Math.min(reference.width, passageReference.width),
-                  reference.height,
-                  0,
-                  0,
-                );
+                const passageReference = reference;
                 const expected =
                   renderer === "current-png"
                     ? pad(passageReference, 32)

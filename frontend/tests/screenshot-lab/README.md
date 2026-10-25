@@ -1,8 +1,9 @@
 # Screenshot fidelity lab
 
 This is an isolated diagnostic suite, not a replacement screenshot implementation.
-Candidate dependencies belong to this directory and do not enter the production
-frontend bundle.
+Comparator-only dependencies belong to this directory and do not enter the production
+frontend bundle. SnapDOM is also a production dependency; html-to-image is now only
+an isolated comparator.
 
 ## Method
 
@@ -21,16 +22,17 @@ frontend bundle.
 - Compare exact RGBA pixels and Pixelmatch differences (threshold 0.1, excluding
   antialiasing). Record geometry changes separately, even when changed pixels are
   zero. Matching this finite corpus is not proof of universal fidelity.
-- Compare the production passage renderer and final PNG against native pixels,
-  retaining the document's right gutter and adding only the PNG's documented
-  16 CSS px outer padding. Attribution is disabled for this body comparison.
+- Compare the production passage renderer and final PNG against the selected native
+  pixel region, adding only the PNG's documented 16 CSS px outer padding. Attribution
+  is disabled for this body comparison. Partial ranges use native pixels masked by
+  the original range rectangles, without creating a second text layout.
 - Test the strongest candidates after selection extraction as a separate stage:
   an accurate renderer cannot recover sibling context or counter state already
   removed by the selection snapshot.
 
 ## Coverage
 
-Eighteen synthetic publications cover mixed-language text, variable font weights,
+Nineteen synthetic publications cover mixed-language text, variable font weights,
 italic synthesis, ruby, bidi, emoji, vertical writing, inherited variables,
 pseudo-elements, counters, grid/flex/table layout, shadows/transforms/clipping,
 media queries and container units, raster/background/SVG images, EPUB semantic
@@ -41,14 +43,45 @@ Profiles are 772x700 and 390x740 CSS px at DPR 2. The narrower viewport is **not
 physical mobile-device testing. Browser startup failures are recorded separately
 from library failures. Linux WebKit is not a substitute for Safari on an iPhone.
 
-Eight additional real-browser boundary checks exercise empty/oversized selections,
+Ten additional real-browser boundary checks exercise empty/oversized selections,
 width/height guards, cancellation cleanup, missing images/fonts, and the canvas
-pixel budget with a painted marker at the very end of the document.
+pixel budget with a painted marker at the very end of the document. A small
+selection from a chapter over 25,000 CSS px high also verifies that only the
+selected region is subject to the output-size guard, while sibling styles survive.
 
 The suite does not yet establish behavior for every CSS feature, platform font,
 real EPUB, font/image race, browser zoom level, or physical device. Timings are
 observations, not controlled performance benchmarks. No real book content or
 production user data is required.
+
+## Production capture contract
+
+- Snapshot the complete inert document, CSSOM rules, stylesheet state, original
+  viewport, publication boundary, scroll positions, and range endpoint paths.
+  Removing unselected siblings before layout changes selectors and counters.
+- Restore that context in an isolated frame, embed and load the required fonts,
+  then let SnapDOM freeze computed presentation. Do not replay publication CSS
+  against its synthetic pseudo-elements. Rewrite SVG image references only after
+  attribute selectors have been evaluated. Preflight CSS, HTML, and SVG image
+  resources with the frame's origin policy and an abort signal, including missing
+  backgrounds that SnapDOM otherwise drops silently.
+- Preserve the complete publication paint tree instead of maintaining a list of
+  CSS features whose ancestors must be retained. Keep the TXT application shell
+  outside this boundary and composite its uniform background without importing
+  its viewport clipping into the excerpt.
+- Crop in page coordinates and mask partial ranges after layout. Original text
+  shaping remains intact; unselected pixels are not included in the PNG.
+- Preserve measured zero-width scrollbar gutters in the SVG image environment.
+  Retain CSS dimensions separately from rounded, budget-limited device pixels.
+- Treat renderer fallback/resource warnings as failures rather than silently
+  incomplete exports. The advisory reconcile-risk warning is not a resource
+  fallback and is not, by itself, an export failure.
+
+The lab records pixel mismatches; a successful diagnostic command does **not**
+mean every capture is exact. Inspect summary.json and per-case diffs. In particular,
+SnapDOM 3.4's generated-content/first-letter combination and small long-text/TXT
+raster differences remain explicit fidelity limitations, not normalized baselines.
+No universal browser/CSS fidelity guarantee is implied.
 
 ## Run
 
@@ -73,6 +106,13 @@ npm test
 
 The runner owns a temporary loopback-only Vite server and closes it when finished.
 It does not start or replace the application's deployed server.
+
+To validate only the production pipeline and its boundaries:
+
+```sh
+LAB_BROWSERS=chromium LAB_RENDERERS=current-passage,current-png \
+LAB_BOUNDARIES=1 LAB_OUTPUT=results/production npm test
+```
 
 Optional environment variables:
 

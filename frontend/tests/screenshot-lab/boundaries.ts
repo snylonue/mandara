@@ -1,5 +1,6 @@
 import { renderEpubScreenshot } from "../../src/epubScreenshot";
 import { renderReaderScreenshot } from "../../src/readerScreenshot";
+import { snapshotScreenshotDocument } from "../../src/screenshotSelection";
 
 /** Exercise real browser failures and allocation guards without renderer mocks. */
 export async function checkBoundaries() {
@@ -118,6 +119,28 @@ export async function checkBoundaries() {
     return (
       canvas.width + "x" + canvas.height + " pixels; final marker preserved"
     );
+  });
+  await test("missing-background-is-explicit-error", () => rejects(() => renderEpubScreenshot(source('<p style="height:80px;background:url(/api/images/missing.png)">缺失背景</p>'), 320, 12000), "image-load"));
+  await test("small-selection-in-large-context", async () => {
+    const frame = document.createElement("iframe");
+    frame.style.cssText = "position:fixed;left:-100000px;width:320px;height:600px";
+    frame.srcdoc = source('<article>' + '<p>上下文</p>'.repeat(250) + '<p id="selection">末尾选段</p></article>', 'p{height:100px;margin:0;font-size:20.25px}p+p{color:rgb(200,0,0);font-weight:800}');
+    const loaded = new Promise<void>(resolve => { frame.onload = () => resolve(); });
+    document.body.append(frame);
+    try {
+      await loaded;
+      const doc = frame.contentDocument!;
+      await doc.fonts.ready;
+      const range = doc.createRange(); range.selectNode(doc.querySelector("#selection")!);
+      const snapshot = snapshotScreenshotDocument(doc, range);
+      const canvas = await renderEpubScreenshot(snapshot.document, snapshot.viewport.width, 12000, snapshot.viewport.height, undefined, snapshot.capture);
+      if (canvas.height !== 200 || canvas.width > 650) throw new Error("Measured the whole chapter instead of the selected paragraph");
+      const pixels = canvas.getContext("2d")!.getImageData(0, 0, canvas.width, canvas.height).data;
+      let red = false;
+      for (let i = 0; i < pixels.length; i += 4) if (pixels[i] > 100 && pixels[i + 1] < 30 && pixels[i + 2] < 30 && pixels[i + 3] > 100) { red = true; break; }
+      if (!red) throw new Error("Lost the selected paragraph's preceding-sibling style");
+      return "A 100px selection from a chapter over 25000px high retains its red, heavy text";
+    } finally { frame.remove(); }
   });
   return results;
 }

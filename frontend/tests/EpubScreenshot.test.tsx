@@ -1,11 +1,16 @@
 import { fireEvent } from "@testing-library/react";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { screenshotRange } from "../src/screenshotSelection";
 import { rasterizeScreenshot } from "../src/screenshotImage";
 import { renderEpubScreenshot } from "../src/epubScreenshot";
 import { MAX_SCREENSHOT_TEXT, selectedEpubContent } from "../src/readerScreenshot";
 import { SCREENSHOT_TIMEOUT } from "../src/screenshotTask";
 
 vi.mock("../src/screenshotImage", async importOriginal => ({ ...await importOriginal<typeof import("../src/screenshotImage")>(), rasterizeScreenshot: vi.fn() }));
+beforeEach(() => {
+  const computedStyle = window.getComputedStyle.bind(window);
+  vi.stubGlobal("getComputedStyle", (node: Element) => computedStyle(node));
+});
 afterEach(() => { document.querySelectorAll("iframe").forEach(frame => frame.remove()); vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.clearAllMocks(); vi.mocked(rasterizeScreenshot).mockReset(); vi.useRealTimers(); });
 
 function chapter() {
@@ -14,10 +19,11 @@ function chapter() {
   return frame.contentDocument!;
 }
 
-it("keeps publication styles, ancestor attributes, ruby and inline formatting only for the selected range", () => {
+it("keeps the complete publication context and records only the selected range for export", () => {
   const doc = chapter();
   doc.documentElement.lang = "zh-CN";
-  Object.defineProperties(doc.documentElement, { clientWidth: { value: 390 }, clientHeight: { value: 740 } });
+  Object.defineProperties(doc.documentElement, { clientWidth: { value: 375 }, clientHeight: { value: 740 } });
+  Object.defineProperties(doc.defaultView!, { innerWidth: { value: 390 }, innerHeight: { value: 740 } });
   doc.head.innerHTML = '<style>@font-face{font-family:book;src:url(data:font/woff2;base64,AA==)} body.book{writing-mode:vertical-rl} #chapter .passage{color:red;text-align:center}</style>';
   doc.body.className = "book";
   doc.body.innerHTML = '<section id="chapter"><p>未选择的前文</p><p class="passage">开头<strong>强调</strong><ruby>汉字<rt>かんじ</rt></ruby>结尾</p><p>未选择的后文</p></section>';
@@ -31,9 +37,9 @@ it("keeps publication styles, ancestor attributes, ruby and inline formatting on
   const snapshot = new DOMParser().parseFromString(excerpt.document!, "text/html");
   expect(snapshot.documentElement.lang).toBe("zh-CN");
   expect(snapshot.body.className).toBe("book");
-  expect(snapshot.head.textContent).toBe(doc.head.textContent);
-  expect(snapshot.body.innerHTML).toBe('<section id="chapter"><p class="passage">头<strong>强调</strong><ruby>汉字<rt>かんじ</rt></ruby>结</p></section>');
-  expect(snapshot.body.textContent).toBe(excerpt.text);
+  expect(snapshot.head.textContent).toContain(Array.from(doc.styleSheets[0].cssRules, rule => rule.cssText).join("\n"));
+  expect(snapshot.body.innerHTML).toBe(doc.body.innerHTML);
+  expect(screenshotRange(snapshot, excerpt.capture!).toString()).toBe(excerpt.text);
   expect(doc.body.textContent).toContain("未选择的前文");
   doc.body.innerHTML = "";
   expect(excerpt.document).toContain("强调");
@@ -48,7 +54,8 @@ it("does not copy active markup, event handlers or source document policies", ()
   const snapshot = new DOMParser().parseFromString(selectedEpubContent(doc, doc.getSelection()).document!, "text/html");
   expect(snapshot.querySelector("script,iframe,base,meta,[onclick],[onerror]")).toBeNull();
   expect(snapshot.querySelector("img")!.getAttribute("src")).toBe("/api/images/glyph");
-  expect(snapshot.head.querySelector("style")!.textContent).toBe("p{color:red}");
+  expect(snapshot.head.querySelector("style")!.textContent).toBe(doc.styleSheets[0].cssRules[0].cssText);
+  expect(screenshotRange(snapshot, selectedEpubContent(doc, doc.getSelection()).capture!).toString()).toContain("正文");
 });
 
 it("does not snapshot empty or oversized selections", () => {
@@ -84,7 +91,7 @@ it("rasterizes in a sandbox with embedded font CSS and removes the temporary fra
   expect(frame.getAttribute("sandbox")).toBe("allow-same-origin");
   expect(frame.srcdoc).toContain("script-src 'none'");
   expect(await rendering).toBe(canvas);
-  expect(rasterizeScreenshot).toHaveBeenCalledWith(doc.documentElement, expect.objectContaining({ width: 772, height: 400, pixelRatio: 2, fontEmbedCSS: expect.stringContaining("@font-face") }));
+  expect(rasterizeScreenshot).toHaveBeenCalledWith(doc.documentElement, expect.objectContaining({ width: 772, height: 400, clip: { x: 0, y: 0, width: 772, height: 400 }, fontEmbedCSS: expect.stringContaining("@font-face") }));
   expect(document.body.contains(frame)).toBe(false);
   expect(document.head.textContent).not.toContain("font-family:book");
 });
@@ -128,15 +135,14 @@ it("allows and embeds self-hosted reader fonts before rasterizing", async () => 
   expect(options.fontEmbedCSS).not.toContain("/assets/reader.woff2");
 });
 
-it("limits raster pixels for a long excerpt without changing its CSS dimensions", async () => {
+it("passes long CSS dimensions to the budgeted rasterizer without resizing layout", async () => {
   vi.mocked(rasterizeScreenshot).mockResolvedValueOnce(document.createElement("canvas"));
   const rendering = renderEpubScreenshot(source, 772, 12000);
   await loadCapture(772, 11000);
   await rendering;
   const options = vi.mocked(rasterizeScreenshot).mock.lastCall![1]!;
   expect([options.width, options.height]).toEqual([772, 11000]);
-  expect(options.pixelRatio).toBeLessThan(2);
-  expect(Math.floor(772 * options.pixelRatio!) * Math.floor(11000 * options.pixelRatio!)).toBeLessThanOrEqual(16000000);
+  expect(options.clip).toEqual({ x: 0, y: 0, width: 772, height: 11000 });
 });
 
 it("loads book illustrations without waiting for a pending SVG decode", async () => {
@@ -153,16 +159,17 @@ it("loads book illustrations without waiting for a pending SVG decode", async ()
   expect(image.loading).toBe("eager");
 });
 
-it.each(["href", "xlink:href", "both"])("embeds SVG %s image references before cloning without detached load events", async attribute => {
+it.each(["href", "xlink:href", "both"])("prepares SVG %s resources without changing attribute selectors before style freezing", async attribute => {
   const attributes = attribute === "both" ? 'href="/api/images/note" xlink:href="/api/images/note"' : attribute + '="/api/images/note"';
   const picture = '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="20" height="20"><image width="20" height="20" ' + attributes + '/><image width="20" height="20" href="/api/images/note"/></svg>';
   const fetchImage = vi.fn().mockResolvedValue({ ok: true, blob: async () => new Blob(["image"], { type: "image/png" }) });
   vi.stubGlobal("fetch", fetchImage);
   const canvas = document.createElement("canvas");
-  vi.mocked(rasterizeScreenshot).mockImplementationOnce(async node => {
+  vi.mocked(rasterizeScreenshot).mockImplementationOnce(async (node, options) => {
+    expect(options.images?.get("/api/images/note")).toMatch(/^data:image\/png;base64,/);
     for (const image of node.querySelectorAll("svg image")) {
       const reference = image.getAttribute("href") || image.getAttributeNS("http://www.w3.org/1999/xlink", "href");
-      expect(reference).toMatch(/^data:image\/png;base64,/);
+      expect(reference).toBe("/api/images/note");
     }
     const xml = new XMLSerializer().serializeToString(node);
     expect(new DOMParser().parseFromString(xml, "application/xhtml+xml").querySelector("parsererror")).toBeNull();
@@ -191,7 +198,7 @@ it("includes leftward vertical overflow without changing the measured layout", a
   vi.spyOn(frame.contentDocument!.querySelector("p")!, "getBoundingClientRect").mockReturnValue(new DOMRect(-300, 0, 500, 400));
   await loaded;
   await rendering;
-  expect(rasterizeScreenshot).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ width: 1072, style: expect.objectContaining({ width: "772px", transform: "translate(300px,0px)" }) }));
+  expect(rasterizeScreenshot).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ width: 1072, clip: { x: -300, y: 0, width: 1072, height: 400 } }));
 });
 
 it("removes the temporary frame if rasterization fails", async () => {
@@ -277,4 +284,19 @@ it("cancels pending frame loads without waiting for the timeout", async () => {
   await rejected;
   expect(frame.isConnected).toBe(false);
   expect(rasterizeScreenshot).not.toHaveBeenCalled();
+});
+
+it("preloads generated-content fonts, not just the normal text face, before measurement", async () => {
+  const computed = window.getComputedStyle.bind(window);
+  vi.stubGlobal("getComputedStyle", (node: Element, pseudo?: string) => pseudo === "::before"
+    ? { fontFamily: "ornament", font: "700 24px ornament", content: '"〔注〕"', getPropertyValue: () => "" }
+    : computed(node));
+  const load = vi.fn().mockResolvedValue([]);
+  vi.mocked(rasterizeScreenshot).mockResolvedValueOnce(document.createElement("canvas"));
+  const rendering = renderEpubScreenshot(source, 390, 12000);
+  const pending = loadCapture(390, 400);
+  const frame = document.querySelector<HTMLIFrameElement>('iframe[aria-hidden="true"]')!;
+  Object.defineProperty(frame.contentDocument!, "fonts", { value: { ready: Promise.resolve(), load } });
+  await pending; await rendering;
+  expect(load).toHaveBeenCalledWith("700 24px ornament", expect.stringContaining("〔注〕"));
 });

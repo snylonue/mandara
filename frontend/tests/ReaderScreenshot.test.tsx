@@ -4,6 +4,7 @@ import { Reader } from "../src/components/Reader";
 import * as epubScreenshot from "../src/epubScreenshot";
 import { MAX_SCREENSHOT_TEXT, renderReaderScreenshot, selectedChapterText, selectedTextContent, wrapScreenshotText } from "../src/readerScreenshot";
 import { SCREENSHOT_TIMEOUT } from "../src/screenshotTask";
+import { screenshotRange } from "../src/screenshotSelection";
 
 const style = { background: "#fff", foreground: "#111", muted: "#666", accent: "#369", fontFamily: "serif" };
 const drawn = vi.fn();
@@ -126,10 +127,9 @@ it("captures just selected TXT text and clears stale selections after chapter na
   await screen.findByAltText("所选文字截图预览");
   expect(drawn.mock.calls.map(call => call[0])).toEqual(["测试书籍 · 第一章"]);
   const snapshot = new DOMParser().parseFromString(rasterize.mock.lastCall![0], "text/html");
-  expect(snapshot.body.textContent).toBe("选择中间文");
-  expect(snapshot.documentElement.style.fontSize).toBe(getComputedStyle(text.closest(".reader-body")!).fontSize);
-  expect(snapshot.documentElement.style.lineHeight).toBe(getComputedStyle(text.closest(".reader-body")!).lineHeight);
-  expect(snapshot.head.textContent).toContain("text-align: justify");
+  expect(screenshotRange(snapshot, rasterize.mock.lastCall![5]!).toString()).toBe("选择中间文");
+  expect(snapshot.querySelector(".reader-body")!.getAttribute("style")).toBe(text.closest(".reader-body")!.getAttribute("style"));
+  expect(snapshot.querySelector(".epub-content")!.outerHTML).toBe(text.closest(".epub-content")!.outerHTML);
   fireEvent.click(screen.getByRole("button", { name: "关闭" }));
   fireEvent.click(screen.getByRole("button", { name: /下一章/ }));
   await screen.findByText("新的正文");
@@ -155,8 +155,10 @@ it("captures styled EPUB markup without injecting publisher CSS into the app", a
   await screen.findByAltText("所选文字截图预览");
   expect(drawn.mock.calls.map(call => call[0])).toEqual(["测试书籍 · 第一章"]);
   const snapshot = new DOMParser().parseFromString(rasterize.mock.lastCall![0], "text/html");
-  expect(snapshot.body.innerHTML).toBe('<section class="publication"><p>正文摘录</p></section>');
-  expect(snapshot.head.textContent).toContain("writing-mode:vertical-rl;color:red");
+  expect(snapshot.body.innerHTML).toBe(doc.body.innerHTML);
+  expect(screenshotRange(snapshot, rasterize.mock.lastCall![5]!).toString()).toBe("正文摘录");
+  expect(snapshot.head.textContent).toContain("writing-mode: vertical-rl;");
+  expect(snapshot.head.textContent).toContain("color: red;");
   expect(document.head.textContent).not.toContain("writing-mode:vertical-rl;color:red");
 });
 
@@ -172,12 +174,14 @@ it("captures TXT paragraph structure, typography, theme tokens, and the actual c
   range.setEnd(root.children[2].firstChild!, 1);
   const selected = selectedTextContent(root, range);
   const doc = new DOMParser().parseFromString(selected.document!, "text/html");
-  expect(doc.body.innerHTML).toBe('<div class="epub-content" style="' + root.getAttribute("style") + '"><p>选中<strong>强调</strong></p><p>末</p></div>');
-  expect(doc.documentElement.style.fontSize).toBe("21px");
-  expect(doc.documentElement.style.lineHeight).toBe("2");
-  expect(doc.documentElement.style.getPropertyValue("--reader-muted")).toBe("#8a7a5f");
-  expect(doc.documentElement.style.getPropertyValue("--accent")).toBe("#a00");
-  expect(selected.viewport!.width).toBe(350);
+  const restored = doc.querySelector<HTMLElement>(".epub-content")!;
+  expect(restored.outerHTML).toBe(root.outerHTML);
+  expect(restored.style.fontSize).toBe("21px");
+  expect(restored.style.lineHeight).toBe("2");
+  expect(restored.style.getPropertyValue("--reader-muted")).toBe("#8a7a5f");
+  expect(restored.style.getPropertyValue("--accent")).toBe("#a00");
+  expect(screenshotRange(doc, selected.capture!).toString()).toBe(selected.text);
+  expect(selected.viewport!.width).toBe(window.innerWidth);
   root.remove();
 });
 
@@ -186,7 +190,7 @@ it("uses the source viewport when rasterizing and composing a selected EPUB pass
   passage.width = 780; passage.height = 1000;
   const rasterize = vi.spyOn(epubScreenshot, "renderEpubScreenshot").mockResolvedValue(passage);
   await renderReaderScreenshot({ text: "正文", document: "<p>正文</p>", viewport: { width: 390, height: 740 }, style });
-  expect(rasterize).toHaveBeenCalledWith("<p>正文</p>", 390, 12000, 740, expect.any(AbortSignal));
+  expect(rasterize).toHaveBeenCalledWith("<p>正文</p>", 390, 12000, 740, expect.any(AbortSignal), undefined);
   const ctx = HTMLCanvasElement.prototype.getContext.call(document.createElement("canvas"), "2d")!;
   expect(ctx.drawImage).toHaveBeenCalledWith(passage, 16, 16, 390, 500);
   expect(ctx.scale).toHaveBeenCalledWith(2, 2);
@@ -214,4 +218,14 @@ it("times out browser font loading and PNG encoding instead of leaving the previ
     if (descriptor) Object.defineProperty(document, "fonts", descriptor);
     else Reflect.deleteProperty(document, "fonts");
   }
+});
+
+it("composes a cropped, budget-scaled passage using its CSS size, not rounded device-pixel ratios", async () => {
+  const passage = document.createElement("canvas"); passage.width = 1059; passage.height = 15098;
+  passage.style.width = "772px"; passage.style.height = "11000px";
+  vi.spyOn(epubScreenshot, "renderEpubScreenshot").mockResolvedValue(passage);
+  const capture = { root: [1], start: { path: [1, 0, 0], offset: 0 }, end: { path: [1, 0, 0], offset: 1 }, scroll: [], windowScroll: { x: 0, y: 0 } };
+  const ctx = document.createElement("canvas").getContext("2d")!;
+  await renderReaderScreenshot({ text: "选段", document: "<!doctype html><html><body><p>选段</p></body></html>", capture, viewport: { width: 772, height: 740 }, style });
+  expect(ctx.drawImage).toHaveBeenCalledWith(passage, 16, 16, 772, 11000);
 });

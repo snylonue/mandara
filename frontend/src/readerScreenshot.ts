@@ -1,7 +1,6 @@
 import { screenshotStep, screenshotTask } from "./screenshotTask";
 import { screenshotPixelRatio } from "./screenshotCanvas";
-import textStyles from "./styles/epub-content.css?raw";
-import serifFontStyles from "@fontsource-variable/noto-serif-sc/index.css?inline";
+import { snapshotScreenshotDocument, type ScreenshotCapture } from "./screenshotSelection";
 
 /** Extract only a selection wholly contained in the current chapter. */
 export function selectedChapterText(root: Element, selection: Selection | null): string {
@@ -26,73 +25,26 @@ export interface ScreenshotStyle {
 
 export interface ScreenshotSelection {
   text: string;
-  /** Selected reader markup with its isolated text or publication styles. */
+  /** Full inert reader context; only the recorded range is exported. */
   document?: string;
+  capture?: ScreenshotCapture;
   /** Original CSS viewport; changing it changes wrapping and publication media queries. */
   viewport?: { width: number; height: number };
 }
 
-/** Snapshot the selected DOM and its publication context before a dialog takes focus. */
+/** Snapshot the full publication before a dialog takes focus; crop only after layout. */
 export function selectedEpubContent(doc: Document, selection: Selection | null): ScreenshotSelection {
   const text = selectedChapterText(doc.body, selection);
   if (!text || text.length > MAX_SCREENSHOT_TEXT) return { text };
-  const range = selection!.getRangeAt(0);
-  let parent = range.commonAncestorContainer;
-  if (parent.nodeType !== Node.ELEMENT_NODE) parent = parent.parentNode!;
-  let contents: Node = range.cloneContents();
-  while (parent && parent !== doc.documentElement) {
-    const wrapper = parent.cloneNode(false);
-    wrapper.appendChild(contents);
-    contents = wrapper;
-    parent = parent.parentNode!;
-  }
-  const snapshot = doc.implementation.createHTMLDocument("");
-  const html = doc.documentElement.cloneNode(false) as HTMLElement;
-  const head = snapshot.createElement("head");
-  // Only passive styles are copied; never transfer source scripts, base URLs or metadata.
-  for (const style of doc.head.querySelectorAll("style")) head.append(style.cloneNode(true));
-  html.append(head, contents);
-  snapshot.replaceChild(html, snapshot.documentElement);
-  for (const el of snapshot.querySelectorAll("script,iframe,object,embed,link,meta,base,form")) el.remove();
-  for (const el of snapshot.querySelectorAll("*")) {
-    for (const attr of Array.from(el.attributes)) {
-      if (/^on/i.test(attr.name) || ["srcdoc", "autofocus"].includes(attr.name)) el.removeAttribute(attr.name);
-    }
-  }
-  return { text, document: "<!doctype html>" + html.outerHTML, viewport: {
-    width: doc.documentElement.clientWidth || doc.defaultView?.innerWidth || 772,
-    height: doc.documentElement.clientHeight || doc.defaultView?.innerHeight || 600,
-  } };
+  return { text, ...snapshotScreenshotDocument(doc, selection!.getRangeAt(0)) };
 }
 
-/** TXT uses the same DOM typography as the reader, not a second canvas typesetter. */
+/** TXT retains the actual application CSS, ancestry and viewport, not a second typesetter. */
 export function selectedTextContent(root: HTMLElement, range: Range): ScreenshotSelection {
   if (!root.contains(range.startContainer) || !root.contains(range.endContainer)) return { text: "" };
   const text = range.toString().replace(/\r\n?/g, "\n").trim();
   if (!text || text.length > MAX_SCREENSHOT_TEXT) return { text };
-  let parent = range.commonAncestorContainer;
-  if (parent.nodeType !== Node.ELEMENT_NODE) parent = parent.parentNode!;
-  let contents: Node = range.cloneContents();
-  while (parent && root.contains(parent)) {
-    const wrapper = parent.cloneNode(false);
-    wrapper.appendChild(contents);
-    contents = wrapper;
-    parent = parent.parentNode!;
-  }
-  const doc = root.ownerDocument.implementation.createHTMLDocument("");
-  doc.body.appendChild(contents);
-  doc.body.style.margin = "0";
-  const inherited = getComputedStyle(root);
-  for (const property of ["font-family", "font-size", "font-weight", "font-style", "line-height", "letter-spacing", "word-spacing", "color", "text-align", "text-indent", "direction", "writing-mode", "--fg", "--reader-border", "--reader-muted", "--accent", "--radius-sm", "--font-mono"]) {
-    doc.documentElement.style.setProperty(property, inherited.getPropertyValue(property));
-  }
-  const css = doc.createElement("style");
-  css.textContent = serifFontStyles + textStyles;
-  doc.head.append(css);
-  return { text, document: "<!doctype html>" + doc.documentElement.outerHTML, viewport: {
-    width: root.getBoundingClientRect().width || root.clientWidth || 772,
-    height: root.ownerDocument.defaultView?.innerHeight || 600,
-  } };
+  return { text, ...snapshotScreenshotDocument(root.ownerDocument, range, root) };
 }
 
 export interface ScreenshotOptions extends ScreenshotSelection {
@@ -124,11 +76,13 @@ export function wrapScreenshotText(text: string, width: number, measure: (text: 
 export function renderReaderScreenshot(options: ScreenshotOptions, parent?: AbortSignal): Promise<Blob> {
   return screenshotTask(async signal => {
     if (!options.text.trim() || options.text.length > MAX_SCREENSHOT_TEXT) throw new Error("selection-size");
-    const width = options.viewport?.width ? Math.ceil(options.viewport.width) + PADDING * 2 : WIDTH;
+    let width = options.viewport?.width ? Math.ceil(options.viewport.width) + PADDING * 2 : WIDTH;
     const passage = options.document
-      ? await (await screenshotStep("loadRenderer", () => import("./epubScreenshot"), signal)).renderEpubScreenshot(options.document, width - PADDING * 2, MAX_HEIGHT, options.viewport?.height, signal)
+      ? await (await screenshotStep("loadRenderer", () => import("./epubScreenshot"), signal)).renderEpubScreenshot(options.document, width - PADDING * 2, MAX_HEIGHT, options.viewport?.height, signal, options.capture)
       : null;
-    const passageHeight = passage ? Math.ceil(passage.height * Math.min(1, (width - PADDING * 2) / passage.width)) : 0;
+    const passageWidth = passage ? parseFloat(passage.style.width) || width - PADDING * 2 : 0;
+    if (passage && options.capture) width = Math.ceil(passageWidth) + PADDING * 2;
+    const passageHeight = passage ? Math.ceil(parseFloat(passage.style.height) || passage.height * passageWidth / passage.width) : 0;
     const canvas = document.createElement("canvas");
     const ctx = canvas.getContext("2d");
     if (!ctx) throw new Error("canvas-unavailable");
@@ -160,7 +114,7 @@ export function renderReaderScreenshot(options: ScreenshotOptions, parent?: Abor
     for (const section of sections) {
       y += section.gap;
       if (section.image) {
-        ctx.drawImage(section.image, PADDING, y, Math.min(section.image.width, width - PADDING * 2), passageHeight);
+        ctx.drawImage(section.image, PADDING, y, passageWidth, passageHeight);
         y += passageHeight;
         continue;
       }

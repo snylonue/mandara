@@ -40,6 +40,7 @@ export const fixtures = [
   },
   {
     id: "image-svg",
+    css: 'svg image[*|href="/api/images/lab.png"]{opacity:.55}',
     body: '<p>同源插图、背景图与内嵌 SVG：</p><img width="96" height="64" src="/api/images/lab.png"><span style="display:inline-block;width:96px;height:64px;background:url(/api/images/lab.png) center/cover"></span><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="96" height="64"><image width="96" height="64" xlink:href="/api/images/lab.png"/></svg>',
   },
   {
@@ -57,6 +58,13 @@ export const fixtures = [
     selection: "#selection",
     css: '#capture{padding:0;counter-reset:para 7}p{counter-increment:para;margin:0;padding:16px;min-height:90px;box-sizing:border-box}p::before{content:"第 "counter(para)" 段："}',
     body: '<p>前文。</p><p id="selection">选段应当保留它在原文中的计数。</p><p>后文。</p>',
+  },
+  {
+    id: "partial-inline",
+    selection: "#selection",
+    range: { start: "#start", startOffset: 7, end: "#end", endOffset: 5 },
+    css: 'p:nth-child(2){font-size:20.25px;font-weight:700;line-height:1.83;color:#9e244e}p::before{content:"段首："}',
+    body: '<p>不能输出的前一段。</p><p id="selection"><span id="start">不能输出的开头这部分选中</span><strong>强调和行内排版保持不变</strong><span id="end">选中的结尾不能输出的后文</span></p><p>不能输出的后一段。</p>',
   },
   {
     id: "long",
