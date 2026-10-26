@@ -62,11 +62,12 @@ it("renders only the excerpt and independently omits optional metadata", async (
 
 it("preserves the EPUB snapshot when metadata options change", async () => {
   const document = '<!doctype html><html><head><style>p{color:red}</style></head><body><p>正文</p></body></html>';
-  render(<ReaderScreenshotDialog excerpt={{ ...excerpt, document }} onClose={vi.fn()} />);
+  const capture = { root: [1], start: { path: [1, 0], offset: 0 }, end: { path: [1, 0], offset: 1 }, scroll: [], windowScroll: { x: 0, y: 900 } };
+  render(<ReaderScreenshotDialog excerpt={{ ...excerpt, document, capture }} onClose={vi.fn()} />);
   await screen.findByAltText("所选文字截图预览");
   expect(renderer.mock.lastCall?.[0].document).toBe(document);
   fireEvent.click(screen.getByLabelText("书名"));
-  await waitFor(() => expect(renderer.mock.lastCall?.[0]).toMatchObject({ title: undefined, document }));
+  await waitFor(() => expect(renderer.mock.lastCall?.[0]).toMatchObject({ title: undefined, document, capture }));
 });
 
 it("requires explicit confirmation to create a share and reuses its link", async () => {

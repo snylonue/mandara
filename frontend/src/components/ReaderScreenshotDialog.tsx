@@ -37,7 +37,7 @@ export function ReaderScreenshotDialog({ excerpt, shareLink, createShareLink, on
     const url = showLink && link ? new URL(link, location.origin) : null;
     url?.searchParams.set("chapter", String(excerpt.chapterIdx));
     return {
-      text: excerpt.text, document: excerpt.document, viewport: excerpt.viewport, style: excerpt.style,
+      text: excerpt.text, document: excerpt.document, capture: excerpt.capture, viewport: excerpt.viewport, style: excerpt.style,
       title: showTitle ? excerpt.title : undefined,
       chapter: showChapter ? excerpt.chapter : undefined,
       link: url?.href,
