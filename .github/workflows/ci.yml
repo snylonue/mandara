@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  nix:
+    name: Nix build and checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+    env:
+      HAS_SIGNING_KEY: ${{ secrets.NIX_SIGNING_KEY != '' }}
+    services:
+      oranc:
+        image: ghcr.io/linyinfeng/oranc:latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install Nix and enable KVM
+        uses: cachix/install-nix-action@v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+          enable_kvm: true
+          extra_nix_config: |
+            system-features = nixos-test benchmark big-parallel kvm
+
+      - name: Set cache repository
+        id: cache
+        shell: bash
+        run: |
+          repository="${GITHUB_REPOSITORY,,}"
+          echo "owner=${repository%/*}" >> "$GITHUB_OUTPUT"
+          echo "package=${repository#*/}-nix-cache" >> "$GITHUB_OUTPUT"
+
+      # Never expose the signing key to pull requests or non-default branches.
+      - name: Enable oranc cache uploads
+        id: oranc
+        if: >-
+          github.event_name != 'pull_request' &&
+          github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
+          env.HAS_SIGNING_KEY == 'true'
+        uses: linyinfeng/oranc-action@v1
+        with:
+          orancServerContainer: ${{ job.services.oranc.id }}
+          repositoryPart1: ${{ steps.cache.outputs.owner }}
+          repositoryPart2: ${{ steps.cache.outputs.package }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+          signingKey: ${{ secrets.NIX_SIGNING_KEY }}
+
+      - name: Enable read-only oranc cache
+        if: steps.oranc.outcome == 'skipped'
+        shell: bash
+        env:
+          ORANC_CONTAINER: ${{ job.services.oranc.id }}
+          CACHE_OWNER: ${{ steps.cache.outputs.owner }}
+          CACHE_PACKAGE: ${{ steps.cache.outputs.package }}
+          NIX_PUBLIC_KEY: ${{ vars.NIX_PUBLIC_KEY }}
+        run: |
+          address="$(docker inspect --format '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$ORANC_CONTAINER")"
+          cache="http://$address/ghcr.io/$CACHE_OWNER/$CACHE_PACKAGE"
+          mkdir -p "$HOME/.config/nix"
+          printf '\nextra-substituters = %s\nextra-trusted-public-keys = %s\n' \
+            "$cache" "$NIX_PUBLIC_KEY" >> "$HOME/.config/nix/nix.conf"
+
+      - name: Build server, frontend, and plugins
+        run: nix build --no-link --no-update-lock-file --print-build-logs .#mandara .#mandara-plugins
+
+      - name: Run flake checks including NixOS VM tests
+        run: nix flake check --no-update-lock-file --print-build-logs

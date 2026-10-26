@@ -309,6 +309,12 @@ just fmt-nix      # format the nix files (nixfmt-tree, same as `nix fmt`)
 `nix build .#mandara-plugin-hello` builds one wasm component and
 `nix build .#mandara-plugins` builds them all.
 
+## Continuous integration
+
+GitHub Actions builds the Nix packages and runs the flake checks, including
+the NixOS VM integration test. See [CI setup](docs/ci.md) for the optional
+oranc-backed GHCR binary cache and its signing-key configuration.
+
 ## License
 
 MIT OR Apache-2.0
