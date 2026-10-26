@@ -535,6 +535,22 @@ body:has(.app-reader),
   gap: var(--space-2);
 }
 
+.reader-image-preview {
+  max-height: 60dvh;
+  overflow: auto;
+  margin-block: var(--space-4);
+}
+
+.reader-image-preview img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin-inline: auto;
+  -webkit-touch-callout: default;
+  -webkit-user-select: auto;
+  user-select: auto;
+}
+
 .screenshot-preview {
   max-height: 48dvh;
   overflow: auto;

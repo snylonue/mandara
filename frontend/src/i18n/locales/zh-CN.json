@@ -378,6 +378,16 @@
     "totalVolumesLine": "全 {{count}} 卷",
     "formHint": "留空的字段不填写即可；保存时清空已填字段会删除对应信息。"
   },
+  "readerImage": {
+    "title": "书内插图",
+    "hint": "长按图片可使用系统菜单复制、保存或分享原图。",
+    "openOriginal": "打开原图",
+    "share": "系统分享",
+    "sharing": "分享中…",
+    "shareFailed": "分享失败，请重试，或长按图片使用系统菜单。",
+    "shareFallback": "若系统分享按钮不可用，请长按图片或打开原图操作；系统分享按钮需要 HTTPS 和浏览器支持。",
+    "filename": "书内插图"
+  },
   "screenshot": {
     "title": "选段截图",
     "description": "按阅读器的换行、字体和书内样式生成高清截图，书名和章节显示为紧凑页脚。",

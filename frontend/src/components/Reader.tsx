@@ -4,6 +4,8 @@ import { useTranslation } from "react-i18next";
 import { IconArrowLeft, IconChevronLeft, IconChevronRight, IconList, IconType, IconCamera } from "./icons";
 import { EpubDocument, type EpubDocumentHandle } from "./EpubDocument";
 import { ReaderScreenshotDialog, type ReaderExcerpt } from "./ReaderScreenshotDialog";
+import { ReaderImageDialog } from "./ReaderImageDialog";
+import { readerImageAt, type ReaderImage } from "../readerImage";
 import { selectedChapterText, selectedTextContent, type ScreenshotSelection } from "../readerScreenshot";
 import {
   ReaderSettingsPanel,
@@ -58,6 +60,7 @@ export function Reader({
   const [settings, setSettings] = useReaderSettings();
   const [tocOpen, setTocOpen] = useState(false);
   const [selection, setSelection] = useState<(ScreenshotSelection & { chapterIdx: number }) | null>(null);
+  const [image, setImage] = useState<ReaderImage | null>(null);
   const [excerpt, setExcerpt] = useState<ReaderExcerpt | null>(null);
   const [screenshotHint, setScreenshotHint] = useState(false);
   const [createdShareLink, setCreatedShareLink] = useState<string>();
@@ -201,6 +204,7 @@ export function Reader({
       lastChapterRef.current = clamped;
       lastFractionRef.current = 0;
       if (onProgress && !readOnly) onProgress(0, clamped);
+      setImage(null);
       setSelection(null);
       setScreenshotHint(false);
       setIdx(clamped);
@@ -316,6 +320,7 @@ export function Reader({
       </header>
 
       {screenshotHint && <p className="screenshot-hint" role="status">{t("screenshot.selectHint")}</p>}
+      {image && <ReaderImageDialog key={image.src} image={image} onClose={() => setImage(null)} />}
       {excerpt && <ReaderScreenshotDialog excerpt={excerpt} shareLink={shareLink ?? createdShareLink}
         createShareLink={createShareLink ? async () => {
           const link = await createShareLink();
@@ -349,6 +354,11 @@ export function Reader({
       <div ref={viewportRef} className={`reader-viewport${isDocument ? " reader-viewport-document" : ""}`}>
         <article
           ref={articleRef}
+          onClick={event => {
+            if (isDocument || event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || document.getSelection()?.toString()) return;
+            const selected = readerImageAt(event.target as Element);
+            if (selected) setImage(selected);
+          }}
           className={`reader-body font-${settings.font}${isDocument ? " reader-body-document" : ""}`}
           style={{
             fontSize: `${settings.fontSize}px`,
@@ -369,6 +379,7 @@ export function Reader({
             title={chapter.title}
             settings={settings}
             onNavigate={goto}
+            onImageOpen={setImage}
             onSelectionChange={selected => setSelection({ ...selected, chapterIdx: idx })}
             onReady={() => {
               const target = renderTarget.current;

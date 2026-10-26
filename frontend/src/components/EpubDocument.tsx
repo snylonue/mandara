@@ -1,6 +1,7 @@
 import { useEffect, useImperativeHandle, useMemo, useRef, type Ref } from "react";
 import type { ReaderSettings } from "./ReaderSettings";
 import { selectedEpubContent, type ScreenshotSelection } from "../readerScreenshot";
+import { readerImageAt, type ReaderImage } from "../readerImage";
 import imagePageStyles from "../styles/epub-image-page.css?raw";
 import serifFontStyles from "@fontsource-variable/noto-serif-sc/index.css?inline";
 
@@ -10,7 +11,7 @@ export interface EpubDocumentHandle {
 }
 
 /** Never insert publisher CSS into the application DOM. */
-export function EpubDocument({ content, title, settings, onFraction, onReady, onNavigate, onSelectionChange, ref }: {
+export function EpubDocument({ content, title, settings, onFraction, onReady, onNavigate, onSelectionChange, onImageOpen, ref }: {
   content: string;
   title: string;
   settings: ReaderSettings;
@@ -18,13 +19,14 @@ export function EpubDocument({ content, title, settings, onFraction, onReady, on
   onReady: () => void;
   onNavigate: (idx: number, fragment?: string) => void;
   onSelectionChange?: (selection: ScreenshotSelection) => void;
+  onImageOpen?: (image: ReaderImage) => void;
   ref?: Ref<EpubDocumentHandle>;
 }) {
   const frame = useRef<HTMLIFrameElement>(null);
   const cleanup = useRef<(() => void) | null>(null);
   const defaultsRef = useRef<HTMLStyleElement | null>(null);
-  const callbacks = useRef({ onFraction, onReady, onNavigate, onSelectionChange });
-  callbacks.current = { onFraction, onReady, onNavigate, onSelectionChange };
+  const callbacks = useRef({ onFraction, onReady, onNavigate, onSelectionChange, onImageOpen });
+  callbacks.current = { onFraction, onReady, onNavigate, onSelectionChange, onImageOpen };
   const source = useMemo(() => {
     const csp = "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data: " + location.origin + "/api/images/; font-src data: " + location.origin + "; base-uri 'none'; form-action 'none'";
     // iOS cannot paint horizontally overflowing vertical iframe documents
@@ -200,6 +202,12 @@ export function EpubDocument({ content, title, settings, onFraction, onReady, on
       event.preventDefault();
     }
     function click(event: MouseEvent) {
+      const target = event.target as Element | null;
+      if (!event.defaultPrevented && event.button === 0 && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey
+        && target && callbacks.current.onImageOpen && !doc!.getSelection()?.toString()) {
+        const image = readerImageAt(target);
+        if (image) { callbacks.current.onImageOpen(image); return; }
+      }
       const anchor = (event.target as Element | null)?.closest("a");
       const href = anchor?.getAttribute("href");
       if (!href) return;

@@ -15,8 +15,8 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-function load(content: string) {
-  const view = render(<EpubDocument {...props} content={content} />);
+function load(content: string, onImageOpen = vi.fn()) {
+  const view = render(<EpubDocument {...props} content={content} onImageOpen={onImageOpen} />);
   const frame = view.container.querySelector("iframe")!;
   const doc = frame.contentDocument!;
   // JSDOM does not load srcdoc. Populate the existing frame document, keeping
@@ -199,4 +199,36 @@ it("does not add glyph sizing defaults to fixed-layout publications", () => {
     <meta name="viewport" content="width=600,height=800"></head><body>
     <p>正文<img class="gaiji" width="72" height="80" src="/api/images/glyph"></p></body></html>`);
   expect(glyphRule(doc)).toBeUndefined();
+});
+
+it.each([
+  '<img src="/api/images/illustration" alt="插图">',
+  '<svg><title>插图</title><image href="/api/images/illustration" /></svg>',
+  '<svg xmlns:xlink="http://www.w3.org/1999/xlink"><title>插图</title><image xlink:href="/api/images/illustration" /></svg>',
+])("opens the original illustration without replacing publication markup: %s", markup => {
+  const onImageOpen = vi.fn();
+  const { doc } = load('<!doctype html><html><body>' + markup + '</body></html>', onImageOpen);
+  const image = doc.querySelector("img,image")!;
+  const original = doc.body.innerHTML;
+  expect(fireEvent.contextMenu(image)).toBe(true);
+  expect(fireEvent.touchStart(image)).toBe(true);
+  expect(onImageOpen).not.toHaveBeenCalled();
+  fireEvent.click(image);
+  expect(onImageOpen).toHaveBeenCalledWith({ src: location.origin + "/api/images/illustration", alt: "插图" });
+  expect(doc.body.innerHTML).toBe(original);
+});
+
+it("preserves link navigation, modified clicks and text selection around illustrations", () => {
+  const onImageOpen = vi.fn();
+  const { doc } = load('<!doctype html><html><body><p>正文</p><img src="/api/images/illustration"><a href="epub:chapter/2"><img src="/api/images/linked"></a></body></html>', onImageOpen);
+  const image = doc.querySelector("img")!;
+  for (const modifier of ["ctrlKey", "metaKey", "altKey", "shiftKey"]) fireEvent.click(image, { [modifier]: true });
+  const range = doc.createRange();
+  range.selectNodeContents(doc.querySelector("p")!);
+  doc.getSelection()!.addRange(range);
+  fireEvent.click(image);
+  doc.getSelection()!.removeAllRanges();
+  fireEvent.click(doc.querySelector("a img")!);
+  expect(onImageOpen).not.toHaveBeenCalled();
+  expect(props.onNavigate).toHaveBeenCalledWith(2, undefined);
 });
