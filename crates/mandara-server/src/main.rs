@@ -107,7 +107,7 @@ async fn main() -> anyhow::Result<()> {
         library,
     });
 
-    let app = routes::router(state.clone());
+    let app = routes::router(state.clone()).context("load frontend files")?;
     let listener = TcpListener::bind(&cfg.addr)
         .await
         .with_context(|| format!("bind {}", cfg.addr))?;
