@@ -32,6 +32,18 @@ function load(content: string, onImageOpen = vi.fn()) {
   fireEvent.load(frame);
   return { ...view, frame, doc };
 }
+it.each(["horizontal-tb", "vertical-rl"])("uses a thin document scrollbar for %s reading", (mode) => {
+  const content = `<!doctype html><html><body style="writing-mode:${mode}"><p>测试正文</p></body></html>`;
+  const { doc, rerender } = load(content);
+  function scrollbarWidth() {
+    const rules = Array.from(doc.head.querySelector("style")!.sheet!.cssRules) as CSSStyleRule[];
+    return rules.find(rule => rule.selectorText === ":where(html)")!.style.getPropertyValue("scrollbar-width");
+  }
+  expect(scrollbarWidth()).toBe("thin");
+  rerender(<EpubDocument {...props} content={content} settings={{ ...settings, fontSize: 28, theme: "dark" }} />);
+  expect(scrollbarWidth()).toBe("thin");
+});
+
 it("provides Chinese serif subsets inside Japanese-language publications without rewriting their styles", () => {
   const text = "看着路边陈旧的扬声器里轰鸣播放着音乐的样子，拉奇皱起了眉头。";
   const publisher = "p{font-weight:400}.original{opacity:0.4}";

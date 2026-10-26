@@ -141,7 +141,7 @@ export function EpubDocument({ content, title, settings, onFraction, onReady, on
     // Use the theme token, not an intermediate animated host color.
     const foreground = inherited.getPropertyValue("--fg").trim() || inherited.color;
     const rootRule = defaults.sheet!.cssRules[0] as CSSStyleRule;
-    rootRule.style.cssText = "font-size:" + settings.fontSize + "px;line-height:" + settings.lineHeight + ";font-family:" + inherited.fontFamily + ";color:" + foreground + ";color-scheme:" + inherited.colorScheme + ";background:transparent";
+    rootRule.style.cssText = "font-size:" + settings.fontSize + "px;line-height:" + settings.lineHeight + ";font-family:" + inherited.fontFamily + ";color:" + foreground + ";color-scheme:" + inherited.colorScheme + ";scrollbar-width:thin;background:transparent";
     if (doc.documentElement.dataset.epubLayout !== "pre-paginated" && !doc.documentElement.hasAttribute("data-mandara-image-only")) {
       // Direction can change through publisher media queries or typography settings.
       const isVertical = vertical();

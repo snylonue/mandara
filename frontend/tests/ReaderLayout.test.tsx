@@ -38,6 +38,7 @@ it("leaves one text scroll container and restores normal page scrolling outside 
   const viewport = root.querySelector(".reader-viewport")!;
   viewport.classList.remove("reader-viewport-document");
   expect(getComputedStyle(viewport).overflow).toBe("auto");
+  expect(getComputedStyle(viewport).getPropertyValue("scrollbar-width")).toBe("thin");
   root.querySelector(".app")!.classList.remove("app-reader");
   for (const element of [document.documentElement, document.body, root]) {
     expect(getComputedStyle(element).overflow).not.toBe("hidden");
