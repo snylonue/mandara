@@ -46,6 +46,10 @@ impl ReferenceResolver {
             compatible,
         }
     }
+    pub fn allows_undeclared_raster_images(&self) -> bool {
+        self.compatible
+    }
+
     pub fn resolve<R: Read + Seek>(
         &self,
         container: &Container<R>,
@@ -63,7 +67,9 @@ impl ReferenceResolver {
                 && !self.conflicts.contains(&r.path)
                 && container.contains(Path::new(&r.path))
         };
-        if exists(&standard) || !self.compatible {
+        // An exact ZIP entry must not be replaced by an unrelated declared
+        // alternative. Resource policy decides whether undeclared bytes are usable.
+        if container.contains(Path::new(&standard.path)) || !self.compatible {
             return Some(standard);
         }
         // Do not reinterpret absolute URLs, fragment-only references or active
@@ -73,7 +79,7 @@ impl ReferenceResolver {
             return Some(standard);
         }
         let mut candidates = Vec::new();
-        if let Some(r) = resolve(&self.package, href).filter(&exists) {
+        if let Some(r) = resolve(&self.package, href).filter(exists) {
             candidates.push(r);
         }
         let mut stripped = href;
@@ -88,7 +94,7 @@ impl ReferenceResolver {
             }
         }
         if stripped != href
-            && let Some(r) = resolve(&self.package, stripped).filter(&exists)
+            && let Some(r) = resolve(&self.package, stripped).filter(exists)
         {
             candidates.push(r);
         }

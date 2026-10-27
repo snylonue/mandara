@@ -403,6 +403,17 @@ impl<'a, R: Read + Seek> Renderer<'a, R> {
         };
         let mime = self.doc.get_resource_mime_by_path(&reference.path);
         let Some(mime) = mime else {
+            // Recover only exact container-local raster images with recognizable
+            // headers. Never infer CSS, fonts, SVG or active media from a suffix.
+            if self
+                .references
+                .is_some_and(|references| references.allows_undeclared_raster_images())
+                && let Some(bytes) = self.container.bytes(Path::new(&reference.path))
+                && let Some(mime) = raster_image_mime(&bytes)
+            {
+                self.note(base, Some(href), "compatibility-undeclared-raster-image");
+                return Some((reference.path, bytes, mime.to_owned()));
+            }
             self.note(base, Some(href), "missing-manifest-resource");
             return None;
         };
@@ -662,6 +673,26 @@ impl<'a, R: Read + Seek> Renderer<'a, R> {
             }
         }
         out
+    }
+}
+
+/// Header recognition is intentionally narrower than general MIME sniffing.
+/// These formats stay passive image payloads; XML/HTML must never be inferred.
+fn raster_image_mime(bytes: &[u8]) -> Option<&'static str> {
+    let (width, height) = crate::imgdim::image_dimensions(bytes)?;
+    if width == 0 || height == 0 {
+        return None;
+    }
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("image/png")
+    } else if bytes.starts_with(b"\xff\xd8") {
+        Some("image/jpeg")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("image/gif")
+    } else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
+        Some("image/webp")
+    } else {
+        None
     }
 }
 

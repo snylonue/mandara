@@ -1653,6 +1653,217 @@ mod tests {
         assert!(book.chapters[0].content.contains("image:0"));
     }
 
+    #[test]
+    fn recovers_undeclared_raster_images_only_in_compatible_mode() {
+        for version in ["2.0", "3.0"] {
+            let bytes = build_epub(&Fixture {
+                version,
+                metadata_extra: "",
+                spine: vec![("Text/ch.xhtml".into(), true), ("pic.xhtml".into(), true)],
+                toc: vec![e("旧目录标题", "Text/ch.xhtml", vec![])],
+            });
+            let href = "../images/%E5%9B%BE%25%20one.bin?size=1#part";
+            let chapter = format!(
+                r#"<html><body><p style="background-image:url('{href}')">第一章正文</p><img src="{href}"/><img src="{href}"/></body></html>"#
+            );
+            let bytes = patch_epub(
+                &bytes,
+                &[
+                    ("OEBPS/Text/ch.xhtml", chapter.as_bytes()),
+                    (
+                        "OEBPS/pic.xhtml",
+                        br#"<html><body><img src="images/%E5%9B%BE%25%20one.bin"/></body></html>"#,
+                    ),
+                    ("OEBPS/images/图% one.bin", PNG_1PX),
+                ],
+            );
+            let (strict, strict_issues) = parse_with_policy(&bytes, ParsePolicy::Strict).unwrap();
+            assert!(strict.images.is_empty());
+            assert!(
+                strict_issues
+                    .iter()
+                    .any(|d| d.reason == "missing-manifest-resource")
+            );
+            let (book, issues) = parse_with_diagnostics(&bytes).unwrap();
+            assert_eq!(book.chapters.len(), 2);
+            assert_eq!(book.images.len(), 1);
+            assert_eq!(book.images[0].bytes, PNG_1PX);
+            assert_eq!(book.images[0].mime, "image/png");
+            assert_eq!(
+                book.chapters[0].content.matches("src=\"image:0\"").count(),
+                2
+            );
+            assert!(book.chapters[0].content.contains("data:image/png;base64,"));
+            assert!(book.chapters[1].content.contains("src=\"image:0\""));
+            assert_eq!(book.chapters[0].title, "旧目录标题");
+            assert_eq!(book.toc[0].title, "旧目录标题");
+            assert!(book.chapters[0].content.contains("第一章正文"));
+            assert_eq!(
+                issues
+                    .iter()
+                    .filter(|d| d.reason == "compatibility-undeclared-raster-image")
+                    .count(),
+                4
+            );
+        }
+    }
+
+    // Header-only synthetic samples exercise MIME inference, not image decoding.
+    const JPEG_HEADER: &[u8] = &[0xff, 0xd8, 0xff, 0xc0, 0, 17, 8, 0, 1, 0, 1, 3];
+    const GIF_HEADER: &[u8] = b"GIF89a\x01\x00\x01\x00\x00\x00";
+    const WEBP_HEADER: &[u8] =
+        b"RIFF\x16\x00\x00\x00WEBPVP8X\x0a\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
+
+    #[test]
+    fn infers_undeclared_raster_mime_from_headers_not_extensions() {
+        let bytes = build_epub(&Fixture {
+            version: "2.0",
+            metadata_extra: "",
+            spine: vec![("ch.xhtml".into(), true)],
+            toc: vec![],
+        });
+        let bytes = patch_epub(&bytes, &[
+            ("OEBPS/ch.xhtml", br#"<html><body><img src="a.jpg"/><img src="b.png"/><img src="c.bin"/><img src="d.gif"/></body></html>"#),
+            ("OEBPS/a.jpg", PNG_1PX), ("OEBPS/b.png", JPEG_HEADER),
+            ("OEBPS/c.bin", GIF_HEADER), ("OEBPS/d.gif", WEBP_HEADER),
+        ]);
+        let (book, issues) = parse_with_diagnostics(&bytes).unwrap();
+        let mimes: Vec<_> = book
+            .images
+            .iter()
+            .map(|image| image.mime.as_str())
+            .collect();
+        assert_eq!(
+            mimes,
+            ["image/png", "image/jpeg", "image/gif", "image/webp"]
+        );
+        assert_eq!(
+            issues
+                .iter()
+                .filter(|d| d.reason == "compatibility-undeclared-raster-image")
+                .count(),
+            4
+        );
+    }
+
+    #[test]
+    fn undeclared_exact_image_wins_over_manifested_package_relative_alternative() {
+        let bytes = build_epub(&Fixture {
+            version: "3.0",
+            metadata_extra: "",
+            spine: vec![("Text/ch.xhtml".into(), true)],
+            toc: vec![],
+        });
+        let bytes = patch_epub(&bytes, &[
+            ("OEBPS/Text/ch.xhtml", br#"<html><body><img src="images/pic.png"/><img src="../images/pic.png"/></body></html>"#),
+            ("OEBPS/Text/images/pic.png", GIF_HEADER),
+        ]);
+        let (book, issues) = parse_with_diagnostics(&bytes).unwrap();
+        assert_eq!(book.images.len(), 2);
+        assert_eq!(book.images[0].bytes, GIF_HEADER);
+        assert_eq!(book.images[0].mime, "image/gif");
+        assert_eq!(book.images[1].bytes, PNG_1PX);
+        assert!(
+            !issues
+                .iter()
+                .any(|d| d.reason == "compatibility-opf-relative-reference")
+        );
+    }
+
+    #[test]
+    fn undeclared_recovery_rejects_active_missing_and_unrecognized_resources() {
+        let bytes = build_epub(&Fixture {
+            version: "3.0",
+            metadata_extra: "",
+            spine: vec![("ch.xhtml".into(), true)],
+            toc: vec![],
+        });
+        let mut zero_size_png = PNG_1PX.to_vec();
+        zero_size_png[16..20].fill(0);
+        let bytes = patch_epub(&bytes, &[
+            ("OEBPS/ch.xhtml", br#"<html><head><link rel="stylesheet" href="undeclared.css"/><style>@font-face { font-family: missing; src: url('font.woff'); }</style></head><body><img src="absent.png"/><img src="active.jpg"/><img src="vector.jpg"/><img src="truncated.png"/><img src="zero.png"/><img src="https://epub.invalid/OEBPS/images/pic.png"/><img src="//tracker.test/a.png"/><img src="javascript:alert(1)"/><img src="file:///etc/passwd"/></body></html>"#),
+            ("OEBPS/active.jpg", b"<html><script>alert(1)</script></html>"),
+            ("OEBPS/vector.jpg", br#"<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>"#),
+            ("OEBPS/truncated.png", b"\x89PNG\r\n\x1a\n"),
+            ("OEBPS/zero.png", &zero_size_png),
+            ("OEBPS/undeclared.css", b"body { color: red; }"),
+            ("OEBPS/font.woff", b"wOFF font data"),
+        ]);
+        let (book, issues) = parse_with_diagnostics(&bytes).unwrap();
+        assert!(book.images.is_empty());
+        assert!(!book.chapters[0].content.contains("src="));
+        assert!(!book.chapters[0].content.contains("color: red"));
+        assert!(
+            !issues
+                .iter()
+                .any(|d| d.reason == "compatibility-undeclared-raster-image")
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|d| d.reason == "blocked-non-container-url")
+        );
+        for reference in [
+            "absent.png",
+            "active.jpg",
+            "vector.jpg",
+            "truncated.png",
+            "zero.png",
+            "undeclared.css",
+            "font.woff",
+        ] {
+            assert!(
+                issues
+                    .iter()
+                    .any(|d| d.reason == "missing-manifest-resource"
+                        && d.reference.as_deref() == Some(reference)),
+                "{reference}"
+            );
+        }
+    }
+
+    #[test]
+    fn undeclared_recovery_never_overrides_declared_or_conflicting_media_types() {
+        let bytes = build_epub(&Fixture {
+            version: "2.0",
+            metadata_extra: "",
+            spine: vec![("ch.xhtml".into(), true)],
+            toc: vec![],
+        });
+        let mut doc = EpubDoc::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+        let opf = doc.get_resource_str_by_path("OEBPS/content.opf").unwrap();
+        for declaration in [
+            r#"<item id="pic" href="images/pic.png" media-type="text/html"/>"#,
+            r#"<item id="pic" href="images/pic.png" media-type="image/png"/><item id="duplicate" href="images/pic.png" media-type="image/jpeg"/>"#,
+        ] {
+            let opf = opf.replace(
+                r#"<item id="pic" href="images/pic.png" media-type="image/png"/>"#,
+                declaration,
+            );
+            let bytes = patch_epub(
+                &bytes,
+                &[
+                    ("OEBPS/content.opf", opf.as_bytes()),
+                    (
+                        "OEBPS/ch.xhtml",
+                        br#"<html><body><img src="images/pic.png"/></body></html>"#,
+                    ),
+                ],
+            );
+            let (book, issues) = parse_with_diagnostics(&bytes).unwrap();
+            assert!(book.images.is_empty());
+            assert!(
+                !issues
+                    .iter()
+                    .any(|d| d.reason == "compatibility-undeclared-raster-image")
+            );
+            assert!(issues.iter().any(|d| matches!(
+                d.reason,
+                "unsupported-image-media-type" | "conflicting-manifest-media-types"
+            )));
+        }
+    }
+
     const PNG_1PX: &[u8] = &[
         0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
         0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F,
