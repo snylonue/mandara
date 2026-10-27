@@ -140,6 +140,25 @@ it("rewrites prepared SVG resources only in the frozen clone", async () => {
   fireEvent.load(images[0]); await vi.runAllTimersAsync(); await rendering;
 });
 
+it("restores unmapped offscreen spacers and removes source markers when capture fails", async () => {
+  const source = document.createElement("p");
+  source.style.cssText = "width:120px;height:29.75px";
+  source.textContent = "前文段落";
+  const original = source.outerHTML;
+  vi.mocked(snapdom).mockImplementationOnce(async (_node, options) => {
+    expect(options!.filter!(source)).toBe(true);
+    const spacer = source.cloneNode(false) as HTMLElement;
+    spacer.style.cssText = "visibility:hidden;box-sizing:border-box;height:30px;min-height:30px;max-height:30px";
+    await (options!.plugins![0] as SnapdomPlugin).afterClone!({ clone: spacer } as CaptureContext);
+    expect(spacer.style.height).toBe("29.75px");
+    expect(spacer.outerHTML).not.toContain("data-reader-geometry-");
+    throw new Error("capture-failed");
+  });
+  await expect(rasterizeScreenshot(source, { width: 120, height: 30, clip: { x: 0, y: 1000, width: 120, height: 30 }, signal: new AbortController().signal }))
+    .rejects.toThrow("capture-failed");
+  expect(source.outerHTML).toBe(original);
+});
+
 it("rejects resource fallbacks rather than returning a silently incomplete image", async () => {
   vi.mocked(snapdom).mockResolvedValueOnce({ warnings: [{ code: "image-fetch-failed" }] } as unknown as CaptureResult);
   await expect(rasterizeScreenshot(document.createElement("div"), { width: 20, height: 20, signal: new AbortController().signal })).rejects.toThrow("capture-image-fetch-failed");

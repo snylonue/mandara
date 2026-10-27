@@ -1,5 +1,6 @@
 import { snapdom } from "@zumer/snapdom";
 import { screenshotPixelRatio } from "./screenshotCanvas";
+import { screenshotGeometry } from "./screenshotGeometry";
 import { waitForScreenshot } from "./screenshotTask";
 
 /** Image load is sufficient for drawing; decode() can stall even after SVG load. */
@@ -145,19 +146,25 @@ export async function rasterizeScreenshot(node: HTMLElement, options: {
 }): Promise<HTMLCanvasElement> {
   const { signal } = options;
   signal.throwIfAborted();
+  const geometry = screenshotGeometry(signal);
   const result = await waitForScreenshot(snapdom(node, {
     dpr: 1,
     scale: 1,
     embedFonts: false,
     clip: options.clip,
     // Computed presentation is frozen; replaying publisher CSS restyles synthetic pseudo nodes.
-    filter: element => !["HEAD", "STYLE", "SCRIPT"].includes(element.nodeName),
+    filter: element => {
+      if (["HEAD", "STYLE", "SCRIPT"].includes(element.nodeName)) return false;
+      if (options.clip) geometry.track(element);
+      return true;
+    },
     filterMode: "remove",
     plugins: [{
       name: "reader-screenshot",
       beforeClone() { signal.throwIfAborted(); },
       afterClone(context) {
         signal.throwIfAborted();
+        if (context.clone) geometry.restore(context.clone);
         // Rewrite resources only after computed styles and attribute selectors have been frozen.
         const replace = (url: string) => options.images?.get(url) || url;
         context.classCSS = imageURLs(context.classCSS || "", replace);
@@ -200,7 +207,7 @@ export async function rasterizeScreenshot(node: HTMLElement, options: {
         context.classCSS = (context.classCSS || "") + '[data-reader-overlay-scrollbar]::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}';
       },
     }],
-  }), signal);
+  }), signal).finally(() => geometry.release());
   signal.throwIfAborted();
   const failures = result.warnings.filter(warning => warning.code !== "reconcile-risk");
   if (failures.length) throw new Error("capture-" + failures.map(warning => warning.code).join(","));
