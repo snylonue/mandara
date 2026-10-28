@@ -140,6 +140,29 @@ Playwright does not force pages to stay focused/visible.
 The native browser may require broader runtime access for shared memory and its
 diagnostic directory; the runner never changes those directory permissions.
 
+For CPU-source investigation, `ENERGY_VERSIONS=after` limits the comparison to the
+current frontend. `ENERGY_VARIANTS` selects comma-separated diagnostic controls:
+
+| Variant | Isolated behavior |
+| --- | --- |
+| `default` | Unmodified reader |
+| `no-progress-animation` | Keep progress updates but disable their CSS transition |
+| `hidden-progress` | Preserve track geometry and progress callbacks; omit its painting |
+| `hidden-text` | Preserve layout and scrolling but omit chapter-content painting |
+| `no-wheel-handler` | EPUB only: omit its native wheel listener before initialization |
+
+Variant order rotates across repetitions. Hidden content and removed wheel listeners
+are causal controls, not proposed product behavior. In particular, removing the wheel
+listener breaks vertical-publication navigation. Verify the recorded geometry and
+`skippedWheelHandlers` count before interpreting a control.
+
+`ENERGY_TRACE=1` records a CDP trace and JavaScript CPU profile for each selected
+scenario and builds source maps for attribution. Trace files can be loaded into Chrome
+DevTools. Profiler samples are sampled wall time; trace `tdur` values, where present,
+are thread CPU time. Nested trace durations must not be blindly summed. These runs
+include tracing/profiling overhead and must be kept separate from uninstrumented CPU
+comparisons. The regular mode does not start a profiler or tracing session.
+
 Results include every sample, alternating A/B order, fixture geometry, CPU/process metadata,
 API request counts, and skipped/failed capabilities. Idle periods do not poll the page or run
 an animation-frame sampler. Selection changes use real DOM selections, not fabricated
