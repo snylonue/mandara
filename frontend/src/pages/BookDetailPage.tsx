@@ -482,10 +482,10 @@ export function BookDetailPage() {
               {detail.series ? (
                 <Link className="tag lg" to={`/series/${detail.series.id}`}>
                   <IconLayers size={13} />
-                  {t("book.seriesLine", {
+                  <span>{t("book.seriesLine", {
                     title: detail.series.title,
                     volume: book.volume_no,
-                  })}
+                  })}</span>
                 </Link>
               ) : (
                 <span className="tag lg">第{book.volume_no}卷</span>
