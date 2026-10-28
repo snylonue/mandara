@@ -14,12 +14,24 @@ beforeEach(() => {
   root.innerHTML = `<div class="detail-info">
     <div><a class="tag lg" href="/series/test"><svg width="13"></svg><span>系列《这是一个很长的系列名称》 第四卷</span></a></div>
     <h1>这是一个很长的书名</h1>
+    <p class="detail-desc">这是书籍简介。</p>
     <table class="ext-table"><tbody><tr><th>译者</th><td><span class="tag">很长的译者名称</span></td></tr></tbody></table>
   </div><span class="tag outside">epub</span>`;
   document.body.append(root);
 });
 
 afterEach(() => { root.remove(); style.remove(); });
+
+it("uses the available column width for natural title and description wrapping", () => {
+  expect(getComputedStyle(root.querySelector("h1")!).textWrap).toBe("wrap");
+  const description = root.querySelector(".detail-desc")!;
+  for (const expanded of [false, true]) {
+    description.classList.toggle("expanded", expanded);
+    const computed = getComputedStyle(description);
+    expect(computed.textWrap).toBe("wrap");
+    expect(computed.maxWidth).toBe("100%");
+  }
+});
 
 it("allows long detail tags to wrap within their container", () => {
   for (const tag of root.querySelectorAll(".detail-info .tag")) {

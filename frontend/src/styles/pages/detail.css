@@ -102,7 +102,7 @@
 .detail-info h1 {
   font-size: var(--fs-3xl);
   line-height: 1.2;
-  text-wrap: balance;
+  text-wrap: wrap;
   margin: 0;
 }
 
@@ -119,9 +119,9 @@
   color: var(--text-1);
   opacity: 0.82;
   margin: var(--space-1) 0 0;
-  max-width: 68ch;
+  max-width: 100%;
   font-size: var(--fs-md);
-  text-wrap: pretty;
+  text-wrap: wrap;
   display: -webkit-box;
   -webkit-line-clamp: 5;
   -webkit-box-orient: vertical;
