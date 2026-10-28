@@ -10,6 +10,11 @@ body:has(.app-reader),
   overscroll-behavior: none;
 }
 
+/* The opaque reader covers the shelf glow; avoid repainting it on scroll. */
+body:has(.app-reader) {
+  background-image: none;
+}
+
 .app-reader {
   height: 100%;
   min-height: 0;
