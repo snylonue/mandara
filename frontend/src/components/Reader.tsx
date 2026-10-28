@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { IconArrowLeft, IconChevronLeft, IconChevronRight, IconList, IconType, IconCamera } from "./icons";
@@ -13,6 +13,7 @@ import {
 } from "./ReaderSettings";
 import type { Chapter, ChapterMeta, Position, TocNode } from "../types";
 import { ApiError } from "../api";
+import { createReaderProgress, type ReaderProgressStore } from "../readerProgress";
 
 // Keep native selections intact when reader controls or scroll progress rerender.
 const TextChapterContent = memo(function TextChapterContent({ content }: { content: string }) {
@@ -72,11 +73,9 @@ export function Reader({
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loadAttempt, setLoadAttempt] = useState(0);
-  const [fraction, setFraction] = useState(
-    initialPosition?.in_chapter && "fraction" in initialPosition.in_chapter
-      ? initialPosition.in_chapter.fraction
-      : 0,
-  );
+  const initialFraction = initialPosition?.in_chapter && "fraction" in initialPosition.in_chapter
+    ? initialPosition.in_chapter.fraction : 0;
+  const [progressStore] = useState(() => createReaderProgress(initialFraction));
   const loadedRef = useRef<Map<number, Chapter>>(new Map());
   const pendingFragRef = useRef<string | null>(null);
   const epubRef = useRef<EpubDocumentHandle>(null);
@@ -146,6 +145,7 @@ export function Reader({
     const frag = pendingFragRef.current;
     pendingFragRef.current = null;
     let cancelled = false;
+    const fraction = lastFractionRef.current;
     renderTarget.current = { fragment: frag, fraction };
     setChapter(null);
     setLoadError(null);
@@ -191,6 +191,31 @@ export function Reader({
     });
   }
 
+  const debounceRef = useRef<number | undefined>(undefined);
+  const lastFractionRef = useRef(initialFraction);
+  const lastChapterRef = useRef(idx);
+  const progressDirtyRef = useRef(false);
+  const flushProgress = useCallback(() => {
+    window.clearTimeout(debounceRef.current);
+    if (progressDirtyRef.current && onProgress && !readOnly) {
+      progressDirtyRef.current = false;
+      onProgress(lastFractionRef.current, lastChapterRef.current);
+    }
+  }, [onProgress, readOnly]);
+  const trackFraction = useCallback((fraction: number) => {
+    progressStore.update(fraction);
+    lastFractionRef.current = fraction;
+    lastChapterRef.current = idx;
+    if (!onProgress || readOnly) return;
+    progressDirtyRef.current = true;
+    window.clearTimeout(debounceRef.current);
+    debounceRef.current = window.setTimeout(flushProgress, 600);
+  }, [progressStore, idx, onProgress, readOnly, flushProgress]);
+  useEffect(() => () => {
+    progressStore.cancel();
+    flushProgress();
+  }, [progressStore, flushProgress]);
+
   const goto = useCallback(
     (next: number, frag?: string) => {
       const clamped = Math.max(0, Math.min(next, chapters.length - 1));
@@ -200,13 +225,15 @@ export function Reader({
         else {
           if (epubRef.current) epubRef.current.restoreFraction(0);
           else restoreScroll(0);
-          setFraction(0);
+          progressStore.reset(0);
+          window.clearTimeout(debounceRef.current);
+          progressDirtyRef.current = false;
           lastFractionRef.current = 0;
           if (onProgress && !readOnly) onProgress(0, clamped);
         }
         return;
       }
-      window.clearTimeout(debounceRef.current);
+      flushProgress();
       lastChapterRef.current = clamped;
       lastFractionRef.current = 0;
       if (onProgress && !readOnly) onProgress(0, clamped);
@@ -216,47 +243,33 @@ export function Reader({
       setScreenshotHint(false);
       setIdx(clamped);
       setLoadAttempt(0);
-      setFraction(0);
+      progressStore.reset(0);
       pendingFragRef.current = frag ?? null;
     },
-    [chapters.length, idx, onProgress, readOnly],
+    [chapters.length, idx, onProgress, readOnly, progressStore, flushProgress],
   );
 
-  // Debounced scroll tracking → progress callback.
-  const debounceRef = useRef<number | undefined>(undefined);
-  const lastFractionRef = useRef(fraction);
-  const lastChapterRef = useRef(idx);
   useEffect(() => {
     const viewport = viewportRef.current;
-    if (!viewport) return;
+    if (!viewport || !chapter || chapter.idx !== idx || isDocument) return;
     function onScroll() {
-      if (isDocument) return;
       const max = viewport!.scrollHeight - viewport!.clientHeight;
-      const f = max > 0 ? Math.min(1, Math.max(0, viewport!.scrollTop / max)) : 0;
-      setFraction(f);
-      lastFractionRef.current = f;
-      if (!onProgress || readOnly) return;
-      window.clearTimeout(debounceRef.current);
-      debounceRef.current = window.setTimeout(() => onProgress(f, idx), 600);
+      trackFraction(max > 0 ? Math.min(1, Math.max(0, viewport!.scrollTop / max)) : 0);
     }
     viewport.addEventListener("scroll", onScroll, { passive: true });
-    return () => {
-      viewport.removeEventListener("scroll", onScroll);
-      window.clearTimeout(debounceRef.current);
-      // Flush the pending fraction on unmount (leaving the reader must
-      // not lose the last 600 ms of scroll).
-      if (onProgress && !readOnly && lastFractionRef.current > 0) {
-        onProgress(lastFractionRef.current, lastChapterRef.current);
-      }
-    };
-  }, [onProgress, readOnly, isDocument, idx]);
+    return () => viewport.removeEventListener("scroll", onScroll);
+  }, [chapter, idx, isDocument, trackFraction]);
 
-  const cur = chapters.find((c) => c.idx === idx);
-  const linearChapters = chapters.filter(c => c.linear !== false);
-  const linearRank = linearChapters.findIndex(c => c.idx === idx);
-  const prev = linearChapters.filter(c => c.idx < idx).at(-1) ?? null;
-  const next = linearChapters.find(c => c.idx > idx) ?? null;
-  const progress = linearChapters.length > 0 && linearRank >= 0 ? ((linearRank + fraction) / linearChapters.length) * 100 : 0;
+  const { cur, linearChapters, linearRank, prev, next } = useMemo(() => {
+    const linearChapters = chapters.filter(c => c.linear !== false);
+    return {
+      cur: chapters.find(c => c.idx === idx),
+      linearChapters,
+      linearRank: linearChapters.findIndex(c => c.idx === idx),
+      prev: linearChapters.filter(c => c.idx < idx).at(-1) ?? null,
+      next: linearChapters.find(c => c.idx > idx) ?? null,
+    };
+  }, [chapters, idx]);
 
   // Keep the highlighted chapter visible when the drawer opens or the
   // chapter changes while it is open.
@@ -295,7 +308,7 @@ export function Reader({
           <span className="reader-topbar-book" title={title}>{title}</span>
           <div className="reader-topbar-meta">
             <span className="reader-topbar-chapter" title={cur?.title}>{cur?.title ?? ""}</span>
-            {!readOnly && <span className="reader-topbar-progress">{Math.round(progress)}%</span>}
+            {!readOnly && <ReaderProgress store={progressStore} rank={linearRank} count={linearChapters.length} label />}
           </div>
         </div>
         <div className="reader-topbar-side reader-topbar-end">
@@ -354,9 +367,7 @@ export function Reader({
         </>
       )}
 
-      <div className="progress-bar">
-        <div className="progress-fill" style={{ width: `${progress}%` }} />
-      </div>
+      <ReaderProgress store={progressStore} rank={linearRank} count={linearChapters.length} />
 
       <div ref={viewportRef} className={`reader-viewport${isDocument ? " reader-viewport-document" : ""}`}>
         <article
@@ -393,13 +404,7 @@ export function Reader({
               epubRef.current?.restoreFraction(target.fraction);
               if (target.fragment) epubRef.current?.scrollToFragment(target.fragment);
             }}
-            onFraction={(f) => {
-              setFraction(f);
-              lastFractionRef.current = f;
-              if (!onProgress || readOnly) return;
-              window.clearTimeout(debounceRef.current);
-              debounceRef.current = window.setTimeout(() => onProgress(f, idx), 600);
-            }}
+            onFraction={trackFraction}
           /> : <TextChapterContent content={chapter.content} />)}
         </article>
       </div>
@@ -429,6 +434,17 @@ export function Reader({
       </div>
     </div>
   );
+}
+
+function ReaderProgress({ store, rank, count, label = false }: {
+  store: ReaderProgressStore; rank: number; count: number; label?: boolean;
+}) {
+  const fraction = useSyncExternalStore(store.subscribe, store.getSnapshot);
+  const progress = count > 0 && rank >= 0 ? (rank + fraction) / count : 0;
+  if (label) return <span className="reader-topbar-progress">{Math.round(progress * 100)}%</span>;
+  return <div className="progress-bar">
+    <div className="progress-fill" style={{ transform: "scaleX(" + progress + ")" }} />
+  </div>;
 }
 
 /// Recursive renderer for the hierarchical TOC.
