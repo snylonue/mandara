@@ -107,6 +107,61 @@ npm test
 The runner owns a temporary loopback-only Vite server and closes it when finished.
 It does not start or replace the application's deployed server.
 
+### Reader CPU / energy diagnostics
+
+Run the production A/B workload from this directory after installing the lab dependencies:
+
+```sh
+NIXPKGS=github:NixOS/nixpkgs/a32edd7654519351e48e80372a928df336394670
+nix run "$NIXPKGS#chromium" -- --version
+export CHROMIUM_EXECUTABLE="$(nix eval --raw "$NIXPKGS#chromium.outPath")/bin/chromium"
+node energy.mjs
+```
+
+The runner builds the baseline and current frontend using the same installed dependencies.
+A Vite loader supplies historical source without checking out or overwriting working files.
+It serves synthetic chapter/API fixtures from private loopback ports, runs sequentially in
+Chromium, and closes its servers and browser afterward. No backend or user data is used.
+
+The default baseline is commit `1cd039ee`, before the reader hot-path changes. Override
+`ENERGY_BASE` when comparing another revision. `ENERGY_OUTPUT` controls the artifact directory;
+`ENERGY_REPETITIONS`, `ENERGY_IDLE_MS`, `ENERGY_SCROLL_MS`,
+`ENERGY_SELECTION_STEPS`, and `ENERGY_SETTINGS_STEPS` control workload sizes.
+`ENERGY_FORMATS` selects `epub,txt`; `ENERGY_SCENARIOS` selects comma-separated
+`idle,scroll,selection,settings,background-idle` phases.
+For native background-tab checks:
+
+```sh
+ENERGY_NATIVE_FOCUS=1 ENERGY_FORMATS=epub ENERGY_SCENARIOS=background-idle node energy.mjs
+```
+
+This launches a fresh browser profile and connects with `noDefaults: true`, so
+Playwright does not force pages to stay focused/visible.
+The native browser may require broader runtime access for shared memory and its
+diagnostic directory; the runner never changes those directory permissions.
+
+Results include every sample, alternating A/B order, fixture geometry, CPU/process metadata,
+API request counts, and skipped/failed capabilities. Idle periods do not poll the page or run
+an animation-frame sampler. Selection changes use real DOM selections, not fabricated
+selection events; scrolling uses Chromium input gestures. Screenshot rasterization,
+progress persistence, cold loading, and physical mobile devices are outside this workload.
+
+Duration metrics use CDP `threadTicks` (thread running time); process totals use
+`SystemInfo.getProcessInfo` CPU seconds across the browser's processes. The latter has
+coarser resolution and is invalid for a sample with process churn. Heap deltas without
+forced GC are not retained-memory or peak-memory measurements. Background results are
+reported only if the page genuinely becomes hidden. The runner disables Playwright's
+automatic focus emulation and activates another real tab; visibility is never spoofed.
+
+These are CPU-work measurements, **not energy measurements** when the RAPL counter is
+unreadable. The diagnostic records that permission failure rather than changing host
+permissions. If the counter is readable, it additionally records wrap-aware package
+energy deltas and average power. Those cover the entire CPU package, including unrelated
+processes, and must not be described as per-page or whole-machine energy. A software-rendered headless browser cannot establish physical GPU/display
+power, battery life, or real-screen frame pacing. Do not convert CPU percentage reductions
+into energy savings. Keep other profiling and build/test jobs stopped during the run.
+
+
 To validate only the production pipeline and its boundaries:
 
 ```sh
