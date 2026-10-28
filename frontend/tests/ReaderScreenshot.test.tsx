@@ -5,6 +5,7 @@ import * as epubScreenshot from "../src/epubScreenshot";
 import { MAX_SCREENSHOT_TEXT, renderReaderScreenshot, selectedChapterText, selectedTextContent, wrapScreenshotText } from "../src/readerScreenshot";
 import { SCREENSHOT_TIMEOUT } from "../src/screenshotTask";
 import { screenshotRange } from "../src/screenshotSelection";
+import * as screenshotSelection from "../src/screenshotSelection";
 
 const style = { background: "#fff", foreground: "#111", muted: "#666", accent: "#369", fontFamily: "serif" };
 const drawn = vi.fn();
@@ -150,8 +151,13 @@ it("captures styled EPUB markup without injecting publisher CSS into the app", a
   doc.head.innerHTML = "<style>p{writing-mode:vertical-rl;color:red}</style>";
   doc.body.innerHTML = '<section class="publication"><p>纵排正文摘录</p><p>不应出现在截图</p></section>';
   fireEvent.load(frame);
-  act(() => select(doc.querySelector("p")!.firstChild!, 2, 6));
+  const snapshotDocument = vi.spyOn(screenshotSelection, "snapshotScreenshotDocument");
+  for (const end of [4, 5, 6]) act(() => select(doc.querySelector("p")!.firstChild!, 2, end));
+  expect(snapshotDocument).not.toHaveBeenCalled();
+  // Capture the current publication, not a stale snapshot from selectionchange.
+  doc.querySelector("p:last-child")!.textContent = "截图时保留的上下文";
   fireEvent.click(screen.getByRole("button", { name: "选段截图" }));
+  expect(snapshotDocument).toHaveBeenCalledTimes(1);
   await screen.findByAltText("所选文字截图预览");
   expect(drawn.mock.calls.map(call => call[0])).toEqual(["测试书籍 · 第一章"]);
   const snapshot = new DOMParser().parseFromString(rasterize.mock.lastCall![0], "text/html");

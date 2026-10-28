@@ -59,7 +59,7 @@ export function Reader({
   const { t } = useTranslation();
   const [settings, setSettings] = useReaderSettings();
   const [tocOpen, setTocOpen] = useState(false);
-  const [selection, setSelection] = useState<(ScreenshotSelection & { chapterIdx: number }) | null>(null);
+  const selectionRef = useRef<(ScreenshotSelection & { chapterIdx: number }) | null>(null);
   const [image, setImage] = useState<ReaderImage | null>(null);
   const [excerpt, setExcerpt] = useState<ReaderExcerpt | null>(null);
   const [screenshotHint, setScreenshotHint] = useState(false);
@@ -95,21 +95,27 @@ export function Reader({
       const current = document.getSelection();
       const text = selectedChapterText(root!, current);
       textRangeRef.current = text ? current!.getRangeAt(0).cloneRange() : null;
-      setSelection({ text, chapterIdx: idx });
+      selectionRef.current = { text, chapterIdx: idx };
     }
     document.addEventListener("selectionchange", updateSelection);
     return () => document.removeEventListener("selectionchange", updateSelection);
   }, [chapter, idx, isDocument]);
 
   function openScreenshot() {
+    const selection = selectionRef.current;
     if (!chapter || !selection?.text || selection.chapterIdx !== idx || !articleRef.current) {
       setScreenshotHint(true);
       return;
     }
     const style = getComputedStyle(articleRef.current);
     const root = articleRef.current.querySelector<HTMLElement>(".epub-content");
-    const selected = !isDocument && root && textRangeRef.current
-      ? selectedTextContent(root, textRangeRef.current) : selection;
+    const selected = isDocument
+      ? epubRef.current?.captureSelection()
+      : root && textRangeRef.current ? selectedTextContent(root, textRangeRef.current) : selection;
+    if (!selected?.text) {
+      setScreenshotHint(true);
+      return;
+    }
     setExcerpt({
       ...selected, title, chapter: chapter.title, chapterIdx: idx,
       style: {
@@ -205,7 +211,8 @@ export function Reader({
       lastFractionRef.current = 0;
       if (onProgress && !readOnly) onProgress(0, clamped);
       setImage(null);
-      setSelection(null);
+      selectionRef.current = null;
+      textRangeRef.current = null;
       setScreenshotHint(false);
       setIdx(clamped);
       setLoadAttempt(0);
@@ -380,7 +387,7 @@ export function Reader({
             settings={settings}
             onNavigate={goto}
             onImageOpen={setImage}
-            onSelectionChange={selected => setSelection({ ...selected, chapterIdx: idx })}
+            onSelectionChange={selected => { selectionRef.current = { ...selected, chapterIdx: idx }; }}
             onReady={() => {
               const target = renderTarget.current;
               epubRef.current?.restoreFraction(target.fraction);

@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { act, fireEvent, render } from "@testing-library/react";
+import { createRef } from "react";
 import { readFileSync } from "node:fs";
-import { EpubDocument } from "../src/components/EpubDocument";
+import { EpubDocument, type EpubDocumentHandle } from "../src/components/EpubDocument";
 import type { ReaderSettings } from "../src/components/ReaderSettings";
 
 const settings: ReaderSettings = { fontSize: 20, lineHeight: 2, theme: "light", font: "serif", widthEm: 42 };
@@ -80,6 +81,36 @@ it.each([false, true])("waits for frame fonts and ignores stale readiness after 
   if (unmountEarly) view.unmount();
   await act(async () => { complete(); await ready; });
   expect(props.onReady).toHaveBeenCalledTimes(unmountEarly ? 0 : 1);
+});
+
+it("retains only selection endpoints until capture and clears them on deselection or reload", () => {
+  const content = "<!doctype html><html><body><p>选中的正文</p></body></html>";
+  const { doc, frame, rerender } = load(content);
+  const ref = createRef<EpubDocumentHandle>();
+  const onSelectionChange = vi.fn();
+  rerender(<EpubDocument {...props} content={content} ref={ref} onSelectionChange={onSelectionChange} />);
+  const clone = vi.spyOn(doc.documentElement, "cloneNode");
+  try {
+    const range = doc.createRange();
+    range.selectNodeContents(doc.querySelector("p")!);
+    doc.getSelection()!.addRange(range);
+    fireEvent(doc, new Event("selectionchange"));
+    expect(onSelectionChange).toHaveBeenLastCalledWith({ text: "选中的正文" });
+    expect(clone).not.toHaveBeenCalled();
+    expect(ref.current!.captureSelection().document).toContain("选中的正文");
+    expect(clone).toHaveBeenCalledTimes(1);
+
+    doc.getSelection()!.removeAllRanges();
+    fireEvent(doc, new Event("selectionchange"));
+    expect(ref.current!.captureSelection()).toEqual({ text: "" });
+    expect(clone).toHaveBeenCalledTimes(1);
+
+    doc.getSelection()!.addRange(range);
+    fireEvent(doc, new Event("selectionchange"));
+    fireEvent.load(frame);
+    expect(ref.current!.captureSelection()).toEqual({ text: "" });
+    expect(clone).toHaveBeenCalledTimes(1);
+  } finally { clone.mockRestore(); }
 });
 
 function glyphRule(doc: Document) {

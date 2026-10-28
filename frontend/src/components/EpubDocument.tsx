@@ -1,6 +1,6 @@
 import { useEffect, useImperativeHandle, useMemo, useRef, type Ref } from "react";
 import type { ReaderSettings } from "./ReaderSettings";
-import { selectedEpubContent, type ScreenshotSelection } from "../readerScreenshot";
+import { selectedChapterText, selectedTextContent, type ScreenshotSelection } from "../readerScreenshot";
 import { readerImageAt, type ReaderImage } from "../readerImage";
 import imagePageStyles from "../styles/epub-image-page.css?raw";
 import serifFontStyles from "@fontsource-variable/noto-serif-sc/index.css?inline";
@@ -8,6 +8,7 @@ import serifFontStyles from "@fontsource-variable/noto-serif-sc/index.css?inline
 export interface EpubDocumentHandle {
   scrollToFragment: (fragment: string) => void;
   restoreFraction: (fraction: number) => void;
+  captureSelection: () => ScreenshotSelection;
 }
 
 /** Never insert publisher CSS into the application DOM. */
@@ -25,6 +26,7 @@ export function EpubDocument({ content, title, settings, onFraction, onReady, on
   const frame = useRef<HTMLIFrameElement>(null);
   const cleanup = useRef<(() => void) | null>(null);
   const defaultsRef = useRef<HTMLStyleElement | null>(null);
+  const selectionRef = useRef<{ doc: Document; range: Range } | null>(null);
   const callbacks = useRef({ onFraction, onReady, onNavigate, onSelectionChange, onImageOpen });
   callbacks.current = { onFraction, onReady, onNavigate, onSelectionChange, onImageOpen };
   const source = useMemo(() => {
@@ -67,6 +69,11 @@ export function EpubDocument({ content, title, settings, onFraction, onReady, on
   }
 
   useImperativeHandle(ref, () => ({
+    captureSelection() {
+      const selected = selectionRef.current;
+      if (!selected || frame.current?.contentDocument !== selected.doc) return { text: "" };
+      return selectedTextContent(selected.doc.documentElement, selected.range);
+    },
     scrollToFragment(fragment) {
       navigateFragment(fragment);
     },
@@ -158,6 +165,7 @@ export function EpubDocument({ content, title, settings, onFraction, onReady, on
 
   function ready() {
     cleanup.current?.();
+    selectionRef.current = null;
     applySettings();
     scaleFixedLayout();
     const doc = frame.current?.contentDocument;
@@ -222,7 +230,11 @@ export function EpubDocument({ content, title, settings, onFraction, onReady, on
       }
     }
     function selectionChanged() {
-      callbacks.current.onSelectionChange?.(selectedEpubContent(doc!, doc!.getSelection()));
+      const selection = doc!.getSelection();
+      const text = selectedChapterText(doc!.body, selection);
+      // Keep dragging cheap; freeze the full publication only when capture starts.
+      selectionRef.current = text ? { doc: doc!, range: selection!.getRangeAt(0).cloneRange() } : null;
+      callbacks.current.onSelectionChange?.({ text });
     }
     const observer = new ResizeObserver(scaleFixedLayout);
     if (frame.current) observer.observe(frame.current);
@@ -234,6 +246,7 @@ export function EpubDocument({ content, title, settings, onFraction, onReady, on
     let disposed = false;
     cleanup.current = () => {
       disposed = true;
+      selectionRef.current = null;
       observer.disconnect();
       win.removeEventListener("scroll", scroll);
       doc.removeEventListener("selectionchange", selectionChanged);
