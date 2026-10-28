@@ -121,7 +121,7 @@ impl<'a, R: Read + Seek> Renderer<'a, R> {
     }
 
     pub fn document(&mut self, source: &str, base: &Path, layout: &str) -> String {
-        let parsed = Html::parse_document(source);
+        let parsed = crate::epub_markup::parse_document(source);
         let mut out = String::from("<!doctype html>");
         self.node(&mut out, &parsed.root_element(), base, 0, false, layout);
         let vrtl = parsed

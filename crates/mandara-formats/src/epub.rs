@@ -317,7 +317,7 @@ pub fn parse_with_policy(
     loop {
         while scanned < documents.len() {
             let d = &documents[scanned];
-            let parsed = Html::parse_document(&d.content);
+            let parsed = crate::epub_markup::parse_document(&d.content);
             queue.extend(parsed.select(&selector).filter_map(|a| {
                 a.value()
                     .attrs()
@@ -645,7 +645,7 @@ fn parse_nav_branches(html: &str, nav_path: &Path) -> Vec<TocBranch> {
             .unwrap_or_default();
     }
     // Recovery for producer HTML that is not namespace-well-formed XML.
-    let parsed = Html::parse_document(html);
+    let parsed = crate::epub_markup::parse_document(html);
     let selector = Selector::parse("nav").expect("static selector");
     let navs: Vec<_> = parsed.select(&selector).collect();
     let nav = navs
@@ -1025,7 +1025,7 @@ fn remap_branches(
 /// document order (per EPUB semantics the chapter title is the first
 /// heading element of the document).
 fn extract_heading(html: &str) -> Option<String> {
-    let frag = Html::parse_document(html);
+    let frag = crate::epub_markup::parse_document(html);
     let Ok(selector) = Selector::parse("h1, h2, h3, h4, h5, h6") else {
         return None;
     };
@@ -1068,6 +1068,61 @@ mod tests {
             }
         }
         writer.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn preserves_xhtml_after_self_closing_active_elements() {
+        let bytes = build_epub(&Fixture {
+            version: "3.0",
+            metadata_extra: "",
+            spine: vec![("cover.xhtml".into(), true), ("ch.xhtml".into(), true)],
+            toc: vec![],
+        });
+        let mut doc = EpubDoc::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+        let opf = doc.get_resource_str_by_path("OEBPS/content.opf").unwrap()
+            .replace("</manifest>", r#"<item id="notes" href="notes.xhtml" media-type="application/xhtml+xml"/></manifest>"#);
+        let cover = r#"<?xml version="1.0"?><!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml"><head><script src="kobo.js"/></head><body><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1 1"><image width="1" height="1" xlink:href="images/pic.png"/></svg></body></html>"#;
+        let chapter = r#"<!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml"><head><style/><script src="kobo.js" data-note="&gt; /&gt;"/></head><body><iframe src="https://tracker.test/"/><h1>正文标题</h1><p>正文保留<a href="notes.xhtml#note">注释</a></p></body></html>"#;
+        let notes = r#"<html><body><p id="note">注释正文</p></body></html>"#;
+        let nav = r#"<!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><script src="kobo.js"/></head><body><nav epub:type="toc"><ol><li><a href="cover.xhtml">封面</a></li><li><a href="ch.xhtml">正文目录</a></li></ol></nav></body></html>"#;
+        let bytes = patch_epub(
+            &bytes,
+            &[
+                ("OEBPS/content.opf", opf.as_bytes()),
+                ("OEBPS/cover.xhtml", cover.as_bytes()),
+                ("OEBPS/ch.xhtml", chapter.as_bytes()),
+                ("OEBPS/notes.xhtml", notes.as_bytes()),
+                ("OEBPS/nav.xhtml", nav.as_bytes()),
+            ],
+        );
+        for policy in [ParsePolicy::Strict, ParsePolicy::Compatible] {
+            let (book, diagnostics) = parse_with_policy(&bytes, policy).unwrap();
+            assert_eq!(book.chapters.len(), 3);
+            assert_eq!(book.toc.len(), 2);
+            assert_eq!(book.toc[1].title, "正文目录");
+            assert!(book.chapters[0].content.contains("<svg"));
+            assert!(book.chapters[0].content.contains("data:image/png;base64,"));
+            assert!(book.chapters[1].content.contains("正文保留"));
+            assert!(book.chapters[1].content.contains("epub:chapter/2#note"));
+            assert!(!book.chapters[2].linear);
+            assert!(book.chapters[2].content.contains("注释正文"));
+            for chapter in &book.chapters {
+                assert!(!chapter.content.contains("<script"));
+                assert!(!chapter.content.contains("<iframe"));
+                assert!(!chapter.content.contains("tracker.test"));
+            }
+            assert!(
+                diagnostics
+                    .iter()
+                    .any(|d| d.reason == "blocked-active-content")
+            );
+            assert!(
+                !diagnostics
+                    .iter()
+                    .any(|d| d.reason == "missing-navigation-resource")
+            );
+        }
+        assert_eq!(extract_heading(chapter).as_deref(), Some("正文标题"));
     }
 
     #[test]
