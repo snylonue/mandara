@@ -1,14 +1,16 @@
 import { readFile, writeFile, readdir } from "node:fs/promises";
 import { resolve, join } from "node:path";
-import { partitionCpuIntervals, normalizeTraceEvents } from "./paint-metrics.mjs";
+import { partitionCpuIntervals, normalizeTraceEvents, measurementKey } from "./paint-metrics.mjs";
 const dir = resolve(process.argv[2]);
 const report = JSON.parse(await readFile(join(dir, "results.json"), "utf8"));
 const median = values => { const rows = [...values].sort((a, b) => a - b); return rows.length % 2 ? rows[Math.floor(rows.length / 2)] : (rows[rows.length / 2 - 1] + rows[rows.length / 2]) / 2; };
 const stat = values => ({ n: values.length, median: median(values), min: Math.min(...values), max: Math.max(...values) });
 const role = row => row.type === "renderer" && row.name.startsWith("ThreadPoolFore") ? "renderer-workers" : row.type === "renderer" && (row.pid === row.tid || row.name === "CrRendererMain") ? "renderer-main" : row.type === "renderer" && row.name === "Compositor" ? "renderer-compositor" : row.type === "GPU" && row.name.startsWith("VizCompositor") ? "viz-compositor" : row.type === "browser" ? "browser" : "other";
-const keys = [...new Set(report.records.map(row => [row.version, row.format, row.variant, row.scenario].join("/")))];
+if (report.records.some(row => !row.threadCpu)) throw new Error("Paint analysis requires ENERGY_THREAD_CPU=1");
+const keyFor = row => measurementKey(row, report.protocol);
+const keys = [...new Set(report.records.map(keyFor))];
 const groups = keys.map(key => {
- const rows = report.records.filter(row => [row.version, row.format, row.variant, row.scenario].join("/") === key);
+ const rows = report.records.filter(row => keyFor(row) === key);
  const roles = {};
  for (const name of ["renderer-main", "renderer-workers", "renderer-compositor", "viz-compositor", "browser", "other"]) roles[name] = stat(rows.map(row => row.threadCpu.threads.filter(thread => role(thread) === name).reduce((sum, thread) => sum + thread.cpuMs, 0)));
  return { key, n: rows.length, totalCpuMs: stat(rows.map(row => row.browserCpuMs)), threadCpuMs: stat(rows.map(row => row.threadCpu.totalCpuMs)), roles, allThreadBudgetsValid: rows.every(row => row.threadCpu.valid), maxProcessThreadDiscrepancyMs: Math.max(...rows.map(row => Math.abs(row.threadCpu.totalCpuMs - row.browserCpuMs))), scrollTops: rows.map(row => row.detail.scrollTop), scriptCpuMs: stat(rows.map(row => row.scriptCpuMs)), geometry: report.fixtureGeometry.filter(row => [row.version, row.format, row.variant, "scroll"].join("/") === key).map(row => row.geometry), lifecycle: rows.map(row => row.browserLifecycle).filter(Boolean) };

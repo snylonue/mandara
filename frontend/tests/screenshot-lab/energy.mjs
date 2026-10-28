@@ -30,9 +30,14 @@ const tracing = process.env.ENERGY_TRACE === "1" || paintTracing;
 const threadCpu = process.env.ENERGY_THREAD_CPU === "1";
 const ticksPerSecond = threadCpu || process.env.ENERGY_LIFECYCLE === "1" ? Number(execFileSync("getconf", ["CLK_TCK"], { encoding: "utf8" }).trim()) : null;
 const warmup = process.env.ENERGY_WARMUP === "1";
-if (variants.some(v => !["default", "no-progress-animation", "hidden-progress", "hidden-text", "no-wheel-handler", "transparent-text", "no-radius", "cached-content", "no-page-glow", "cached-article"].includes(v)) || versions.some(v => !["before", "after"].includes(v))) throw new Error("Unknown diagnostic variant or version");
+const preferCompositing = process.env.ENERGY_PREFER_COMPOSITING === "1";
+const browserArgs = preferCompositing ? ["--enable-prefer-compositing-to-lcd-text"] : [];
+const scrollDiagnostics = process.env.ENERGY_SCROLL_DIAGNOSTICS === "1";
+if (variants.some(v => !["default", "no-progress-animation", "hidden-progress", "hidden-text", "no-wheel-handler", "transparent-text", "no-radius", "cached-content", "no-page-glow", "cached-article", "suppress-scroll-observers", "opaque-scroll-surface"].includes(v)) || versions.some(v => !["before", "after"].includes(v))) throw new Error("Unknown diagnostic variant or version");
 const repetitions = Number(process.env.ENERGY_REPETITIONS || 3);
 const idleMs = Number(process.env.ENERGY_IDLE_MS || 15000);
+const idleSegments = Number(process.env.ENERGY_IDLE_SEGMENTS || 1);
+if (!Number.isInteger(idleSegments) || idleSegments < 1 || (tracing && idleSegments !== 1)) throw new Error("Idle segments must be a positive integer and segmented idle checks must not enable tracing");
 const scrollMs = Number(process.env.ENERGY_SCROLL_MS || 6000);
 const scrollDistance = Number(process.env.ENERGY_SCROLL_PX || 3600);
 const selectionSteps = Number(process.env.ENERGY_SELECTION_STEPS || 40);
@@ -42,7 +47,7 @@ const scenarios = new Set((process.env.ENERGY_SCENARIOS || "idle,scroll,selectio
 for (const value of [repetitions, idleMs, scrollMs, scrollDistance, selectionSteps, settingsSteps]) {
   if (!Number.isFinite(value) || value <= 0) throw new Error("Workload sizes must be positive finite numbers");
 }
-if (formats.some(format => !["epub", "txt"].includes(format)) || [...scenarios].some(scenario => !["idle", "scroll", "selection", "settings", "background-idle"].includes(scenario))) throw new Error("Unknown format or scenario");
+if (formats.some(format => !["epub", "txt"].includes(format)) || [...scenarios].some(scenario => !["idle", "scroll", "selection", "settings", "background-idle", "blank-idle"].includes(scenario))) throw new Error("Unknown format or scenario");
 for (const value of [repetitions, selectionSteps, settingsSteps]) {
   if (!Number.isInteger(value)) throw new Error("Repetition and operation counts must be integers");
 }
@@ -141,7 +146,7 @@ async function measure(label, fixture, rootCdp, cdp, scenario, action) {
   const finishLayers = paintTracing ? await beginLayerCapture(cdp) : null;
   if (tracing) {
     if (!paintTracing) { await cdp.send("Profiler.enable"); await cdp.send("Profiler.start"); }
-    await rootCdp.send("Tracing.start", { transferMode: "ReturnAsStream", traceConfig: { recordMode: "recordAsMuchAsPossible", includedCategories: paintTracing ? ["toplevel", "devtools.timeline", "cc", "gpu", "viz", "blink", "blink.user_timing", "disabled-by-default-devtools.timeline"] : ["toplevel", "devtools.timeline", "cc", "gpu", "viz", "blink", "disabled-by-default-devtools.timeline", "disabled-by-default-devtools.timeline.frame"] } });
+    await rootCdp.send("Tracing.start", { transferMode: "ReturnAsStream", traceConfig: { recordMode: "recordAsMuchAsPossible", includedCategories: paintTracing ? [...(scrollDiagnostics ? ["disabled-by-default-cc.debug", "input", "browser", "ui"] : []), "toplevel", "devtools.timeline", "cc", "gpu", "viz", "blink", "blink.user_timing", "disabled-by-default-devtools.timeline"] : ["toplevel", "devtools.timeline", "cc", "gpu", "viz", "blink", "disabled-by-default-devtools.timeline", "disabled-by-default-devtools.timeline.frame"] } });
   }
   const before = await snapshot(rootCdp, cdp);
   if (paintTracing) await cdp.send("Runtime.evaluate", { expression: 'performance.mark("mandara-paint-start"); undefined' });
@@ -176,7 +181,7 @@ let nativeProcess;
 try {
   const fixtures = Object.fromEntries(await Promise.all(versions.map(async version => [version, await provision(version)])));
   if (nativeFocus) {
-    nativeProcess = spawn(binary, ["--headless=new", "--no-sandbox", "--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--remote-debugging-port=0", "--user-data-dir=" + join(output, "browser-profile"), "about:blank"], { stdio: ["ignore", "ignore", "pipe"] });
+    nativeProcess = spawn(binary, [...browserArgs, "--headless=new", "--no-sandbox", "--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--remote-debugging-port=0", "--user-data-dir=" + join(output, "browser-profile"), "about:blank"], { stdio: ["ignore", "ignore", "pipe"] });
     const endpoint = await new Promise((resolve, reject) => {
       let text = "";
       const timer = setTimeout(() => reject(new Error("Chromium debugging endpoint timed out")), 15000);
@@ -190,17 +195,27 @@ try {
     });
     browser = await chromium.connectOverCDP(endpoint, { noDefaults: true });
   } else {
-    browser = await chromium.launch({ executablePath: binary, headless: true, ignoreDefaultArgs: ["--disable-background-timer-throttling", "--disable-backgrounding-occluded-windows", "--disable-renderer-backgrounding"] });
+    browser = await chromium.launch({ executablePath: binary, headless: true, args: browserArgs, ignoreDefaultArgs: ["--disable-background-timer-throttling", "--disable-backgrounding-occluded-windows", "--disable-renderer-backgrounding"] });
   }
   const rootCdp = await browser.newBrowserCDPSession();
   const gpu = (await rootCdp.send("SystemInfo.getInfo")).gpu;
   report.environment.browser = browser.version();
+  report.environment.browserBuild = await rootCdp.send("Browser.getVersion");
   report.protocol.hardwareGpu = gpu.featureStatus?.gpu_compositing === "disabled_software" || /swiftshader|llvmpipe|lavapipe/i.test(gpu.auxAttributes.glRenderer || "") ? false : null;
   report.environment.gpu = { devices: gpu.devices, renderer: gpu.auxAttributes.glRenderer, displayType: gpu.auxAttributes.displayType, featureStatus: gpu.featureStatus };
-  Object.assign(report.protocol, { threadCpu, ticksPerSecond, warmup, scrollDistance, lifecycle: process.env.ENERGY_LIFECYCLE === "1", tracingMode: paintTracing ? "paint-only" : tracing ? "full-with-js-profiler" : "none" });
+  Object.assign(report.protocol, { threadCpu, ticksPerSecond, warmup, scrollDistance, browserArgs, scrollDiagnostics, idleSegments, lifecycle: process.env.ENERGY_LIFECYCLE === "1", tracingMode: paintTracing ? "paint-only" : tracing ? "full-with-js-profiler" : "none" });
   for (let repetition = 0; repetition < repetitions; repetition++) {
+    if (scenarios.has("blank-idle")) {
+      const context = await browser.newContext({ viewport: { width: 1000, height: 800 }, deviceScaleFactor: 1, locale: "zh-CN" });
+      const page = await context.newPage();
+      const cdp = await context.newCDPSession(page);
+      await cdp.send("Performance.enable", { timeDomain: "threadTicks" });
+      await delay(1500);
+      for (let idleSegment = 1; idleSegment <= idleSegments; idleSegment++) await measure({ repetition: repetition + 1, version: "browser", format: "blank", variant: "default", idleSegment }, { requests: () => 0 }, rootCdp, cdp, "blank-idle", async () => { await delay(idleMs); return { visibility: await page.evaluate(() => document.visibilityState) }; });
+      await context.close();
+    }
     for (const version of (repetition % 2 ? [...versions].reverse() : versions)) {
-      for (const format of formats) for (const variant of [...variants.slice(repetition % variants.length), ...variants.slice(0, repetition % variants.length)]) {
+      for (const format of (scenarios.size === 1 && scenarios.has("blank-idle") ? [] : formats)) for (const variant of [...variants.slice(repetition % variants.length), ...variants.slice(0, repetition % variants.length)]) {
         if ((format === "txt" && variant === "no-wheel-handler") || (format === "epub" && ["no-radius", "cached-article"].includes(variant))) continue;
         const fixture = fixtures[version];
         const label = { repetition: repetition + 1, version, format, variant };
@@ -214,6 +229,13 @@ try {
             return Reflect.apply(add, this, [type, ...args]);
           };
         });
+        if (variant === "suppress-scroll-observers") await page.addInitScript(() => {
+          const add = EventTarget.prototype.addEventListener;
+          EventTarget.prototype.addEventListener = function(type, ...args) {
+            if (type === "scroll") { window.__skippedScrollObservers = (window.__skippedScrollObservers || 0) + 1; return; }
+            return Reflect.apply(add, this, [type, ...args]);
+          };
+        });
         page.on("pageerror", error => errors.push({ ...label, message: String(error) }));
         await page.goto(fixture.url + "/share/" + format + "/read");
         await page.locator(format === "epub" ? "iframe.epub-document" : ".epub-content p").first().waitFor();
@@ -223,6 +245,12 @@ try {
         await target.evaluate(() => document.fonts.ready);
         await page.waitForLoadState("networkidle");
         await delay(1500);
+        if (variant === "opaque-scroll-surface") {
+          const background = await page.locator(format === "epub" ? ".reader-body" : ".reader").evaluate(element => getComputedStyle(element).backgroundColor);
+          await target.evaluate(({ epub, background }) => {
+            (epub ? document.documentElement : document.querySelector(".reader-viewport")).style.backgroundColor = background;
+          }, { epub: format === "epub", background });
+        }
         if (variant === "no-progress-animation") await page.addStyleTag({ content: ".progress-fill { transition: none !important; }" });
         if (variant === "hidden-progress") await page.addStyleTag({ content: ".progress-bar { visibility: hidden !important; }" });
         if (variant === "hidden-text") await target.evaluate(epub => { const style = document.createElement("style"); style.textContent = (epub ? "body" : ".epub-content") + " { visibility: hidden !important; }"; document.head.append(style); }, format === "epub");
@@ -233,7 +261,7 @@ try {
         if (variant === "cached-content") await target.evaluate(epub => { const style = document.createElement("style"); style.textContent = (epub ? "body" : ".epub-content") + " { will-change: transform !important; }"; document.head.append(style); }, format === "epub");
         await delay(300);
         report.fixtureGeometry ??= [];
-        report.fixtureGeometry.push({ ...label, geometry: await target.evaluate(epub => { const p = (document.querySelector(".epub-content") || document.body).querySelector("p"); const root = epub ? document.scrollingElement : document.querySelector(".reader-viewport"); const css = getComputedStyle(p); return { skippedWheelHandlers: window.__skippedWheelHandlers || 0, paragraphs: document.querySelectorAll("p").length, scrollHeight: root.scrollHeight, clientHeight: root.clientHeight, fontSize: css.fontSize, lineHeight: css.lineHeight, fontFamily: css.fontFamily }; }, format === "epub") });
+        report.fixtureGeometry.push({ ...label, geometry: await target.evaluate(epub => { const p = (document.querySelector(".epub-content") || document.body).querySelector("p"); const root = epub ? document.scrollingElement : document.querySelector(".reader-viewport"); const css = getComputedStyle(p); return { skippedWheelHandlers: window.__skippedWheelHandlers || 0, skippedScrollObservers: window.__skippedScrollObservers || 0, scrollBackground: getComputedStyle(root).backgroundColor, paragraphs: document.querySelectorAll("p").length, scrollHeight: root.scrollHeight, clientHeight: root.clientHeight, fontSize: css.fontSize, lineHeight: css.lineHeight, fontFamily: css.fontFamily }; }, format === "epub") });
         const cdp = await context.newCDPSession(page);
         await cdp.send("Performance.enable", { timeDomain: "threadTicks" });
         if (warmup) {
@@ -242,7 +270,7 @@ try {
           await target.evaluate(epub => { (epub ? document.scrollingElement : document.querySelector(".reader-viewport")).scrollTop = 0; }, format === "epub");
           await delay(600);
         }
-        await measure(label, fixture, rootCdp, cdp, "idle", async () => { await delay(idleMs); return { visibility: await page.evaluate(() => document.visibilityState) }; });
+        for (let idleSegment = 1; idleSegment <= idleSegments; idleSegment++) await measure({ ...label, idleSegment }, fixture, rootCdp, cdp, "idle", async () => { await delay(idleMs); return page.evaluate(() => ({ visibility: document.visibilityState, animations: document.getAnimations().map(animation => ({ state: animation.playState, name: animation.animationName })), frameAnimations: document.querySelector("iframe.epub-document")?.contentDocument?.getAnimations().length || 0 })); });
         const box = await page.locator(format === "epub" ? "iframe.epub-document" : ".reader-viewport").boundingBox();
         await measure(label, fixture, rootCdp, cdp, "scroll", async () => {
           const x = Math.round(box.x + box.width / 2), y = Math.round(box.y + box.height / 2);

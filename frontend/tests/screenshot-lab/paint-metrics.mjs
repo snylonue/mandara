@@ -1,5 +1,9 @@
 import { readFile, readdir } from "node:fs/promises";
 
+export function measurementKey(row, protocol = {}) {
+  return [row.version, row.format, row.variant, row.scenario, ...(protocol.idleSegments > 1 && row.idleSegment ? ["segment-" + row.idleSegment] : [])].join("/");
+}
+
 export function parseThreadStat(text) {
   const end = text.lastIndexOf(")");
   const fields = text.slice(end + 2).trim().split(/\s+/);

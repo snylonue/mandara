@@ -155,6 +155,8 @@ current frontend. `ENERGY_VARIANTS` selects comma-separated diagnostic controls:
 | `no-page-glow` | Remove only the outer document background image |
 | `cached-content` | Hint a separate layer for EPUB body or TXT text, excluding the TXT article background |
 | `cached-article` | TXT only: hint a layer including both article text and background |
+| `suppress-scroll-observers` | Preserve native scrolling; skip scroll listener registration before application initialization |
+| `opaque-scroll-surface` | Give the actual scrolling surface its existing backing color without transforms or layer hints |
 
 Variant order rotates across repetitions. Hidden content and removed wheel listeners
 are causal controls, not proposed product behavior. In particular, removing the wheel
@@ -210,6 +212,24 @@ remain explicit. `ENERGY_SCREENSHOTS=1` saves a screenshot after the timed scrol
 use separate visual checks rather than including capture work in CPU comparisons.
 Layer hints are diagnostic only: they can change containing blocks, text rendering,
 and resource retention in arbitrary publications.
+
+For causal scroll-policy checks, `ENERGY_PREFER_COMPOSITING=1` launches Chromium
+with `--enable-prefer-compositing-to-lcd-text`. This is a browser-policy
+counterfactual, not a product optimization. The exact browser build and requested
+flags are recorded. `ENERGY_SCROLL_DIAGNOSTICS=1` adds native CC debug, input,
+browser and UI trace categories; its CPU overhead must not be treated as a clean
+measurement. Suppressed-observer counts and actual scroll background are recorded.
+The opaque-surface probe can override publication backgrounds and must not be
+shipped unchanged; publisher background propagation requires separate validation.
+
+Add `blank-idle` to `ENERGY_SCENARIOS` for a fresh empty-context control before each
+repetition. `ENERGY_IDLE_SEGMENTS=4 ENERGY_IDLE_MS=5000` separates consecutive idle
+windows instead of extrapolating a startup/scroll tail into a steady cost. Segment
+identities remain separate in analysis. Segmentation is rejected with tracing,
+preventing trace artifacts from being overwritten. Idle trace records also report
+active page/frame animations. Browser frame-clock work is not automatically proof
+of an application timer, and unmeasured user-action frequencies must not be invented
+to convert these budgets into battery-life estimates.
 
 Implementation references: [CDP LayerTree](https://raw.githubusercontent.com/ChromeDevTools/devtools-protocol/master/pdl/domains/LayerTree.pdl),
 [Chromium picture replay](https://raw.githubusercontent.com/chromium/chromium/main/third_party/blink/renderer/platform/graphics/picture_snapshot.cc),

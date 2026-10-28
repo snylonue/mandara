@@ -1,7 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseThreadStat, diffThreadSnapshots, partitionCpuIntervals, normalizeTraceEvents } from "./paint-metrics.mjs";
+import { parseThreadStat, diffThreadSnapshots, partitionCpuIntervals, normalizeTraceEvents, measurementKey } from "./paint-metrics.mjs";
 const event = (name, tts, tdur, ts = tts, dur = tdur) => ({ ph: "X", pid: 1, tid: 2, name, tts, tdur, ts, dur });
+
+test("ordinary measurement keys retain the existing grouping", () => {
+  assert.equal(measurementKey({ version: "after", format: "txt", variant: "default", scenario: "idle", idleSegment: 1 }, { idleSegments: 1 }), "after/txt/default/idle");
+});
+test("segmented idle keys do not mix warm-up tails with steady intervals", () => {
+  const row = { version: "after", format: "epub", variant: "default", scenario: "idle", idleSegment: 3 };
+  assert.equal(measurementKey(row, { idleSegments: 4 }), "after/epub/default/idle/segment-3");
+});
 
 test("Linux task stat handles spaces and parentheses in task names", () => {
   const fields = Array(20).fill("0"); fields[0] = "R"; fields[11] = "120"; fields[12] = "30"; fields[19] = "500";
