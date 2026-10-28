@@ -1,4 +1,6 @@
 import { chromium } from "playwright";
+import { readThreadSnapshot, diffThreadSnapshots, readBrowserLifecycle } from "./paint-metrics.mjs";
+import { beginLayerCapture } from "./paint-capture.mjs";
 import { build } from "../../node_modules/vite/dist/node/index.js";
 import { createServer } from "node:http";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
@@ -23,16 +25,21 @@ if (!binary) throw new Error("Set CHROMIUM_EXECUTABLE to a Nix-provided Chromium
 const nativeFocus = process.env.ENERGY_NATIVE_FOCUS === "1";
 const variants = (process.env.ENERGY_VARIANTS || "default").split(",");
 const versions = (process.env.ENERGY_VERSIONS || "before,after").split(",");
-const tracing = process.env.ENERGY_TRACE === "1";
-if (variants.some(v => !["default", "no-progress-animation", "hidden-progress", "hidden-text", "no-wheel-handler"].includes(v)) || versions.some(v => !["before", "after"].includes(v))) throw new Error("Unknown diagnostic variant or version");
+const paintTracing = process.env.ENERGY_PAINT_TRACE === "1";
+const tracing = process.env.ENERGY_TRACE === "1" || paintTracing;
+const threadCpu = process.env.ENERGY_THREAD_CPU === "1";
+const ticksPerSecond = threadCpu || process.env.ENERGY_LIFECYCLE === "1" ? Number(execFileSync("getconf", ["CLK_TCK"], { encoding: "utf8" }).trim()) : null;
+const warmup = process.env.ENERGY_WARMUP === "1";
+if (variants.some(v => !["default", "no-progress-animation", "hidden-progress", "hidden-text", "no-wheel-handler", "transparent-text", "no-radius", "cached-content", "no-page-glow", "cached-article"].includes(v)) || versions.some(v => !["before", "after"].includes(v))) throw new Error("Unknown diagnostic variant or version");
 const repetitions = Number(process.env.ENERGY_REPETITIONS || 3);
 const idleMs = Number(process.env.ENERGY_IDLE_MS || 15000);
 const scrollMs = Number(process.env.ENERGY_SCROLL_MS || 6000);
+const scrollDistance = Number(process.env.ENERGY_SCROLL_PX || 3600);
 const selectionSteps = Number(process.env.ENERGY_SELECTION_STEPS || 40);
 const settingsSteps = Number(process.env.ENERGY_SETTINGS_STEPS || 12);
 const formats = (process.env.ENERGY_FORMATS || "epub,txt").split(",");
 const scenarios = new Set((process.env.ENERGY_SCENARIOS || "idle,scroll,selection,settings,background-idle").split(","));
-for (const value of [repetitions, idleMs, scrollMs, selectionSteps, settingsSteps]) {
+for (const value of [repetitions, idleMs, scrollMs, scrollDistance, selectionSteps, settingsSteps]) {
   if (!Number.isFinite(value) || value <= 0) throw new Error("Workload sizes must be positive finite numbers");
 }
 if (formats.some(format => !["epub", "txt"].includes(format)) || [...scenarios].some(scenario => !["idle", "scroll", "selection", "settings", "background-idle"].includes(scenario))) throw new Error("Unknown format or scenario");
@@ -97,14 +104,15 @@ async function capabilities() {
   catch (error) { energy = { path: rapl, readable: false, error: error.code }; }
   return { os: release(), cpu: cpus()[0].model, logicalCpus: cpus().length, memoryBytes: totalmem(), loadAverage: loadavg(), perfEventParanoid: (await readFile("/proc/sys/kernel/perf_event_paranoid", "utf8")).trim(), energy };
 }
-const report = { status: "running", timestamp: new Date().toISOString(), baseline, current, environment: await capabilities(), protocol: { production: true, headless: true, nativeFocus, hardwareGpu: false, viewport: { width: 1000, height: 800, deviceScaleFactor: 1 }, variants, versions, tracing, repetitions, idleMs, scrollMs, selectionSteps, settingsSteps, formats, scenarios: [...scenarios], paragraphs, chapterCount, measurement: "CDP Performance threadTicks; total browser-process cpuTime; no sampling trace during measurements", powerMeasurement: "Unavailable when RAPL is unreadable; CPU milliseconds are not joules", background: "Only report background measurements when document.visibilityState actually becomes hidden", scope: "Synthetic public Reader with fixture API, no real backend, user data, persistence, or screenshot rasterization" }, records, skipped, errors };
+const report = { status: "running", timestamp: new Date().toISOString(), baseline, current, environment: await capabilities(), protocol: { production: true, headless: true, nativeFocus, hardwareGpu: null, viewport: { width: 1000, height: 800, deviceScaleFactor: 1 }, variants, versions, tracing, repetitions, idleMs, scrollMs, selectionSteps, settingsSteps, formats, scenarios: [...scenarios], paragraphs, chapterCount, measurement: tracing ? "Instrumented attribution run; not a clean CPU comparison" : "CDP Performance threadTicks; total browser-process cpuTime; no sampling trace during measurements", powerMeasurement: "Unavailable when RAPL is unreadable; CPU milliseconds are not joules", background: "Only report background measurements when document.visibilityState actually becomes hidden", scope: "Synthetic public Reader with fixture API, no real backend, user data, persistence, or screenshot rasterization" }, records, skipped, errors };
 
 async function snapshot(rootCdp, pageCdp) {
   const metrics = Object.fromEntries((await pageCdp.send("Performance.getMetrics")).metrics.map(m => [m.name, m.value]));
   const processes = (await rootCdp.send("SystemInfo.getProcessInfo")).processInfo;
   const energyMicrojoules = report.environment.energy.readable
     ? Number(await readFile(report.environment.energy.path, "utf8")) : null;
-  return { metrics, processes, energyMicrojoules, clock: performance.now() };
+  const threads = threadCpu ? await readThreadSnapshot(processes, ticksPerSecond) : null;
+  return { metrics, processes, threads, energyMicrojoules, clock: performance.now() };
 }
 function difference(before, after) {
   const result = { wallMs: after.clock - before.clock, mainTaskCpuMs: 1000 * (after.metrics.TaskDuration - before.metrics.TaskDuration), scriptCpuMs: 1000 * (after.metrics.ScriptDuration - before.metrics.ScriptDuration), layoutCpuMs: 1000 * (after.metrics.LayoutDuration - before.metrics.LayoutDuration), styleCpuMs: 1000 * (after.metrics.RecalcStyleDuration - before.metrics.RecalcStyleDuration), layouts: after.metrics.LayoutCount - before.metrics.LayoutCount, styleRecalculations: after.metrics.RecalcStyleCount - before.metrics.RecalcStyleCount, heapEndBytes: after.metrics.JSHeapUsedSize, heapDeltaBytes: after.metrics.JSHeapUsedSize - before.metrics.JSHeapUsedSize, browserCpuMs: 0, cpuByProcessTypeMs: {}, processChurn: [] };
@@ -119,6 +127,7 @@ function difference(before, after) {
   }
   for (const p of old.values()) result.processChurn.push(p.id);
   result.browserCpuValid = result.processChurn.length === 0;
+  if (threadCpu) result.threadCpu = diffThreadSnapshots(before.threads, after.threads, ticksPerSecond);
   if (before.energyMicrojoules !== null && after.energyMicrojoules !== null) {
     const range = report.environment.energy.maxEnergyRangeMicrojoules;
     result.packageEnergyJ = ((after.energyMicrojoules - before.energyMicrojoules + range) % range) / 1e6;
@@ -129,18 +138,23 @@ function difference(before, after) {
 async function measure(label, fixture, rootCdp, cdp, scenario, action) {
   if (!scenarios.has(scenario)) return;
   const apiBefore = fixture.requests();
+  const finishLayers = paintTracing ? await beginLayerCapture(cdp) : null;
   if (tracing) {
-    await cdp.send("Profiler.enable");
-    await cdp.send("Profiler.start");
-    await rootCdp.send("Tracing.start", { transferMode: "ReturnAsStream", traceConfig: { recordMode: "recordAsMuchAsPossible", includedCategories: ["toplevel", "devtools.timeline", "cc", "gpu", "viz", "blink", "disabled-by-default-devtools.timeline", "disabled-by-default-devtools.timeline.frame"] } });
+    if (!paintTracing) { await cdp.send("Profiler.enable"); await cdp.send("Profiler.start"); }
+    await rootCdp.send("Tracing.start", { transferMode: "ReturnAsStream", traceConfig: { recordMode: "recordAsMuchAsPossible", includedCategories: paintTracing ? ["toplevel", "devtools.timeline", "cc", "gpu", "viz", "blink", "blink.user_timing", "disabled-by-default-devtools.timeline"] : ["toplevel", "devtools.timeline", "cc", "gpu", "viz", "blink", "disabled-by-default-devtools.timeline", "disabled-by-default-devtools.timeline.frame"] } });
   }
   const before = await snapshot(rootCdp, cdp);
+  if (paintTracing) await cdp.send("Runtime.evaluate", { expression: 'performance.mark("mandara-paint-start"); undefined' });
   const detail = await action();
+  if (paintTracing) await cdp.send("Runtime.evaluate", { expression: 'performance.mark("mandara-paint-end"); undefined' });
   const after = await snapshot(rootCdp, cdp);
+  const browserLifecycle = process.env.ENERGY_LIFECYCLE === "1" ? await readBrowserLifecycle(after.processes.find(process => process.type === "browser").id, ticksPerSecond) : undefined;
   if (tracing) {
     const prefix = [label.repetition, label.version, label.format, label.variant, scenario].join("-");
-    const profile = await cdp.send("Profiler.stop");
-    await writeFile(join(output, prefix + ".cpuprofile"), JSON.stringify(profile.profile));
+    if (!paintTracing) {
+      const profile = await cdp.send("Profiler.stop");
+      await writeFile(join(output, prefix + ".cpuprofile"), JSON.stringify(profile.profile));
+    }
     const completed = new Promise(resolve => rootCdp.once("Tracing.tracingComplete", resolve));
     await rootCdp.send("Tracing.end");
     const { stream, dataLossOccurred } = await completed;
@@ -149,8 +163,9 @@ async function measure(label, fixture, rootCdp, cdp, scenario, action) {
     for (;;) { const chunk = await rootCdp.send("IO.read", { handle: stream }); content += chunk.base64Encoded ? Buffer.from(chunk.data, "base64").toString("utf8") : chunk.data; if (chunk.eof) break; }
     await rootCdp.send("IO.close", { handle: stream });
     await writeFile(join(output, prefix + ".trace.json"), content);
+    if (finishLayers) await finishLayers(output, prefix, process.env.ENERGY_PAINT_COMMANDS === "1");
   }
-  const record = { ...label, scenario, ...difference(before, after), apiRequests: fixture.requests() - apiBefore, detail };
+  const record = { ...label, scenario, ...difference(before, after), browserLifecycle, apiRequests: fixture.requests() - apiBefore, detail };
   records.push(record);
   await writeFile(join(output, "results.json"), JSON.stringify(report, null, 2));
   console.log(JSON.stringify(record));
@@ -159,7 +174,7 @@ async function measure(label, fixture, rootCdp, cdp, scenario, action) {
 let browser;
 let nativeProcess;
 try {
-  const fixtures = { before: await provision("before"), after: await provision("after") };
+  const fixtures = Object.fromEntries(await Promise.all(versions.map(async version => [version, await provision(version)])));
   if (nativeFocus) {
     nativeProcess = spawn(binary, ["--headless=new", "--no-sandbox", "--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--remote-debugging-port=0", "--user-data-dir=" + join(output, "browser-profile"), "about:blank"], { stdio: ["ignore", "ignore", "pipe"] });
     const endpoint = await new Promise((resolve, reject) => {
@@ -180,11 +195,13 @@ try {
   const rootCdp = await browser.newBrowserCDPSession();
   const gpu = (await rootCdp.send("SystemInfo.getInfo")).gpu;
   report.environment.browser = browser.version();
-  report.environment.gpu = { devices: gpu.devices, renderer: gpu.auxAttributes.glRenderer, displayType: gpu.auxAttributes.displayType };
+  report.protocol.hardwareGpu = gpu.featureStatus?.gpu_compositing === "disabled_software" || /swiftshader|llvmpipe|lavapipe/i.test(gpu.auxAttributes.glRenderer || "") ? false : null;
+  report.environment.gpu = { devices: gpu.devices, renderer: gpu.auxAttributes.glRenderer, displayType: gpu.auxAttributes.displayType, featureStatus: gpu.featureStatus };
+  Object.assign(report.protocol, { threadCpu, ticksPerSecond, warmup, scrollDistance, lifecycle: process.env.ENERGY_LIFECYCLE === "1", tracingMode: paintTracing ? "paint-only" : tracing ? "full-with-js-profiler" : "none" });
   for (let repetition = 0; repetition < repetitions; repetition++) {
     for (const version of (repetition % 2 ? [...versions].reverse() : versions)) {
       for (const format of formats) for (const variant of [...variants.slice(repetition % variants.length), ...variants.slice(0, repetition % variants.length)]) {
-        if (format === "txt" && variant === "no-wheel-handler") continue;
+        if ((format === "txt" && variant === "no-wheel-handler") || (format === "epub" && ["no-radius", "cached-article"].includes(variant))) continue;
         const fixture = fixtures[version];
         const label = { repetition: repetition + 1, version, format, variant };
         const context = nativeFocus ? browser.contexts()[0] : await browser.newContext({ viewport: { width: 1000, height: 800 }, deviceScaleFactor: 1, locale: "zh-CN" });
@@ -209,19 +226,31 @@ try {
         if (variant === "no-progress-animation") await page.addStyleTag({ content: ".progress-fill { transition: none !important; }" });
         if (variant === "hidden-progress") await page.addStyleTag({ content: ".progress-bar { visibility: hidden !important; }" });
         if (variant === "hidden-text") await target.evaluate(epub => { const style = document.createElement("style"); style.textContent = (epub ? "body" : ".epub-content") + " { visibility: hidden !important; }"; document.head.append(style); }, format === "epub");
+        if (variant === "transparent-text") await target.evaluate(epub => { const style = document.createElement("style"); style.textContent = (epub ? "body p" : ".epub-content p") + " { color: transparent !important; text-shadow: none !important; }"; document.head.append(style); }, format === "epub");
+        if (variant === "no-page-glow") await page.addStyleTag({ content: "body { background-image: none !important; }" });
+        if (variant === "cached-article") await page.addStyleTag({ content: ".reader-body { will-change: transform !important; }" });
+        if (variant === "no-radius") await page.addStyleTag({ content: ".reader-body { border-radius: 0 !important; }" });
+        if (variant === "cached-content") await target.evaluate(epub => { const style = document.createElement("style"); style.textContent = (epub ? "body" : ".epub-content") + " { will-change: transform !important; }"; document.head.append(style); }, format === "epub");
         await delay(300);
         report.fixtureGeometry ??= [];
         report.fixtureGeometry.push({ ...label, geometry: await target.evaluate(epub => { const p = (document.querySelector(".epub-content") || document.body).querySelector("p"); const root = epub ? document.scrollingElement : document.querySelector(".reader-viewport"); const css = getComputedStyle(p); return { skippedWheelHandlers: window.__skippedWheelHandlers || 0, paragraphs: document.querySelectorAll("p").length, scrollHeight: root.scrollHeight, clientHeight: root.clientHeight, fontSize: css.fontSize, lineHeight: css.lineHeight, fontFamily: css.fontFamily }; }, format === "epub") });
         const cdp = await context.newCDPSession(page);
         await cdp.send("Performance.enable", { timeDomain: "threadTicks" });
+        if (warmup) {
+          const box = await page.locator(format === "epub" ? "iframe.epub-document" : ".reader-viewport").boundingBox();
+          await cdp.send("Input.synthesizeScrollGesture", { x: Math.round(box.x + box.width / 2), y: Math.round(box.y + box.height / 2), yDistance: -600, speed: 1200, gestureSourceType: "mouse", preventFling: true });
+          await target.evaluate(epub => { (epub ? document.scrollingElement : document.querySelector(".reader-viewport")).scrollTop = 0; }, format === "epub");
+          await delay(600);
+        }
         await measure(label, fixture, rootCdp, cdp, "idle", async () => { await delay(idleMs); return { visibility: await page.evaluate(() => document.visibilityState) }; });
         const box = await page.locator(format === "epub" ? "iframe.epub-document" : ".reader-viewport").boundingBox();
         await measure(label, fixture, rootCdp, cdp, "scroll", async () => {
           const x = Math.round(box.x + box.width / 2), y = Math.round(box.y + box.height / 2);
-          await cdp.send("Input.synthesizeScrollGesture", { x, y, yDistance: -3600, speed: 3600000 / scrollMs, gestureSourceType: "mouse", preventFling: true });
+          await cdp.send("Input.synthesizeScrollGesture", { x, y, yDistance: -scrollDistance, speed: scrollDistance * 1000 / scrollMs, gestureSourceType: "mouse", preventFling: true });
           await delay(400);
           return target.evaluate(epub => ({ scrollTop: epub ? document.scrollingElement.scrollTop : document.querySelector(".reader-viewport").scrollTop }), format === "epub");
         });
+        if (process.env.ENERGY_SCREENSHOTS === "1") await page.screenshot({ path: join(output, [label.repetition, label.version, label.format, label.variant].join("-") + ".png"), animations: "disabled" });
         await target.evaluate(epub => { (epub ? document.scrollingElement : document.querySelector(".reader-viewport")).scrollTop = 0; }, format === "epub");
         await delay(500);
         await measure(label, fixture, rootCdp, cdp, "selection", () => target.evaluate(async steps => {

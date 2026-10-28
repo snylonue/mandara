@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "test": "node run.mjs",
+    "test:paint": "node --test paint-metrics.test.mjs",
     "typecheck": "node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {

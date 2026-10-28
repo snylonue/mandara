@@ -150,6 +150,11 @@ current frontend. `ENERGY_VARIANTS` selects comma-separated diagnostic controls:
 | `hidden-progress` | Preserve track geometry and progress callbacks; omit its painting |
 | `hidden-text` | Preserve layout and scrolling but omit chapter-content painting |
 | `no-wheel-handler` | EPUB only: omit its native wheel listener before initialization |
+| `transparent-text` | Keep paragraph geometry and backgrounds; omit visible glyph color |
+| `no-radius` | TXT only: remove the article corner radius |
+| `no-page-glow` | Remove only the outer document background image |
+| `cached-content` | Hint a separate layer for EPUB body or TXT text, excluding the TXT article background |
+| `cached-article` | TXT only: hint a layer including both article text and background |
 
 Variant order rotates across repetitions. Hidden content and removed wheel listeners
 are causal controls, not proposed product behavior. In particular, removing the wheel
@@ -163,11 +168,59 @@ are thread CPU time. Nested trace durations must not be blindly summed. These ru
 include tracing/profiling overhead and must be kept separate from uninstrumented CPU
 comparisons. The regular mode does not start a profiler or tracing session.
 
+For finer paint attribution on Linux:
+
+```sh
+ENERGY_VERSIONS=after ENERGY_SCENARIOS=scroll ENERGY_THREAD_CPU=1 ENERGY_WARMUP=1 node energy.mjs
+ENERGY_VERSIONS=after ENERGY_SCENARIOS=scroll ENERGY_THREAD_CPU=1 ENERGY_WARMUP=1 ENERGY_PAINT_TRACE=1 ENERGY_PAINT_COMMANDS=1 node energy.mjs
+node paint-analysis.mjs /path/to/one/result-directory
+npm run test:paint
+```
+
+Keep these runs sequential and use distinct artifact directories. The first run has
+no trace or sampling profiler. OS snapshots read only this browser's tracked tasks,
+at the two endpoints, using the actual `getconf CLK_TCK` frequency. They include
+thread-start identity, task churn, read failures, endpoint read duration, and an
+independent comparison against CDP process CPU. A task named `chromium` can still
+be a renderer main thread; its task id equals its process id.
+
+`ENERGY_PAINT_TRACE=1` records paint-only traces without a JavaScript sampling
+profiler. User Timing marks bound the active interval. The analyzer normalizes
+synchronous B/E scopes and partitions X scopes on each thread's CPU clock
+(`tts`/`tdur`), assigning overlapping/nested CPU only once. It reports missing
+CPU clocks, incomplete scopes, excluded boundary scopes, and coverage against the
+OS thread budget. Unknown time is never replaced with wall duration. Trace-enabled
+CPU is not interchangeable with the clean run, even without a JS profiler.
+
+Layer metadata connects raster task layer ids to DOM owners, dimensions, scrolling
+rectangles, compositing reasons, and standalone paint commands. Optional
+`ENERGY_PAINT_COMMANDS=1` snapshots and profiles layers **after** the measured
+interval. Replay timings are isolated software-bitmap wall time, not live frame CPU;
+profiles cannot simply be multiplied by frame count. Large-layer replay is skipped
+above a 48 MB bitmap guard because Chromium applies the clip after full allocation.
+
+`ENERGY_SCROLL_PX` changes scroll distance (default 3600); keep speed constant by
+adjusting `ENERGY_SCROLL_MS`. `ENERGY_WARMUP=1` scrolls 600 px and restores the
+position before measuring. To check work shifted outside a warm scroll window,
+`ENERGY_LIFECYCLE=1` records cumulative browser-tree CPU from process startup,
+including reaped-child CPU, plus endpoint PSS from `smaps_rollup`. Use a **fresh
+runner/browser per format and variant**, disable warm-up, and include a longer
+scroll. Endpoint PSS is neither peak memory nor physical GPU allocation. Read errors
+remain explicit. `ENERGY_SCREENSHOTS=1` saves a screenshot after the timed scroll;
+use separate visual checks rather than including capture work in CPU comparisons.
+Layer hints are diagnostic only: they can change containing blocks, text rendering,
+and resource retention in arbitrary publications.
+
+Implementation references: [CDP LayerTree](https://raw.githubusercontent.com/ChromeDevTools/devtools-protocol/master/pdl/domains/LayerTree.pdl),
+[Chromium picture replay](https://raw.githubusercontent.com/chromium/chromium/main/third_party/blink/renderer/platform/graphics/picture_snapshot.cc),
+and [display-list raster playback](https://raw.githubusercontent.com/chromium/chromium/main/cc/paint/display_item_list.cc).
+
 Results include every sample, alternating A/B order, fixture geometry, CPU/process metadata,
 API request counts, and skipped/failed capabilities. Idle periods do not poll the page or run
 an animation-frame sampler. Selection changes use real DOM selections, not fabricated
 selection events; scrolling uses Chromium input gestures. Screenshot rasterization,
-progress persistence, cold loading, and physical mobile devices are outside this workload.
+progress persistence, and physical mobile devices are outside the default workload.
+Cold work is included only in the optional cumulative lifecycle check.
 
 Duration metrics use CDP `threadTicks` (thread running time); process totals use
 `SystemInfo.getProcessInfo` CPU seconds across the browser's processes. The latter has
