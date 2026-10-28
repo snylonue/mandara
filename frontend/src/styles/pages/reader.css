@@ -332,7 +332,6 @@ body:has(.app-reader),
 .progress-fill {
   width: 100%;
   transform-origin: left;
-  transition: transform 0.1s linear;
 }
 
 /* Reading column — theme / font / width come from the settings panel
