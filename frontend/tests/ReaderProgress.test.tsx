@@ -112,6 +112,26 @@ it("flushes the previous chapter before resetting navigation progress", async ()
   expect(onProgress).toHaveBeenCalledTimes(2);
 });
 
+it("keeps visual updates pending when persistence callbacks change", async () => {
+  const previous = vi.fn();
+  const next = vi.fn();
+  const view = await reader(false, previous);
+  vi.useFakeTimers();
+  view.scroll(0.6);
+  view.rerender(<Reader title="测试书籍"
+    chapters={[{ idx: 0, title: "第一章", linear: true }, { idx: 1, title: "第二章", linear: true }]}
+    loadChapter={async idx => ({ idx, title: "第一章", content: "<p>纯文本正文</p>" })} onProgress={next} />);
+  expect(previous.mock.calls).toEqual([[0.6, 0]]);
+  act(() => vi.advanceTimersByTime(100));
+  expect(view.container.querySelector(".reader-topbar-progress")!.textContent).toBe("30%");
+  view.scroll(0.72);
+  act(() => vi.advanceTimersByTime(600));
+  expect(next.mock.calls).toEqual([[0.72, 0]]);
+  view.unmount();
+  expect(previous).toHaveBeenCalledTimes(1);
+  expect(next).toHaveBeenCalledTimes(1);
+});
+
 it("does not let a pending scroll overwrite a same-chapter restart", async () => {
   const onProgress = vi.fn();
   const view = await reader(false, onProgress);

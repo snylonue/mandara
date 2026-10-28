@@ -209,10 +209,8 @@ export function Reader({
     window.clearTimeout(debounceRef.current);
     debounceRef.current = window.setTimeout(flushProgress, 600);
   }, [progressStore, idx, onProgress, readOnly, flushProgress]);
-  useEffect(() => () => {
-    progressStore.cancel();
-    flushProgress();
-  }, [progressStore, flushProgress]);
+  useEffect(() => () => progressStore.cancel(), [progressStore]);
+  useEffect(() => flushProgress, [flushProgress]);
 
   const goto = useCallback(
     (next: number, frag?: string) => {
