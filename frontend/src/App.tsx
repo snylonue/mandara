@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, NavLink, Navigate, Route, Routes, useMatch } from "react-router-dom";
 import { useAuth } from "./auth";
@@ -10,13 +10,15 @@ import {
   LogoMark,
 } from "./components/icons";
 import { ToastProvider } from "./components/toast";
-import { BookDetailPage } from "./pages/BookDetailPage";
-import { LibraryPage } from "./pages/LibraryPage";
-import { LoginPage, RegisterPage } from "./pages/AuthPages";
-import { PluginsPage } from "./pages/PluginsPage";
-import { SeriesPage } from "./pages/SeriesPage";
-import { ReaderPage } from "./pages/ReaderPage";
-import { SharePage } from "./pages/SharePage";
+
+const BookDetailPage = lazy(() => import("./pages/BookDetailPage").then(module => ({ default: module.BookDetailPage })));
+const LibraryPage = lazy(() => import("./pages/LibraryPage").then(module => ({ default: module.LibraryPage })));
+const LoginPage = lazy(() => import("./pages/AuthPages").then(module => ({ default: module.LoginPage })));
+const RegisterPage = lazy(() => import("./pages/AuthPages").then(module => ({ default: module.RegisterPage })));
+const PluginsPage = lazy(() => import("./pages/PluginsPage").then(module => ({ default: module.PluginsPage })));
+const SeriesPage = lazy(() => import("./pages/SeriesPage").then(module => ({ default: module.SeriesPage })));
+const ReaderPage = lazy(() => import("./pages/ReaderPage").then(module => ({ default: module.ReaderPage })));
+const SharePage = lazy(() => import("./pages/SharePage").then(module => ({ default: module.SharePage })));
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { health, user, resolved } = useAuth();
@@ -137,53 +139,55 @@ export default function App() {
             </div>
           </header>
           <main className="content">
-            <Routes>
-              <Route path="/login" element={<LoginPage />} />
-              <Route path="/register" element={<RegisterPage />} />
-              <Route
-                path="/"
-                element={
-                  <RequireAuth>
-                    <LibraryPage />
-                  </RequireAuth>
-                }
-              />
-              <Route
-                path="/book/:id"
-                element={
-                  <RequireAuth>
-                    <BookDetailPage />
-                  </RequireAuth>
-                }
-              />
-              <Route
-                path="/series/:id"
-                element={
-                  <RequireAuth>
-                    <SeriesPage />
-                  </RequireAuth>
-                }
-              />
-              <Route
-                path="/read/:id"
-                element={
-                  <RequireAuth>
-                    <ReaderPage />
-                  </RequireAuth>
-                }
-              />
-              <Route
-                path="/plugins"
-                element={
-                  <RequireAuth>
-                    <PluginsPage />
-                  </RequireAuth>
-                }
-              />
-              <Route path="/share/:token" element={<SharePage />} />
-              <Route path="/share/:token/read" element={<SharePage />} />
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
+            <Suspense fallback={<div className="page-loading">{t("common.loading")}</div>}>
+              <Routes>
+                <Route path="/login" element={<LoginPage />} />
+                <Route path="/register" element={<RegisterPage />} />
+                <Route
+                  path="/"
+                  element={
+                    <RequireAuth>
+                      <LibraryPage />
+                    </RequireAuth>
+                  }
+                />
+                <Route
+                  path="/book/:id"
+                  element={
+                    <RequireAuth>
+                      <BookDetailPage />
+                    </RequireAuth>
+                  }
+                />
+                <Route
+                  path="/series/:id"
+                  element={
+                    <RequireAuth>
+                      <SeriesPage />
+                    </RequireAuth>
+                  }
+                />
+                <Route
+                  path="/read/:id"
+                  element={
+                    <RequireAuth>
+                      <ReaderPage />
+                    </RequireAuth>
+                  }
+                />
+                <Route
+                  path="/plugins"
+                  element={
+                    <RequireAuth>
+                      <PluginsPage />
+                    </RequireAuth>
+                  }
+                />
+                <Route path="/share/:token" element={<SharePage />} />
+                <Route path="/share/:token/read" element={<SharePage />} />
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+            </Suspense>
           </main>
         </div>
       </ReadingSessionsProvider>

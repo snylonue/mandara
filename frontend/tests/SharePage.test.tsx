@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { api, ApiError } from "../src/api";
 import App from "../src/App";
@@ -20,6 +20,8 @@ const view: ShareView = {
 };
 let sharedBook: ShareBookResponse;
 let sharedView: ShareView;
+// Keep content assertions independent of cold Vite transforms; AppRoutes covers lazy loading.
+beforeAll(async () => { await import("../src/pages/SharePage"); });
 beforeEach(() => {
   vi.resetAllMocks();
   sharedBook = book;
