@@ -13,6 +13,7 @@ import {
 } from "./ReaderSettings";
 import type { Chapter, ChapterMeta, Position, TocNode } from "../types";
 import { ApiError } from "../api";
+import { ChapterCache } from "../chapterCache";
 import { createReaderProgress, type ReaderProgressStore } from "../readerProgress";
 
 // Keep native selections intact when reader controls or scroll progress rerender.
@@ -76,7 +77,7 @@ export function Reader({
   const initialFraction = initialPosition?.in_chapter && "fraction" in initialPosition.in_chapter
     ? initialPosition.in_chapter.fraction : 0;
   const [progressStore] = useState(() => createReaderProgress(initialFraction));
-  const loadedRef = useRef<Map<number, Chapter>>(new Map());
+  const [chapterCache] = useState(() => new ChapterCache());
   const pendingFragRef = useRef<string | null>(null);
   const epubRef = useRef<EpubDocumentHandle>(null);
   const articleRef = useRef<HTMLElement>(null);
@@ -141,7 +142,7 @@ export function Reader({
 
   // Load chapter content (cached), and restore scroll by fraction once.
   useEffect(() => {
-    const cached = loadedRef.current.get(idx);
+    const cached = chapterCache.get(idx);
     const frag = pendingFragRef.current;
     pendingFragRef.current = null;
     let cancelled = false;
@@ -162,10 +163,7 @@ export function Reader({
     else {
       setLoading(true);
       const load = loadAttempt > 0 && retryChapter ? retryChapter : loadChapter;
-      void load(idx).then((c) => {
-        loadedRef.current.set(idx, c);
-        display(c);
-      }).catch((error: unknown) => {
+      void chapterCache.load(idx, load).then(display).catch((error: unknown) => {
         if (cancelled) return;
         setLoading(false);
         setLoadError(error instanceof ApiError && error.status === 404

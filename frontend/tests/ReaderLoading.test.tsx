@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { Reader } from "../src/components/Reader";
 import type { Chapter } from "../src/types";
 import { ApiError } from "../src/api";
+import { StrictMode } from "react";
 
 const chapters = [
   { idx: 0, title: "第一章", linear: true },
@@ -123,6 +124,30 @@ it("allows read-only chapter navigation without saving progress", async () => {
   expect(load.mock.calls).toEqual([[0], [1]]);
   unmount();
   expect(onProgress).not.toHaveBeenCalled();
+});
+
+it("shares the initial chapter request across StrictMode effect replays", async () => {
+  const load = vi.fn(async () => first);
+  render(<StrictMode><Reader title="测试书籍" chapters={chapters} loadChapter={load} /></StrictMode>);
+  await screen.findByText("缓存正文");
+  expect(load.mock.calls).toEqual([[0]]);
+});
+
+it("reuses the pending chapter request after navigating away and back", async () => {
+  let complete!: (chapter: Chapter) => void;
+  const pending = new Promise<Chapter>(resolve => { complete = resolve; });
+  const load = vi.fn<(idx: number) => Promise<Chapter>>()
+    .mockReturnValueOnce(pending)
+    .mockResolvedValueOnce(second);
+  render(<Reader title="测试书籍" chapters={chapters} loadChapter={load} />);
+  await waitFor(() => expect(load).toHaveBeenCalledWith(0));
+  fireEvent.click(screen.getByRole("button", { name: /下一章/ }));
+  await screen.findByText("下一章正文");
+  fireEvent.click(screen.getByRole("button", { name: /上一章/ }));
+  expect(screen.queryByText("下一章正文")).toBeNull();
+  await act(async () => complete(first));
+  await screen.findByText("缓存正文");
+  expect(load.mock.calls).toEqual([[0], [1]]);
 });
 
 it("keeps successful chapter content cached across navigation", async () => {
