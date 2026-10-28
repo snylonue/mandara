@@ -89,60 +89,67 @@ export function EpubDocument({ content, title, settings, onFraction, onReady, on
     },
   }));
 
-  function applySettings() {
+  function initializeDocument() {
     const doc = frame.current?.contentDocument;
-    const host = frame.current?.parentElement;
-    if (!doc || !host) return;
-    const inherited = getComputedStyle(host);
-    // Use the theme token, not an intermediate animated host color.
-    const foreground = inherited.getPropertyValue("--fg").trim() || inherited.color;
-    let defaults = defaultsRef.current;
-    if (!defaults || defaults.ownerDocument !== doc) {
-      defaults = doc.createElement("style");
-      doc.head.prepend(defaults);
-      defaultsRef.current = defaults;
-    }
-    // Low-specificity defaults precede publication rules; no paragraph/div
-    // justification or display:block overrides the publisher's own cascade.
-    defaults.textContent = ":where(html){font-size:" + settings.fontSize + "px;line-height:" + settings.lineHeight + ";font-family:" + inherited.fontFamily + ";color:" + foreground + ";color-scheme:" + inherited.colorScheme + ";background:transparent} :where(body){margin:0;padding:0.5em} :where(img,svg){max-width:100%;height:auto} :where(table){max-width:100%}";
-    // Font faces belong to each document; the parent font registry is not inherited.
-    defaults.textContent += serifFontStyles;
+    if (!doc || (defaultsRef.current?.ownerDocument === doc && defaultsRef.current.isConnected)) return;
+    const defaults = doc.createElement("style");
+    // Low-specificity defaults precede publication rules. Keep this sheet and its
+    // font faces intact when only typography or theme settings change.
+    let css = ":where(html){} :where(body){margin:0;padding:0.5em} :where(img,svg){max-width:100%;height:auto} :where(table){max-width:100%}" + serifFontStyles;
     if (doc.documentElement.dataset.epubLayout !== "pre-paginated") {
-      // SVG wrappers are common in cover/colour pages. Ignore their internal
-      // labels and metadata when checking for text outside the illustration.
       const illustrations = Array.from(doc.body.querySelectorAll("img:not(.gaiji),svg"))
-        .filter((element) => !element.parentElement?.closest("svg"));
-      const text = doc.body.cloneNode(true) as HTMLElement;
-      text.querySelectorAll("svg,style,script").forEach((element) => element.remove());
-      const imageOnly = illustrations.length === 1 && !text.textContent?.trim()
+        .filter(element => !element.parentElement?.closest("svg"));
+      let hasText = false;
+      if (illustrations.length === 1) {
+        // Stop at the first prose node instead of cloning the complete chapter.
+        const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          if (node.textContent?.trim() && !node.parentElement?.closest("svg,style,script")) {
+            hasText = true;
+            break;
+          }
+        }
+      }
+      const imageOnly = illustrations.length === 1 && !hasText
         && !doc.body.querySelector("table,video,audio,canvas,math,img.gaiji");
       doc.documentElement.toggleAttribute("data-mandara-image-only", imageOnly);
-      doc.querySelectorAll("[data-mandara-image-wrapper]").forEach((element) => element.removeAttribute("data-mandara-image-wrapper"));
-      doc.querySelectorAll("[data-mandara-image]").forEach((element) => element.removeAttribute("data-mandara-image"));
+      doc.querySelectorAll("[data-mandara-image-wrapper]").forEach(element => element.removeAttribute("data-mandara-image-wrapper"));
+      doc.querySelectorAll("[data-mandara-image]").forEach(element => element.removeAttribute("data-mandara-image"));
       if (imageOnly) {
         illustrations[0].setAttribute("data-mandara-image", "");
         for (let wrapper = illustrations[0].parentElement; wrapper && wrapper !== doc.body; wrapper = wrapper.parentElement) {
           wrapper.setAttribute("data-mandara-image-wrapper", "");
         }
-        defaults.textContent += imagePageStyles;
+        css += imagePageStyles;
       }
-      // Overlay scrollbars do not reserve a gutter. Keep text clear even when
-      // publication CSS removes body padding or sizes it to the viewport.
-      if (!imageOnly) {
-        const isVertical = vertical();
-        doc.documentElement.style.setProperty("box-sizing", "border-box");
-        doc.documentElement.style.setProperty("scrollbar-gutter", "stable");
-        doc.documentElement.style.setProperty(isVertical ? "padding-bottom" : "padding-right", "1em");
-        doc.body.style.setProperty("box-sizing", "border-box");
-        doc.body.style.setProperty(isVertical ? "max-height" : "max-width", isVertical ? "calc(100vh - 1em)" : "100%");
-      }
-      // A vertical block can be wider than the viewport, so 100% alone does
-      // not constrain publisher image dimensions. Bound both physical axes.
-      defaults.textContent += " :where(img){max-width:calc(100vw - 3em);max-height:calc(100vh - 3em);width:auto;height:auto}";
-      // Gaiji are inline character images, not illustrations. Some EPUBs lose
-      // their stylesheets; scale these glyphs with the surrounding text rather
-      // than their bitmap dimensions. Publication rules still take precedence.
-      defaults.textContent += " :where(img.gaiji){display:inline;width:auto;height:1em;vertical-align:baseline}";
+      // Bound both physical axes, including horizontally overflowing vertical text.
+      css += " :where(img){max-width:calc(100vw - 3em);max-height:calc(100vh - 3em);width:auto;height:auto}";
+      // Gaiji remain inline glyphs; publisher rules still take precedence.
+      css += " :where(img.gaiji){display:inline;width:auto;height:1em;vertical-align:baseline}";
+    }
+    defaults.textContent = css;
+    doc.head.prepend(defaults);
+    defaultsRef.current = defaults;
+  }
+
+  function applySettings() {
+    const doc = frame.current?.contentDocument;
+    const host = frame.current?.parentElement;
+    const defaults = defaultsRef.current;
+    if (!doc || !host || defaults?.ownerDocument !== doc || !defaults.isConnected) return;
+    const inherited = getComputedStyle(host);
+    // Use the theme token, not an intermediate animated host color.
+    const foreground = inherited.getPropertyValue("--fg").trim() || inherited.color;
+    const rootRule = defaults.sheet!.cssRules[0] as CSSStyleRule;
+    rootRule.style.cssText = "font-size:" + settings.fontSize + "px;line-height:" + settings.lineHeight + ";font-family:" + inherited.fontFamily + ";color:" + foreground + ";color-scheme:" + inherited.colorScheme + ";background:transparent";
+    if (doc.documentElement.dataset.epubLayout !== "pre-paginated" && !doc.documentElement.hasAttribute("data-mandara-image-only")) {
+      // Direction can change through publisher media queries or typography settings.
+      const isVertical = vertical();
+      doc.documentElement.style.setProperty("box-sizing", "border-box");
+      doc.documentElement.style.setProperty("scrollbar-gutter", "stable");
+      doc.documentElement.style.setProperty(isVertical ? "padding-bottom" : "padding-right", "1em");
+      doc.body.style.setProperty("box-sizing", "border-box");
+      doc.body.style.setProperty(isVertical ? "max-height" : "max-width", isVertical ? "calc(100vh - 1em)" : "100%");
     }
   }
 
@@ -166,6 +173,7 @@ export function EpubDocument({ content, title, settings, onFraction, onReady, on
   function ready() {
     cleanup.current?.();
     selectionRef.current = null;
+    initializeDocument();
     applySettings();
     scaleFixedLayout();
     const doc = frame.current?.contentDocument;
@@ -174,8 +182,9 @@ export function EpubDocument({ content, title, settings, onFraction, onReady, on
     function scroll() {
       const root = scroller();
       if (!root) return;
-      const max = vertical() ? root.scrollWidth - root.clientWidth : root.scrollHeight - root.clientHeight;
-      const offset = vertical() ? Math.abs(root.scrollLeft) : root.scrollTop;
+      const isVertical = vertical();
+      const max = isVertical ? root.scrollWidth - root.clientWidth : root.scrollHeight - root.clientHeight;
+      const offset = isVertical ? Math.abs(root.scrollLeft) : root.scrollTop;
       callbacks.current.onFraction(max > 0 ? Math.max(0, Math.min(1, offset / max)) : 0);
     }
     function advance(amount: number) {

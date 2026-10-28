@@ -135,9 +135,35 @@ it.each(["horizontal-tb", "vertical-rl"])("provides text-sized inline gaiji defa
   expect(doc.documentElement.hasAttribute("data-mandara-image-only")).toBe(false);
 
   rerender(<EpubDocument {...props} content={content} settings={{ ...settings, fontSize: 28 }} />);
-  expect(doc.head.querySelector("style")!.textContent).toContain("font-size:28px");
+  expect((doc.head.querySelector("style")!.sheet!.cssRules[0] as CSSStyleRule).style.fontSize).toBe("28px");
   expect(glyphRule(doc)!.style.height).toBe("1em");
   expect(doc.head.querySelectorAll("style")).toHaveLength(2);
+});
+
+it("reuses structural defaults and font rules across typography and theme changes", () => {
+  const content = '<!doctype html><html><body><p>正文<img src="/api/images/illustration"></p></body></html>';
+  const { doc, frame, rerender } = load(content);
+  const clone = vi.spyOn(doc.body, "cloneNode");
+  doc.head.querySelector("style")!.remove();
+  fireEvent.load(frame);
+  expect(clone).not.toHaveBeenCalled();
+  const defaults = doc.head.querySelector("style")!;
+  const sheet = defaults.sheet!;
+  const fontRule = Array.from(sheet.cssRules).find(rule => rule.type === CSSRule.FONT_FACE_RULE);
+  const staticCss = defaults.textContent;
+  const scan = vi.spyOn(doc.body, "querySelectorAll");
+  try {
+    for (const fontSize of [21, 24, 28]) {
+      rerender(<EpubDocument {...props} content={content} settings={{ ...settings, fontSize, theme: "dark" }} />);
+      expect(defaults.sheet).toBe(sheet);
+      expect(defaults.textContent).toBe(staticCss);
+      expect(Array.from(sheet.cssRules).find(rule => rule.type === CSSRule.FONT_FACE_RULE)).toBe(fontRule);
+      expect((sheet.cssRules[0] as CSSStyleRule).style.fontSize).toBe(fontSize + "px");
+    }
+    expect(scan).not.toHaveBeenCalled();
+    expect(clone).not.toHaveBeenCalled();
+    expect(doc.head.querySelectorAll("style")).toHaveLength(1);
+  } finally { clone.mockRestore(); scan.mockRestore(); }
 });
 
 it("places zero-specificity glyph defaults before publication styles without rewriting markup", () => {
